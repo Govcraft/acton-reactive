@@ -17,32 +17,14 @@
  *
  */
 
-use tracing::instrument;
+use crate::common::OutboundEnvelope;
+use static_assertions::assert_impl_all;
+use std::time::SystemTime;
 
-use crate::common::{Actor, Idle};
-use std::fmt::Debug;
-
-#[derive(Debug)]
-pub struct System<State: Clone + Default + Send + Debug> {
-    pub root_actor: State,
+#[derive(Clone, Debug)]
+pub struct EventRecord<S> {
+    pub message: S,
+    pub sent_time: SystemTime,
+    pub return_address: OutboundEnvelope,
 }
-
-impl<State: Clone + Default + Send + Debug> System<State> {
-    #[instrument]
-    pub fn new_actor() -> Actor<Idle<State>, State>
-    where
-        State: Default,
-    {
-        //append to the qrn
-
-        Actor::new("root", State::default(), None)
-    }
-}
-
-impl<State: Clone + Default + Send + Debug> Default for System<State> {
-    fn default() -> Self {
-        System {
-            root_actor: State::default(),
-        }
-    }
-}
+assert_impl_all!(EventRecord<u32>: Send);
