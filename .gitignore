@@ -14,7 +14,8 @@ Cargo.lock
 **/.idea/**
 
 .aider*
-
+*.sh
+*.txt
 logs/
 .aider.*
 .direnv
