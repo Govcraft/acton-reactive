@@ -36,6 +36,8 @@
             pkgs.ttyd
             pkgs.ffmpeg
             pkgs.vhs
+            pkgs.parallel
+            pkgs.git-filter-repo
             pkgs.cargo-machete
             pkgs.rustfmt
             pkgs.pkg-config # Optional
