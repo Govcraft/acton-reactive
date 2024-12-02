@@ -1,9 +1,9 @@
 #!/bin/sh
 
 # Run cargo check
-echo "Running cargo check..."
-if ! cargo check --quiet; then
-    echo "cargo check failed. Commit aborted."
+echo "Running cargo build..."
+if ! cargo build --quiet; then
+    echo "cargo build failed. Commit aborted."
     exit 1
 fi
 
