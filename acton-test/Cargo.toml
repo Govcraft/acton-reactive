@@ -1,12 +1,12 @@
 [package]
-name = "acton-test"
+name = "acton_test"
 version = "3.0.0-beta.1"
 edition = "2021"
 description = "Testing utilities for Acton agents, providing tools to help in the testing and validation of agent behavior."
 license = "MIT OR Apache-2.0"
 documentation = "https://github.com/Govcraft/acton-reactive/blob/main/README.md"
 homepage = "https://github.com/Govcraft/acton-reactive"
-repository = "https://github.com/Govcraft/acton-reactive/acton_test"
+repository = "https://github.com/Govcraft/acton-reactive/acton-test"
 
 authors = ["Roland Rodriguez <roland@govcraft.ai>"]
 keywords = ["actor", "async", "testing"]
