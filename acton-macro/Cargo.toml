@@ -13,5 +13,5 @@ repository = "https://github.com/Govcraft/acton-reactive"
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0.66", features = ["full"] }
-quote = "1.0"
+syn = { version = "2.0.9", features = ["full"] }
+quote = "1.0.37"

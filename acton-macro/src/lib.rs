@@ -14,16 +14,17 @@
  * limitations under that License.
  */
 #![forbid(unsafe_code)]
-// extern crate proc_macro;
+
 //! Acton Macro Library
 //!
 //! This library provides procedural macros for the Acton actor framework.
 //! It includes macros to derive common traits and boilerplate code for Acton messages.
 
+extern crate proc_macro;
 use proc_macro::TokenStream;
 
 use quote::quote;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{parse_macro_input, DeriveInput};
 
 /// A procedural macro to derive the necessary traits for an Acton message.
 ///
