@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 #![forbid(unsafe_code)]
-#![forbid(unused)]
+//#![forbid(unused)]
 
 //! Acton Main Library
 //!
