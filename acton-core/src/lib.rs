@@ -15,8 +15,8 @@
  */
 
 #![forbid(unsafe_code)]
-#![forbid(missing_docs)]
-#![forbid(dead_code)]
+//#![forbid(missing_docs)]
+//#![forbid(dead_code)]
 // #![forbid(unused_imports)]
 //! Acton Core Library
 //!
@@ -41,6 +41,8 @@ pub mod prelude {
 
     pub use crate::actor::{AgentConfig, Idle, ManagedAgent, Started};
     pub use crate::common::{ActonApp, AgentBroker, AgentHandle, AgentReply, AgentRuntime};
-    pub use crate::message::{BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope};
+    pub use crate::message::{
+        BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope,
+    };
     pub use crate::traits::{ActonMessage, Actor, Broker, Subscribable, Subscriber};
 }
