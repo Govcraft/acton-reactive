@@ -33,7 +33,7 @@ Add Acton to your project by putting this in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton_reactive = { version = "1.1.0-beta.1" }
+acton-reactive = "3.0.0-beta.2"
 ```
 
 ## How to Use Acton
