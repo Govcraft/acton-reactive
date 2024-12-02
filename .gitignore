@@ -13,6 +13,8 @@ Cargo.lock
 
 **/.idea/**
 
+*.log
+*.old
 .aider*
 *.sh
 *.txt
