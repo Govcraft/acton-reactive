@@ -1,5 +1,5 @@
 [package]
-name = "acton_test"
+name = "acton-test"
 version = "3.0.0-beta.1"
 edition = "2021"
 description = "Testing utilities for Acton agents, providing tools to help in the testing and validation of agent behavior."
