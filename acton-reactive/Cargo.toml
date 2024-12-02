@@ -12,8 +12,8 @@ repository = "https://github.com/Govcraft/acton-reactive"
 unused = "allow"
 
 [dependencies]
-acton-macro = { version = "1.0.0-beta.1" }
-acton-core = { version = ">=3.0.0-beta" }
+acton-macro = { version = ">=3.0.0-beta" }
+acton-core = { version = ">=3.0.1-beta" }
 rand = "0.8.5"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
@@ -23,7 +23,7 @@ tokio = "1.37.0"
 futures = "0.3.30"
 
 [dev-dependencies]
-acton_test = "1.0.0-beta.1"
+acton_test = ">=3.0.0-beta"
 crossterm = { version = "0.28.1", features = [
   "event-stream",
 ] } # or the latest version available
