@@ -14,6 +14,12 @@
  * limitations under that License.
  */
 
+//! Defines common internal type aliases and supporting structures used within `acton-core`.
+//!
+//! This module centralizes type definitions for futures, handlers, channels, and other
+//! implementation details to improve code readability and maintainability. It also
+//! defines public type aliases for specific uses of [`AgentHandle`].
+
 use std::any::TypeId;
 use std::fmt::Debug;
 use std::future::Future;
@@ -27,48 +33,53 @@ use crate::actor::{ManagedAgent, Started};
 use crate::common::AgentHandle;
 use crate::message::Envelope;
 
-/// A type alias for a map of reactors, indexed by `TypeId`.
+/// Crate-internal: Map storing message handlers (`TypeId` -> `ReactorItem`).
 pub(crate) type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntity>>;
 
-/// An enum representing different types of reactors for handling signals, messages, and futures.
-pub enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
-    // A signal reactor, which reacts to signals.
+/// Crate-internal: Enum wrapping different kinds of message/event handlers.
+/// Currently only supports `FutureReactor`.
+#[allow(dead_code)] // Allow dead_code for potential future variants like SignalReactor
+pub(crate) enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     // SignalReactor(Box<SignalHandler<ActorEntity>>),
-    /// A future reactor, which reacts to futures.
+    /// A handler that processes a message and returns a future.
     FutureReactor(Box<FutureHandler<ActorEntity>>),
 }
 
-/// A type alias for a future reactor function.
-pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(&mut ManagedAgent<Started, ManagedEntity>, &'b mut Envelope) -> FutureBox
-+ Send
-+ Sync
-+ 'static;
+/// Crate-internal: Type alias for the function signature of a message handler
+/// that returns a future.
+pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
+    &'a mut ManagedAgent<Started, ManagedEntity>, // Takes mutable agent in Started state
+    &'b mut Envelope, // Takes mutable envelope containing the message
+) -> FutureBox // Returns a pinned, boxed future
+    + Send
+    + Sync
+    + 'static;
 
-/// A type alias for a boxed future.
-pub(crate) type FutureBox = Pin<Box<dyn Future<Output=()> + Sync + Send + 'static>>;
+/// Crate-internal: Type alias for a pinned, boxed, dynamically dispatched future
+/// with `Output = ()` that is `Send`, `Sync`, and `'static`.
+/// This is the required return type for asynchronous message handlers (`act_on`).
+pub(crate) type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
-/// A type alias for the sending end of an agent's message channel (`mpsc::Sender`).
+
+/// Crate-internal: Type alias for the sender part of an agent's MPSC channel.
 pub(crate) type AgentSender = Sender<Envelope>;
 
-/// A type alias for a stop signal, represented by an atomic boolean.
+/// Crate-internal: Type alias for the atomic boolean used as a halt signal for agents.
 pub(crate) type HaltSignal = AtomicBool;
 
-// /// A type alias for a lifecycle reactor function.
-// pub(crate) type LifecycleHandler<ActorEntity, ManagedEntity> =
-// dyn Fn(&mut ManagedAgent<ActorEntity, ManagedEntity>) + Send;
-
-/// A type alias for an asynchronous lifecycle reactor function.
+/// Crate-internal: Type alias for the function signature of an asynchronous lifecycle hook.
 pub(crate) type AsyncLifecycleHandler<ManagedEntity> =
-Box<dyn Fn(&ManagedAgent<Started, ManagedEntity>) -> FutureBox + Send + Sync + 'static>;
+    Box<dyn Fn(&ManagedAgent<Started, ManagedEntity>) -> FutureBox + Send + Sync + 'static>;
 
-/// A type alias for an [`AgentHandle`] that refers to the central message broker agent.
+// --- Public Type Aliases ---
+
+/// A type alias representing a handle ([`AgentHandle`]) specifically for the system message broker.
 ///
-/// The broker is a special agent responsible for broadcasting messages (like a central
-/// notice board) to agents that subscribe to specific topics.
-
+/// This alias provides semantic clarity when a handle refers to the central [`AgentBroker`].
 pub type BrokerRef = AgentHandle;
-/// A type alias for an [`AgentHandle`] that refers to the agent that created this one (its parent).
+
+/// A type alias representing a handle ([`AgentHandle`]) specifically for an agent's parent (supervisor).
 ///
-/// This is used for hierarchical agent structures where parent agents might supervise
-/// their children.
+/// This alias provides semantic clarity in hierarchical agent structures, indicating that
+/// the handle refers to the agent responsible for supervising the current one.
 pub type ParentRef = AgentHandle;
