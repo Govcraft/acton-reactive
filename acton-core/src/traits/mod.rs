@@ -1,3 +1,23 @@
+//! Defines the core traits that establish the fundamental contracts of the Acton framework.
+//!
+//! This module aggregates the essential traits that define the capabilities and interactions
+//! within the Acton agent system. These traits ensure composability and provide a clear
+//! interface for messages, agent handles, the message broker, and the subscription mechanism.
+//!
+//! # Key Traits
+//!
+//! *   [`ActonMessage`]: A marker trait required for all types used as messages within the system.
+//!     Ensures messages are `Send`, `Sync`, `Debug`, `Clone`, and support downcasting via `Any`.
+//! *   [`AgentHandleInterface`]: Defines the primary asynchronous interface for interacting with
+//!     agents via their handles ([`AgentHandle`](crate::common::AgentHandle)), including sending messages,
+//!     managing lifecycle, and accessing metadata.
+//! *   [`Broker`]: Defines the interface for broadcasting messages throughout the system,
+//!     typically implemented by [`AgentHandle`](crate::common::AgentHandle) which delegates to the
+//!     central [`AgentBroker`](crate::common::AgentBroker).
+//! *   [`Subscriber`]: Defines the interface for accessing the system's message broker handle.
+//! *   [`Subscribable`]: Defines the interface for agents to manage their subscriptions to
+//!     message types via the broker.
+
 /*
  * Copyright (c) 2024. Govcraft
  *
@@ -14,14 +34,22 @@
  * limitations under that License.
  */
 
+// --- Public Re-exports ---
 pub use acton_message::ActonMessage;
-pub use actor::Actor;
+pub use agent_handle_interface::AgentHandleInterface;
 pub use broker::Broker;
 pub use subscribable::Subscribable;
 pub use subscriber::Subscriber;
 
+// --- Submodules ---
+
+/// Defines the [`ActonMessage`] marker trait.
 mod acton_message;
-mod actor;
-mod subscribable;
-mod subscriber;
+/// Defines the [`AgentHandleInterface`] trait for agent interaction.
+mod agent_handle_interface;
+/// Defines the [`Broker`] trait for message broadcasting.
 mod broker;
+/// Defines the [`Subscribable`] trait for managing subscriptions.
+mod subscribable;
+/// Defines the [`Subscriber`] trait for accessing the broker.
+mod subscriber;

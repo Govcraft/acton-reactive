@@ -12,13 +12,10 @@ Cargo.lock
 **/*.rs.bk
 
 **/.idea/**
-**/*.bak
-*.log
-*.old
+
+*.lock
 .aider*
-*.sh
-*.txt
+
 logs/
 .aider.*
-.direnv
-.envrc
+.direnv/

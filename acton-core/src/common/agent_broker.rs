@@ -27,109 +27,157 @@ use tracing::*;
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
 use crate::common::{AgentHandle, BrokerRef};
 use crate::message::{BrokerRequest, BrokerRequestEnvelope, SubscribeBroker};
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
-/// A broker that manages subscriptions and broadcasts messages to subscribers.
+/// Manages message subscriptions and broadcasts messages to interested subscribers.
 ///
-/// The `Broker` struct is responsible for maintaining a list of subscribers for different message types
-/// and broadcasting messages to the appropriate subscribers.
+/// The `AgentBroker` acts as a central publish-subscribe hub within the Acton system.
+/// Agents can subscribe to specific message types using the [`Subscribable`](crate::traits::Subscribable)
+/// trait (typically via their [`AgentHandle`]). When a message is sent to the broker
+/// (usually wrapped in a [`BrokerRequest`]), the broker identifies all agents subscribed
+/// to that message's type and forwards the message to them concurrently.
+///
+/// Internally, the `AgentBroker` runs as a specialized [`ManagedAgent`] that handles
+/// [`SubscribeBroker`] messages to manage its subscription list and [`BrokerRequest`]
+/// messages to trigger broadcasts.
+///
+/// It also dereferences ([`Deref`] and [`DerefMut`]) to its underlying [`AgentHandle`],
+/// allowing direct use of handle methods where appropriate.
 #[derive(Default, Debug, Clone)]
 pub struct AgentBroker {
-    /// A thread-safe map of subscribers, keyed by message type ID.
-    ///
-    /// Each entry in the map contains a set of tuples, where each tuple consists of:
-    /// - An `Ern<UnixTime>`: The unique identifier of the subscriber.
-    /// - An `ActorRef`: A reference to the subscriber actor.
+    /// A thread-safe map storing subscribers keyed by message `TypeId`.
+    /// The value is a set of tuples containing the subscriber's ID (`Ern`) and its `AgentHandle`.
     subscribers: Subscribers,
+    /// The underlying handle for the broker agent itself.
     agent_handle: AgentHandle,
 }
 
-type Subscribers = Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>; // Type alias for the subscribers map.
-// Implement Deref and DerefMut to access AgentHandle's methods directly
+/// Type alias for the internal storage of subscribers.
+/// `TypeId` maps to a `HashSet` of `(Ern, AgentHandle)` tuples.
+type Subscribers = Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>;
+
+/// Allows immutable access to the underlying [`AgentHandle`] of the `AgentBroker`.
+///
+/// This enables calling methods from [`AgentHandleInterface`] directly on an `AgentBroker` instance.
 impl Deref for AgentBroker {
     type Target = AgentHandle;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.agent_handle
     }
 }
 
+/// Allows mutable access to the underlying [`AgentHandle`] of the `AgentBroker`.
+///
+/// This enables modifying the internal state of the broker's `AgentHandle`. Use with caution,
+/// as direct mutable access might bypass intended broker logic if not used carefully.
 impl DerefMut for AgentBroker {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.agent_handle
     }
 }
 
 impl AgentBroker {
+    /// Initializes the broker agent and starts its processing loop.
+    ///
+    /// This internal function creates the `ManagedAgent` for the broker, configures
+    /// its message handlers for `BrokerRequest` (triggering `broadcast`) and
+    /// `SubscribeBroker` (adding subscribers), and starts the agent.
+    ///
+    /// Returns the `AgentHandle` of the initialized broker agent.
     #[instrument]
     pub(crate) async fn initialize() -> BrokerRef {
         let actor_config = AgentConfig::new(Ern::with_root("broker_main").unwrap(), None, None)
             .expect("Couldn't create initial broker config");
 
-        let mut broker: ManagedAgent<Idle, AgentBroker> =
+        // Create the ManagedAgent for the broker. The model state *is* the AgentBroker itself.
+        let mut broker_agent: ManagedAgent<Idle, AgentBroker> =
             ManagedAgent::new(&None, Some(actor_config)).await;
 
-        broker
-            .act_on::<BrokerRequest>(|actor, event| {
-                trace!( "broadcasting request: {:?}", event.message);
-                let subscribers = actor.model.subscribers.clone();
-                let message = event.message.clone();
-
+        // Configure the broker agent's message handlers.
+        broker_agent
+            .act_on::<BrokerRequest>(|agent, event| {
+                // Handler for broadcast requests.
+                trace!(message_type = ?event.message.message_type_id, "Broker received BrokerRequest");
+                let subscribers = agent.model.subscribers.clone(); // Clone Arc<DashMap>
+                let message_to_broadcast = event.message.clone(); // Clone the BrokerRequest
 
                 Box::pin(async move {
-                    AgentBroker::broadcast(subscribers, message).await;
+                    // Call the static broadcast method.
+                    AgentBroker::broadcast(subscribers, message_to_broadcast).await;
                 })
             })
-            .act_on::<SubscribeBroker>(|actor, event| {
-                let message = event.message.clone();
+            .act_on::<SubscribeBroker>(|agent, event| {
+                // Handler for subscription requests.
+                let subscription_msg = event.message.clone();
+                let type_id = subscription_msg.message_type_id;
+                let subscriber_handle = subscription_msg.subscriber_context.clone();
+                let subscriber_id = subscription_msg.subscriber_id.clone();
+                trace!(subscriber = %subscriber_id, message_type = ?type_id, "Broker received SubscribeBroker");
 
-                let message_type_id = message.message_type_id;
-                let subscriber_context = message.subscriber_context.clone();
-                let subscriber_id = message.subscriber_id.clone();
-                trace!("subscribe from {} for {}", subscriber_id.root.to_string(), actor.handle.name());
-
-                let subscribers = actor.model.subscribers.clone();
+                let subscribers_map = agent.model.subscribers.clone(); // Clone Arc<DashMap>
                 Box::pin(async move {
-                    subscribers
-                        .entry(message_type_id)
-                        .or_default()
-                        .insert((subscriber_id.clone(), subscriber_context.clone()));
+                    let subscriber_id_for_insert = subscriber_id.clone(); // Clone before moving
+                    // Insert the subscriber into the set for the given message TypeId.
+                    subscribers_map
+                        .entry(type_id)
+                        .or_default() // Get the HashSet or create a new one
+                        .insert((subscriber_id_for_insert, subscriber_handle)); // Insert the clone
+                    trace!(subscriber = %subscriber_id, message_type = ?type_id, "Subscription added"); // Use original subscriber_id here
                 })
             });
 
-        trace!("Activating the BrokerActor.");
-        let mut handle = broker.start().await;
-        handle.broker = Box::from(Some(handle.clone()));
-        handle
+        trace!("Starting the AgentBroker agent...");
+        let mut broker_handle = broker_agent.start().await;
+        // The broker needs a reference to itself to function correctly via its handle.
+        broker_handle.broker = Box::from(Some(broker_handle.clone()));
+        trace!("AgentBroker started with handle ID: {}", broker_handle.id());
+        broker_handle
     }
 
-    /// Broadcasts a message to all subscribers of a specific message type.
+    /// Broadcasts a message contained within a [`BrokerRequest`] to all relevant subscribers.
     ///
-    /// This function iterates through all subscribers for the given message type and emits
-    /// the message to each subscriber asynchronously.
+    /// This static method performs the core broadcast logic. It looks up the message type's `TypeId`
+    /// in the provided `subscribers` map and asynchronously sends a [`BrokerRequestEnvelope`]
+    /// containing the original message payload to each registered subscriber's handle.
     ///
     /// # Arguments
     ///
-    /// * `subscribers` - An `Arc<DashMap>` containing the subscribers for different message types.
-    /// * `request` - The `BrokerRequest` containing the message to be broadcast.
-    /// ```
+    /// * `subscribers`: An `Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>` containing the
+    ///   current subscription state.
+    /// * `request`: The [`BrokerRequest`] containing the message payload and its `TypeId`.
     pub async fn broadcast(
-        subscribers: Subscribers,
+        subscribers: Subscribers, // Takes the Arc<DashMap>
         request: BrokerRequest,
     ) {
-        let message_type_id = &request.message.as_ref().type_id();
-        trace!(" Subscriber count for message type: {:?} is {:?}", message_type_id, subscribers.get(message_type_id).map(|x| x.len()));
-        if let Some(subscribers) = subscribers.get(message_type_id) {
-            let futures = subscribers.value().clone().into_iter().map(|(_, subscriber_context)| {
-                let subscriber_context = subscriber_context.clone();
-                let message: BrokerRequestEnvelope = request.clone().into();
+        let message_type_id = request.message_type_id; // Get TypeId from the request
+        trace!(message_type = ?message_type_id, "Broadcasting message");
+
+        // Check if there are any subscribers for this message type.
+        if let Some(subscribers_set) = subscribers.get(&message_type_id) {
+            let num_subscribers = subscribers_set.len();
+            trace!(count = num_subscribers, message_type = ?message_type_id, "Found subscribers");
+
+            // Create futures to send the message to each subscriber concurrently.
+            let send_futures = subscribers_set.value().iter().map(|(_, subscriber_handle)| {
+                let handle = subscriber_handle.clone();
+                // Wrap the original message payload in a BrokerRequestEnvelope for sending.
+                let envelope_to_send: BrokerRequestEnvelope = request.clone().into();
                 async move {
-                    trace!("Broadcasting message to subscriber: {:?}", subscriber_context.name());
-                    subscriber_context.send(message).await;
+                    trace!(subscriber = %handle.id(), message_type = ?message_type_id, "Sending broadcast");
+                    // Send the envelope to the subscriber's handle.
+                    // Ignore potential send errors (e.g., closed channel).
+                    let _ = handle.send(envelope_to_send).await;
                 }
             });
-            // Await all futures concurrently
-            join_all(futures).await;
+
+            // Wait for all send operations to complete.
+            join_all(send_futures).await;
+            trace!(count = num_subscribers, message_type = ?message_type_id, "Broadcast sends completed");
+        } else {
+            trace!(message_type = ?message_type_id, "No subscribers found for message type");
         }
     }
 }
