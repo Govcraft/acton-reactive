@@ -24,7 +24,7 @@ use crate::message::{SubscribeBroker, UnsubscribeBroker};
 use crate::traits::{ActonMessage, AgentHandleInterface};
 use crate::traits::subscriber::Subscriber;
 
-/// Trait for types that can subscribe to and unsubscribe from messages.
+/// Trait for agents that can subscribe to receive specific types of broadcast messages from a [`Broker`].
 #[async_trait]
 pub trait Subscribable {
     /// Subscribes the implementing type to messages of type `T`.

@@ -16,10 +16,10 @@
 
 use crate::common::BrokerRef;
 
-/// Trait for types that can subscribe to a broker.
+/// Trait for agents that can receive broadcast messages from a central [`Broker`].
 ///
-/// Implementors of this trait can be associated with a broker,
-/// allowing them to participate in the publish-subscribe messaging system.
+/// This trait primarily provides access to the agent's associated broker,
+/// enabling the subscription mechanism.
 pub trait Subscriber {
     /// Retrieves the broker associated with this subscriber.
     ///
