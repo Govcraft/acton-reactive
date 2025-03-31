@@ -1,9 +1,25 @@
-//! Provides the core components for defining and managing actors (agents) within the Acton framework.
+//! Defines the core components for creating, configuring, and managing agents.
 //!
-//! This module includes:
-//! - [`ManagedAgent`]: The central struct representing an agent's runtime and state machine.
-//! - [`AgentConfig`]: Configuration used to initialize an agent.
-//! - State markers like [`Idle`] and [`Started`] used with [`ManagedAgent`] to represent its lifecycle state.
+//! This module provides the fundamental building blocks for actors (referred to as agents
+//! within the Acton framework). It encapsulates the agent's lifecycle, state management,
+//! and configuration.
+//!
+//! # Key Components
+//!
+//! *   [`ManagedAgent`]: The central struct representing an agent's runtime state machine.
+//!     It manages the agent's lifecycle (e.g., `Idle`, `Started`), message handling,
+//!     and interaction with the Acton system.
+//! *   [`AgentConfig`]: A structure holding the necessary configuration parameters
+//!     to initialize a new agent, such as its unique identifier (`Ern`) and optional
+//!     references to its parent supervisor and the system message broker.
+//! *   [`Idle`]: A type-state marker indicating that a `ManagedAgent` has been configured
+//!     but has not yet started its main processing loop.
+//! *   [`Started`]: A type-state marker indicating that a `ManagedAgent` is actively
+//!     running and processing messages.
+//!
+//! The primary interaction point for creating and managing agents often involves
+//! using [`AgentConfig`] to set up initial parameters and then transitioning a
+//! [`ManagedAgent`] from the [`Idle`] state to the [`Started`] state.
 
 /*
  * Copyright (c) 2024. Govcraft
@@ -21,11 +37,14 @@
  * limitations under that License.
  */
 
+// Re-export key types for easier access within the crate and potentially the prelude.
 pub use agent_config::AgentConfig;
 pub use managed_agent::Idle;
 pub use managed_agent::ManagedAgent;
-pub use managed_agent::started::Started;
+pub use managed_agent::started::Started; // Note: `Started` is defined within a submodule
 
+/// Contains the `ManagedAgent` struct and its state-specific implementations (`Idle`, `Started`).
 mod managed_agent;
 
+/// Contains the `AgentConfig` struct for agent initialization.
 mod agent_config;
