@@ -37,7 +37,7 @@ impl PriceService {
     pub(crate) async fn new(app: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
         let config =
             AgentConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
-        let mut price_service = app.create_actor_with_config::<PriceService>(config).await;
+        let mut price_service = app.new_agent_with_config::<PriceService>(config).await;
 
         price_service.act_on::<ItemScanned>(|agent, context| {
             let item = context.message().0.clone();

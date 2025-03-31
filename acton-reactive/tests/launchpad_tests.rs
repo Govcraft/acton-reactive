@@ -105,7 +105,7 @@ async fn test_launchpad() -> anyhow::Result<()> {
         AgentConfig::new(Ern::with_root("improve_show")?, None, Some(broker.clone()))?;
 
     let comedian_actor = app
-        .spawn_actor::<Comedian>(|mut actor| {
+        .spawn_agent::<Comedian>(|mut actor| {
             Box::pin(async move {
                 actor
                     .act_on::<Ping>(|_actor, _msg| {
@@ -127,7 +127,7 @@ async fn test_launchpad() -> anyhow::Result<()> {
         .await?;
 
     let counter_actor = app
-        .spawn_actor::<Counter>(|mut actor| {
+        .spawn_agent::<Counter>(|mut actor| {
             Box::pin(async move {
                 actor.act_on::<Pong>(|_actor, _msg| {
                     Box::pin(async move {

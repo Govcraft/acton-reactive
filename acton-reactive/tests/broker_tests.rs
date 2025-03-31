@@ -38,7 +38,7 @@ async fn test_broker() -> anyhow::Result<()> {
         None,
         Some(broker.clone()),
     )?;
-    let mut counter_actor = app.create_actor_with_config::<Counter>(actor_config).await;
+    let mut counter_actor = app.new_agent_with_config::<Counter>(actor_config).await;
     counter_actor.act_on::<Pong>(|agent, context| {
         info!("Also SUCCESS! PONG!");
         agent.model.count += 1;
@@ -96,7 +96,7 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
         None,
         Some(broker.clone()),
     )?;
-    let mut counter_actor = app.create_actor_with_config::<Counter>(actor_config).await;
+    let mut counter_actor = app.new_agent_with_config::<Counter>(actor_config).await;
     counter_actor.act_on::<Pong>(|agent, context| {
         info!("Also SUCCESS! PONG!");
         agent.model.count += 1;
