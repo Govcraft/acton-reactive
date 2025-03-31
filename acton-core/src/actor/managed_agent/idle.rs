@@ -104,8 +104,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                     };
 
                     // Call the user-provided message processor.
-                    let user_future = message_processor(actor, &mut msg_context);
-                    Box::pin(user_future) // Pin the returned future.
+                    message_processor(actor, &mut msg_context) // Return the FutureBox directly
                 } else {
                     // This should ideally not happen if type registration is correct.
                     error!(
