@@ -93,20 +93,23 @@ impl AgentRuntime {
         self.0.roots.len()
     }
 
-    /// Creates a new actor with a specified configuration.
+    /// Creates a new agent builder (`ManagedAgent<Idle, State>`) with a specified configuration.
+    ///
+    /// This method prepares an agent for starting but does not run its lifecycle yet.
+    /// Call `.start()` on the returned `ManagedAgent` to activate it.
     ///
     /// # Type Parameters
     ///
-    /// * `State` - The state type of the actor, which must implement `Default`, `Send`, `Debug`, and have a static lifetime.
+    /// * `State` - The state type of the agent, which must implement `Default`, `Send`, `Debug`, and have a static lifetime.
     ///
     /// # Arguments
     ///
-    /// * `config` - The `ActorConfig` to use for creating the actor.
+    /// * `config` - The `AgentConfig` to use for creating the agent.
     ///
     /// # Returns
     ///
-    /// A `ManagedActor` in the `Idle` state with the specified `State` and configuration.
-    pub async fn create_actor_with_config<State>(
+    /// A `ManagedAgent` in the `Idle` state with the specified `State` and configuration.
+    pub async fn new_agent_with_config<State>(
         &mut self,
         mut config: AgentConfig,
     ) -> ManagedAgent<Idle, State>
@@ -119,7 +122,7 @@ impl AgentRuntime {
             config.broker = Some(self.0.broker.clone());
         }
         let new_agent = ManagedAgent::new(&Some(acton_ready), Some(config)).await;
-        trace!("Created new actor with id {}", new_agent.id);
+        trace!("Created new agent builder with id {}", new_agent.id);
         self.0.roots.insert(new_agent.id.clone(), new_agent.handle.clone());
         new_agent
     }
@@ -190,20 +193,25 @@ impl AgentRuntime {
         Ok(())
     }
 
-    /// Spawns an actor with a custom setup function and default configuration.
+    /// Creates, configures, and starts an agent using a default configuration and a custom setup function.
+    ///
+    /// This is a convenience method that combines creating a `ManagedAgent<Idle, State>` with a default
+    /// configuration and then immediately running the provided `setup_fn`. The `setup_fn` is expected
+    /// to configure the agent (e.g., add message handlers) and call `.start()` on it, returning the `AgentHandle`.
     ///
     /// # Type Parameters
     ///
-    /// * `State` - The state type of the actor, which must implement `Default`, `Send`, `Debug`, and have a static lifetime.
+    /// * `State` - The state type of the agent, which must implement `Default`, `Send`, `Debug`, and have a static lifetime.
     ///
     /// # Arguments
     ///
-    /// * `setup_fn` - A function that takes a `ManagedActor` and returns a `Future` resolving to an `ActorRef`.
+    /// * `setup_fn` - An async function or closure that takes the newly created `ManagedAgent<Idle, State>`,
+    ///   configures it, calls `.start()` on it, and returns the resulting `AgentHandle`.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `ActorRef` of the spawned actor, or an error if the spawn failed.
-    pub async fn spawn_actor<State>(
+    /// A `Result` containing the `AgentHandle` of the started agent, or an error if creation or setup failed.
+    pub async fn spawn_agent<State>(
         &mut self,
         setup_fn: impl FnOnce(
             ManagedAgent<Idle, State>,
