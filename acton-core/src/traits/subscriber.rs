@@ -16,17 +16,24 @@
 
 use crate::common::BrokerRef;
 
-/// Trait for agents that can receive broadcast messages from a central [`Broker`].
+/// Trait implemented by entities that need access to the system message broker.
 ///
-/// This trait primarily provides access to the agent's associated broker,
-/// enabling the subscription mechanism.
+/// This trait provides a single method, [`get_broker`](Subscriber::get_broker), which allows
+/// retrieving an optional handle ([`BrokerRef`]) to the central message broker.
+/// This is essential for components that need to interact with the broker, primarily
+/// for subscribing or unsubscribing from message types via the [`Subscribable`] trait.
+///
+/// It is typically implemented by [`AgentHandle`](crate::common::AgentHandle).
 pub trait Subscriber {
-    /// Retrieves the broker associated with this subscriber.
+    /// Retrieves an optional handle to the message broker associated with this entity.
+    ///
+    /// Implementations should return `Some(BrokerRef)` if the entity is configured
+    /// with a connection to the system broker, and `None` otherwise. The [`BrokerRef`]
+    /// is an alias for [`AgentHandle`](crate::common::AgentHandle).
     ///
     /// # Returns
     ///
-    /// An `Option<BrokerRef>` which is:
-    /// - `Some(BrokerRef)` if a broker is associated with this subscriber.
-    /// - `None` if no broker is currently associated.
+    /// * `Some(BrokerRef)`: A handle to the associated message broker.
+    /// * `None`: If no broker is associated with this entity.
     fn get_broker(&self) -> Option<BrokerRef>;
 }
