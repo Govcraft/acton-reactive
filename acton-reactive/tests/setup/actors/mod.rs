@@ -14,20 +14,12 @@
  * limitations under that License.
  */
 
-/// This module defines various simple structs used as agent state (models)
-/// within the integration tests. These structs represent the internal data
-/// held by different test agents like `Comedian`, `Counter`, etc.
-
-pub use audience_member::AudienceMember;
-pub use comedian::Comedian;
-pub use counter::Counter;
-pub use messenger::Messenger;
 pub use pool_item::PoolItem;
-pub use parent_child::Parent;
+// parent_child likely contains multiple related types, might need specific exports later if used directly.
 
-mod audience_member;
-mod comedian;
-mod counter;
-mod messenger;
-mod parent_child;
-mod pool_item;
+pub mod audience_member;
+pub mod comedian;
+pub mod counter;
+pub mod messenger;
+pub mod parent_child;
+pub mod pool_item;
