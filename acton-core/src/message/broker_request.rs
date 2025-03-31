@@ -15,54 +15,64 @@
  */
 
 use std::any::TypeId;
+use std::fmt::Debug; // Import Debug explicitly
 use std::sync::Arc;
 
 use tracing::*;
 
 use crate::traits::ActonMessage;
 
-/// Represents a request to the broker for message distribution.
+/// Wraps a message intended for broadcast via the system message broker.
 ///
-/// This struct encapsulates a message along with its type information,
-/// allowing the broker to efficiently route messages to appropriate subscribers.
+/// When an agent wants to publish a message to all interested subscribers, it sends
+/// a `BrokerRequest` containing the message payload to the [`AgentBroker`](crate::common::AgentBroker).
+/// This struct includes the message itself (as a type-erased `Arc<dyn ActonMessage>`)
+/// along with its `TypeId` and type name for efficient routing and debugging by the broker.
+///
+/// Using `Arc` allows the message payload to be shared efficiently among potentially
+/// many subscribers without multiple clones of the underlying data.
 #[derive(Debug, Clone)]
 pub struct BrokerRequest {
-    /// The actual message being sent, wrapped in an Arc for thread-safe sharing.
+    /// The message payload to be broadcast.
+    /// Stored as a dynamically-typed, atomically reference-counted trait object.
     pub message: Arc<dyn ActonMessage + Send + Sync + 'static>,
-    /// The name of the message type, useful for debugging and logging.
+    /// The string representation of the message's type name. Primarily for logging/debugging.
     pub message_type_name: String,
-    /// The TypeId of the message, used for efficient type checking and routing.
+    /// The `TypeId` of the original concrete message type. Used by the broker for routing.
     pub message_type_id: TypeId,
 }
 
 impl BrokerRequest {
-    /// Creates a new `BrokerRequest` instance.
+    /// Creates a new `BrokerRequest` wrapping the given message.
     ///
-    /// This method takes a message implementing the `ActonMessage` trait and wraps it
-    /// in a `BrokerRequest` along with its type information.
+    /// This constructor takes a concrete message `M` that implements [`ActonMessage`],
+    /// captures its `TypeId` and type name, wraps the message in an `Arc`, and
+    /// stores them in a new `BrokerRequest` instance.
     ///
     /// # Type Parameters
     ///
-    /// * `M`: The type of the message, which must implement `ActonMessage + Send + Sync + 'static`.
+    /// * `M`: The concrete type of the message being sent. Must implement [`ActonMessage`]
+    ///   and be `Send + Sync + 'static`.
     ///
     /// # Arguments
     ///
-    /// * `message`: The message to be encapsulated in the `BrokerRequest`.
+    /// * `message`: The message instance to be broadcast.
     ///
     /// # Returns
     ///
-    /// A new `BrokerRequest` instance containing the provided message and its type information.
+    /// A new `BrokerRequest` ready to be sent to the `AgentBroker`.
     pub fn new<M: ActonMessage + Send + Sync + 'static>(message: M) -> Self {
         let message_type_name = std::any::type_name_of_val(&message).to_string();
         let message_type_id = message.type_id();
-        let message = Arc::new(message);
+        // Wrap the message in Arc for efficient sharing.
+        let message_arc = Arc::new(message);
         trace!(
-            message_type_name = message_type_name,
-            "BroadcastEnvelope::new() message_type_id: {:?}",
-            message_type_id
+            message_type = %message_type_name,
+            type_id = ?message_type_id,
+            "Creating BrokerRequest"
         );
         Self {
-            message,
+            message: message_arc, // Store the Arc'd message
             message_type_id,
             message_type_name,
         }
