@@ -14,10 +14,18 @@
  * limitations under that License.
  */
 
-#[derive(Default, Debug, Clone)]
+// Import the macro directly from the acton_macro crate
+use acton_macro::acton_actor;
+
+/// Represents the state (model) for a Parent agent in supervision tests.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
+#[acton_actor]
 pub struct Parent {
+    /// Placeholder for potential child-related state (not typically an agent handle itself).
     pub child: Child,
 }
 
-#[derive(Default, Debug, Clone)]
+/// Represents the state (model) for a Child agent in supervision tests.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
+#[acton_actor]
 pub struct Child;
