@@ -16,31 +16,56 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use dyn_clone::DynClone;
+use dyn_clone::DynClone; // Required for cloning trait objects
 
-/// Trait for Acton messages, providing methods for type erasure.
+/// A marker trait for types that can be used as messages within the Acton framework.
+///
+/// This trait combines several standard library traits (`Any`, `Send`, `Sync`, `Debug`)
+/// with [`DynClone`] to ensure that messages are safe to send between threads,
+/// can be dynamically cloned (even as trait objects), support downcasting back to
+/// their concrete types, and are debuggable.
+///
+/// The `as_any` and `as_any_mut` methods are crucial for the framework's ability
+/// to handle messages generically and perform type-based dispatch (e.g., in message
+/// handlers registered via [`ManagedAgent::act_on`](crate::actor::ManagedAgent::act_on)).
+///
+/// A blanket implementation is provided, so any type `T` that satisfies the bounds
+/// (`T: Any + Send + Sync + Debug + DynClone + 'static`) automatically implements
+/// `ActonMessage`. Users typically only need to ensure their message structs/enums
+/// derive `Clone` and `Debug` and meet the `Send + Sync + 'static` requirements.
 pub trait ActonMessage: DynClone + Any + Send + Sync + Debug {
-    /// Returns a reference to the message as `Any`.
+    /// Returns a reference to the message as a dynamic [`Any`] trait object.
+    ///
+    /// This allows for runtime type introspection and downcasting using methods like
+    /// [`Any::downcast_ref`](std::any::Any::downcast_ref).
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns a mutable reference to the message as `Any`.
+    /// Returns a mutable reference to the message as a dynamic [`Any`] trait object.
+    ///
+    /// This allows for mutable runtime type introspection and downcasting using methods like
+    /// [`Any::downcast_mut`](std::any::Any::downcast_mut).
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-/// Blanket implementation of `ActonMessage` for any type `T` that satisfies the necessary bounds.
-///
-/// This implementation automatically makes any suitable type usable as a message
-/// within the Acton system, provided it is `Clone`, `Any`, `Send`, `Sync`, `Debug`,
-/// and has a `'static` lifetime.
+// Implement DynClone for the trait object itself.
+dyn_clone::clone_trait_object!(ActonMessage);
 
+/// Blanket implementation of `ActonMessage` for qualifying types.
+///
+/// Any type `T` that is `Any + Send + Sync + Debug + DynClone + 'static` automatically
+/// implements `ActonMessage`. This simplifies defining custom message types.
 impl<T> ActonMessage for T
 where
-    T: Any + Send + Sync + Debug + DynClone + 'static,
+    T: Any + Send + Sync + Debug + DynClone + 'static, // DynClone replaces Clone here
 {
+    /// Implementation of `as_any` for the blanket impl.
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Implementation of `as_any_mut` for the blanket impl.
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
