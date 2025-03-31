@@ -21,43 +21,71 @@ use tracing::*;
 
 use acton_reactive::prelude::*;
 
+// Import message types used by this agent.
 use crate::{CartItem, ItemScanned};
 use crate::PriceResponse;
 
-const PRICE_SERVICE_ROOT: &str = "price_service";
-const MOCK_DELAY_MS: u64 = 100;
-const PRICE_MIN: i32 = 100;
-const PRICE_MAX: i32 = 250;
+// Import the macro for agent state structs
+use acton_macro::acton_actor;
 
-#[derive(Default, Debug, Clone)]
+// Constants for configuration and simulation.
+const PRICE_SERVICE_ROOT: &str = "price_service"; // Base name for the agent's ERN.
+const MOCK_DELAY_MS: u64 = 100; // Simulated delay for price lookup.
+const PRICE_MIN: i32 = 100; // Minimum random price in cents.
+const PRICE_MAX: i32 = 250; // Maximum random price in cents.
+
+/// Represents the state (model) for the PriceService agent.
+/// This agent is responsible for looking up (or simulating) the price of items.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
+#[acton_actor]
 pub(crate) struct PriceService;
 
 impl PriceService {
-    #[instrument(skip(app))]
-    pub(crate) async fn new(app: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
+    /// Creates, configures, and starts a new PriceService agent.
+    /// Returns a handle to the started agent.
+    #[instrument(skip(runtime))] // Instrument for tracing, skip the runtime param.
+    pub(crate) async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
+        // Configure the agent's identity (ERN).
         let config =
             AgentConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
-        let mut price_service = app.new_agent_with_config::<PriceService>(config).await;
+        // Create the agent builder using the runtime and configuration.
+        let mut price_service_builder = runtime.new_agent_with_config::<PriceService>(config).await;
 
-        price_service.act_on::<ItemScanned>(|agent, context| {
-            let item = context.message().0.clone();
+        // Configure the agent's message handler for `ItemScanned` messages.
+        price_service_builder.act_on::<ItemScanned>(|agent, envelope| {
+            // Clone the item from the incoming message envelope.
+            let item = envelope.message().0.clone();
+            // Clone the agent's state (PriceService is a unit struct, but this pattern is common).
+            // Cloning the model allows moving it into the async block if needed, though not strictly necessary here.
             let model = agent.model.clone();
-            let broker = agent.broker().clone();
+            // Get a handle to the message broker for broadcasting the response.
+            let broker_handle = agent.broker().clone();
 
+            // Use AgentReply::from_async to handle the asynchronous price lookup and broadcast.
             AgentReply::from_async(async move {
                 let mut item = item;
+                // Simulate getting the price (includes an artificial delay).
+                // Calls the `get_price` method on the cloned model state.
                 item.set_cost(model.get_price(item.clone()).await);
+                // Create the response message containing the updated item (now with cost).
                 let response_message = PriceResponse { item };
-                broker.broadcast(response_message).await;
+                // Broadcast the response message via the broker. Any agent subscribed
+                // to `PriceResponse` will receive it (e.g., the Register agent).
+                broker_handle.broadcast(response_message).await;
             })
         });
 
-        Ok(price_service.start().await)
+        // Start the agent and return its handle.
+        Ok(price_service_builder.start().await)
     }
 
+    /// Simulates looking up the price for a given CartItem.
+    /// Includes an artificial delay to mimic real-world latency.
     async fn get_price(&self, item: CartItem) -> i32 {
         trace!("Getting price for {}", item.name());
+        // Simulate network/database latency.
         tokio::time::sleep(Duration::from_millis(MOCK_DELAY_MS)).await;
+        // Generate a random price within the defined range (in cents).
         rand::thread_rng().gen_range(PRICE_MIN..=PRICE_MAX)
     }
 }
