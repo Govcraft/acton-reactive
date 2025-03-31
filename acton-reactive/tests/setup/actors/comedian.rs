@@ -16,11 +16,22 @@
 
 // A simple actor for testing purposes
 // tracks the overall number of jokes told
-// the number of jokes audience members found funny
-// and the number of jokes which bombed with the audience
-#[derive(Default, Debug, Clone)]
+
+// Import the macro directly from the acton_macro crate
+use acton_macro::acton_actor;
+
+/// Represents the state (model) for a Comedian agent in tests.
+///
+/// This agent state typically tracks joke delivery and audience reactions.
+// The `#[acton_actor]` macro likely derives `Default`, `Clone`, `Debug` and potentially other traits
+// needed for the struct to be used as agent state via `runtime.new_agent::<Comedian>()`.
+#[acton_actor]
+// #[derive(Default, Debug, Clone)] // Removed as #[acton_actor] likely provides these
 pub struct Comedian {
+    /// Total number of jokes attempted by the comedian.
     pub jokes_told: usize,
+    /// Number of jokes that received a positive reaction (e.g., Chuckle).
     pub funny: usize,
+    /// Number of jokes that received a negative reaction (e.g., Groan).
     pub bombers: usize,
 }
