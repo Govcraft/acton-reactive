@@ -14,7 +14,17 @@
  * limitations under that License.
  */
 
-#[derive(Default, Debug, Clone)]
+// Import the macro directly from the acton_macro crate
+use acton_macro::acton_actor;
+
+/// Represents the state (model) for a simple Counter agent in tests.
+///
+/// This agent state typically just increments a counter when receiving specific messages (e.g., `Tally`).
+// The `#[acton_actor]` macro likely derives `Default`, `Clone`, `Debug` and potentially other traits
+// needed for the struct to be used as agent state via `runtime.new_agent::<Counter>()`.
+#[acton_actor]
+// #[derive(Default, Debug, Clone)] // Removed as #[acton_actor] likely provides these
 pub struct Counter {
+    /// The value being tracked by the counter.
     pub count: usize,
 }
