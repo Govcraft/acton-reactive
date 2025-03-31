@@ -15,26 +15,40 @@
  */
 use std::fmt::Debug;
 
-/// System-wide signals used to control actor lifecycle events.
+/// Represents system-level signals used to manage agent lifecycles.
 ///
-/// This enum represents various signals that can be sent to actors to manage their lifecycle.
-/// It is marked as `#[non_exhaustive]` to allow for future expansion without breaking existing code.
-#[derive(Debug, Clone)]
+/// These signals are distinct from regular application messages and are typically
+/// handled internally by the Acton framework or specific agent implementations
+/// to control behavior like termination.
+///
+/// This enum is marked `#[non_exhaustive]` to indicate that more signal types
+/// may be added in future versions without constituting a breaking change.
+#[derive(Debug, Clone, PartialEq, Eq)] // Added PartialEq, Eq for potential use
 #[non_exhaustive]
 pub enum SystemSignal {
-    // Wake,
-    // Recreate,
-    // Suspend,
-    // Resume,
-    /// Signal to terminate the actor.
+    /// Instructs an agent to initiate a graceful shutdown.
     ///
-    /// When an actor receives this signal, it should begin its shutdown process,
-    /// cleaning up resources and preparing to stop execution.
+    /// Upon receiving `Terminate`, an agent should:
+    /// 1. Stop accepting new work (if applicable).
+    /// 2. Complete any in-progress tasks.
+    /// 3. Signal its children to terminate.
+    /// 4. Wait for children to terminate.
+    /// 5. Clean up its own resources.
+    /// 6. Stop its message processing loop.
+    ///
+    /// The exact shutdown sequence is managed by the agent's `wake` loop and
+    /// the `stop` method on its [`AgentHandle`](crate::common::AgentHandle).
     Terminate,
-    // Supervise,
-    // Watch,
-    // Unwatch,
-    // Failed,
+    // Other potential signals (commented out in original code):
+    // Wake, Recreate, Suspend, Resume, Supervise, Watch, Unwatch, Failed,
 }
 
-
+// The original file had no methods, but if an `as_str` or similar were needed:
+// impl SystemSignal {
+//     /// Returns a string representation of the signal variant.
+//     pub fn as_str(&self) -> &'static str {
+//         match self {
+//             SystemSignal::Terminate => "Terminate",
+//         }
+//     }
+// }
