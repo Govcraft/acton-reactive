@@ -4,7 +4,6 @@ version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "Acton Macro provides procedural macros that simplify the creation of messages and agents in the Acton framework, enabling more concise and expressive code."
-documentation = "https://github.com/Govcraft/acton-reactive/blob/main/README.md"
 homepage = "https://github.com/Govcraft/acton-reactive"
 repository = "https://github.com/Govcraft/acton-reactive"
 

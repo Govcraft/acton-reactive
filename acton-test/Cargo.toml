@@ -4,7 +4,6 @@ version = "1.0.0"
 edition = "2021"
 description = "Testing utilities for Acton agents, providing tools to help in the testing and validation of agent behavior."
 license = "MIT OR Apache-2.0"
-documentation = "https://github.com/Govcraft/acton-reactive/blob/main/README.md"
 homepage = "https://github.com/Govcraft/acton-reactive"
 repository = "https://github.com/Govcraft/acton-reactive/acton_test"
 
