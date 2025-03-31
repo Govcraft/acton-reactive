@@ -225,6 +225,16 @@ impl AgentRuntime {
     }
 }
 
+/// Converts an `ActonApp` into an initialized `AgentRuntime`.
+///
+/// This conversion is the core of the system bootstrap process initiated by
+/// [`ActonApp::launch()`]. It spawns a task to initialize the central
+/// [`AgentBroker`] and waits for its completion before constructing the
+/// `AgentRuntime` with the broker handle.
+///
+/// Note: This function blocks the current thread while waiting for the broker
+/// initialization using `tokio::task::block_in_place`.
+
 impl From<ActonApp> for AgentRuntime {
     fn from(_acton: ActonApp) -> Self {
         let (sender, receiver) = oneshot::channel();

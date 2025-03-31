@@ -61,5 +61,14 @@ pub(crate) type HaltSignal = AtomicBool;
 pub(crate) type AsyncLifecycleHandler<ManagedEntity> =
 Box<dyn Fn(&ManagedAgent<Started, ManagedEntity>) -> FutureBox + Send + Sync + 'static>;
 
+/// A type alias representing a handle specifically for the system message broker.
+///
+/// This is semantically equivalent to [`AgentHandle`] but provides context that
+/// the handle refers to the central broker agent.
+
 pub type BrokerRef = AgentHandle;
+/// A type alias representing a handle specifically for a parent (supervisor) agent.
+///
+/// This is semantically equivalent to [`AgentHandle`] but provides context that
+/// the handle refers to an agent acting as a supervisor in the hierarchy.
 pub type ParentRef = AgentHandle;

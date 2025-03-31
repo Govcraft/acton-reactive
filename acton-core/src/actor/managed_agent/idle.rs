@@ -187,7 +187,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         }
 
         if let Some(config) = &config {
-            managed_actor.handle.id = config.ern();
+            managed_actor.handle.id = config.id();
             managed_actor.parent = config.parent().clone();
             managed_actor.handle.broker = Box::new(config.get_broker().clone());
             if let Some(broker) = config.get_broker().clone() {
@@ -327,6 +327,25 @@ fn default_handler<State: Debug + Send + Default>(
 }
 
 // Function to downcast the message to the original type.
+/// Attempts to downcast an `ActonMessage` trait object to a concrete type `T`.
+///
+/// This function is a utility used internally to safely convert a type-erased
+/// message back to its original concrete type within message handlers.
+///
+/// # Type Parameters
+///
+/// * `T`: The concrete message type to attempt downcasting to. Must be `'static`.
+///
+/// # Arguments
+///
+/// * `msg`: A reference to the `ActonMessage` trait object to downcast.
+///
+/// # Returns
+///
+/// Returns `Some(&T)` if the downcast is successful, containing a reference
+/// to the message as the concrete type `T`. Returns `None` if the message
+/// is not of type `T`.
+
 pub fn downcast_message<T: 'static>(msg: &dyn ActonMessage) -> Option<&T> {
     msg.as_any().downcast_ref::<T>()
 }

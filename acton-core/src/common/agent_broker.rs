@@ -46,6 +46,12 @@ pub struct AgentBroker {
 
 type Subscribers = Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>; // Type alias for the subscribers map.
 // Implement Deref and DerefMut to access AgentHandle's methods directly
+/// Allows treating an `AgentBroker` as an immutable `AgentHandle`.
+///
+/// This implementation enables accessing the underlying `AgentHandle`'s methods
+/// directly on an `AgentBroker` instance for convenience, particularly for
+/// operations defined by the `Actor` trait that don't require mutable access.
+
 impl Deref for AgentBroker {
     type Target = AgentHandle;
 
@@ -53,6 +59,12 @@ impl Deref for AgentBroker {
         &self.agent_handle
     }
 }
+
+/// Allows treating an `AgentBroker` as a mutable `AgentHandle`.
+///
+/// This implementation enables accessing and modifying the underlying `AgentHandle`'s
+/// state directly on an `AgentBroker` instance. Use with caution, as direct
+/// mutable access might bypass intended broker logic if not used carefully.
 
 impl DerefMut for AgentBroker {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -112,7 +124,6 @@ impl AgentBroker {
     ///
     /// * `subscribers` - An `Arc<DashMap>` containing the subscribers for different message types.
     /// * `request` - The `BrokerRequest` containing the message to be broadcast.
-    /// ```
     pub async fn broadcast(
         subscribers: Subscribers,
         request: BrokerRequest,

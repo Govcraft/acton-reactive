@@ -54,6 +54,13 @@ pub trait Subscribable {
 
 /// Implementation of `Subscribable` for any type that implements `ActonMessage + Send + Sync + 'static`.
 #[async_trait]
+/// Blanket implementation of `Subscribable` for types that can act as actors and subscribers.
+///
+/// This implementation provides the `subscribe` and `unsubscribe` methods for any type `T`
+/// that implements [`Actor`], [`Subscriber`], and the necessary message bounds (`ActonMessage`, `Send`, `Sync`, `'static`).
+/// It works by sending the appropriate internal messages ([`SubscribeBroker`] or [`UnsubscribeBroker`])
+/// to the broker obtained via the [`Subscriber::get_broker`] method.
+
 impl<T> Subscribable for T
 where
     T: ActonMessage + Send + Sync + 'static,

@@ -20,13 +20,15 @@ use acton_ern::{Ern, ErnParser};
 use crate::common::{BrokerRef, ParentRef};
 use crate::traits::Actor;
 
-/// Configuration for creating an actor.
+/// Configuration for creating an agent.
 ///
-/// This struct holds the necessary information to configure an actor,
-/// including its ERN (Entity Resource Name), broker, and parent reference.
+/// This struct holds the necessary information to configure an agent,
+/// including its unique identifier (`id`), broker, and parent reference.
+/// The `id` uses the `Ern` type to support hierarchical naming if needed.
 #[derive(Default, Debug, Clone)]
 pub struct AgentConfig {
-    ern: Ern,
+    /// The unique identifier for the agent. Can be hierarchical.
+    id: Ern,
     pub(crate) broker: Option<BrokerRef>,
     parent: Option<ParentRef>,
 }
@@ -36,37 +38,38 @@ impl AgentConfig {
     ///
     /// # Arguments
     ///
-    /// * `ern` - The Entity Resource Name for the actor.
-    /// * `parent` - An optional parent reference.
-    /// * `broker` - An optional broker reference.
+    /// * `id` - The base identifier (`Ern`) for the agent. If a `parent` is provided,
+    ///   this `id` will be appended to the parent's ID to form the final hierarchical ID.
+    /// * `parent` - An optional handle to the parent agent.
+    /// * `broker` - An optional handle to a broker agent.
     ///
     /// # Returns
     ///
-    /// Returns a `Result` containing the new `ActorConfig` instance or an error.
+    /// Returns a `Result` containing the new `AgentConfig` instance or an error.
     pub fn new(
-        ern: Ern,
+        id: Ern,
         parent: Option<ParentRef>,
         broker: Option<BrokerRef>,
     ) -> anyhow::Result<AgentConfig> {
         if let Some(parent) = parent {
             // Get the parent ERN
-            let parent_ern = ErnParser::new(parent.id().to_string()).parse()?;
-            let child_ern = parent_ern + ern;
+            let parent_id = ErnParser::new(parent.id().to_string()).parse()?;
+            let child_id = parent_id + id;
             Ok(AgentConfig {
-                ern: child_ern,
+                id: child_id,
                 broker,
                 parent: Some(parent),
             })
         } else {
             Ok(AgentConfig {
-                ern,
+                id,
                 broker,
                 parent,
             })
         }
     }
 
-    /// Creates a new config with an ERN root with the provided name.
+    /// Creates a new config with a root identifier (`Ern`) using the provided name.
     pub fn new_with_name(
         name: impl Into<String>,
     ) -> anyhow::Result<AgentConfig> {
@@ -74,9 +77,9 @@ impl AgentConfig {
     }
 
 
-    /// Returns the ERN of the actor.
-    pub(crate) fn ern(&self) -> Ern {
-        self.ern.clone()
+    /// Returns the unique identifier (`Ern`) of the agent.
+    pub(crate) fn id(&self) -> Ern {
+        self.id.clone()
     }
 
     /// Returns a reference to the optional broker.

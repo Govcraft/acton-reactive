@@ -27,6 +27,12 @@ pub trait ActonMessage: DynClone + Any + Send + Sync + Debug {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
+/// Blanket implementation of `ActonMessage` for any type `T` that satisfies the necessary bounds.
+///
+/// This implementation automatically makes any suitable type usable as a message
+/// within the Acton system, provided it is `Clone`, `Any`, `Send`, `Sync`, `Debug`,
+/// and has a `'static` lifetime.
+
 impl<T> ActonMessage for T
 where
     T: Any + Send + Sync + Debug + DynClone + 'static,
