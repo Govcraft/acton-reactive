@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use futures::future::join_all;
 use tokio::time::sleep;
-use tracing::{instrument, trace, error}; // Added error import
+use tracing::{instrument, trace}; // Removed unused error import
 
 use crate::actor::ManagedAgent;
 use crate::common::{Envelope, OutboundEnvelope, ReactorItem, ReactorMap};
