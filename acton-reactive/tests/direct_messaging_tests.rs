@@ -14,14 +14,16 @@
  * limitations under that License.
  */
 
-use std::time::Duration;
-
-use tracing::{debug, info, instrument, trace};
+use tracing::{info, instrument, trace};
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-use crate::setup::*;
+// Use direct paths as re-exports seem problematic in test context
+use crate::setup::{
+    messages::{Ping, Pong},
+    initialize_tracing,
+};
 
 mod setup;
 

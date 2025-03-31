@@ -14,14 +14,17 @@
  * limitations under that License.
  */
 
-use std::any::TypeId;
-
 use tracing::*;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-use crate::setup::*;
+// Use direct paths as re-exports seem problematic in test context
+use crate::setup::{
+    actors::{messenger::Messenger, pool_item::PoolItem},
+    messages::Ping,
+    initialize_tracing,
+};
 
 mod setup;
 

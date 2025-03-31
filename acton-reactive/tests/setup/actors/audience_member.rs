@@ -18,12 +18,9 @@
 // They will randomly react to the jokes after which the Comedian will report on how many
 // jokes landed and didn't land
 
-use rand::Rng;
-use tracing::{debug, error, info, trace};
 
 use acton_macro::acton_actor;
 
-use crate::setup::*;
 
 /// Represents the state (model) for an Audience Member agent in tests.
 /// This agent typically reacts randomly to `Joke` messages.

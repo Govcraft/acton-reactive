@@ -20,7 +20,6 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 // Re-export actors and messages for easy access within tests.
-pub use actors::*;
 
 // Declare the submodules.
 pub mod actors;

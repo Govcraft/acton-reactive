@@ -13,14 +13,18 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
-use std::sync::Arc;
 
 use tracing::*;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-use crate::setup::*;
+// Use direct paths as re-exports seem problematic in test context
+use crate::setup::{
+    actors::{comedian::Comedian, counter::Counter},
+    messages::{Ping, Pong},
+    initialize_tracing,
+};
 
 mod setup;
 

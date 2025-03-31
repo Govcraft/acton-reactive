@@ -102,7 +102,7 @@ async fn main() {
 
             // Broadcast a status update via the broker.
             let broker_handle = agent.broker().clone();
-            let message = envelope.message().0.clone();
+            let message = envelope.message().0;
             Box::pin(async move { broker_handle.broadcast(StatusUpdate::Updated("DataCollector".to_string(), message)).await })
         })
         // After starting, broadcast its readiness.
@@ -153,7 +153,7 @@ async fn main() {
                         SetForegroundColor(Color::DarkYellow),
                         Print("\u{2713}  "),
                         SetForegroundColor(Color::Yellow),
-                        Print(format!("{}", who)),
+                        Print(who.to_string()),
                         SetForegroundColor(Color::DarkYellow),
                         Print(format!(" is {}!\n", what)),
                         ResetColor
@@ -165,7 +165,7 @@ async fn main() {
                         SetForegroundColor(Color::DarkCyan),
                         Print("\u{2139}  "),
                         SetForegroundColor(Color::Cyan),
-                        Print(format!("{}", who)),
+                        Print(who.to_string()),
                         SetForegroundColor(Color::DarkCyan),
                         Print(format!(" updated value: {}!\n", data_value)),
                         ResetColor

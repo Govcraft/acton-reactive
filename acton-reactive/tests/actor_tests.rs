@@ -334,14 +334,14 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
     let mut runtime: AgentRuntime = ActonApp::launch();
 
     // --- Parent Agent ---
-    let mut parent_agent_builder = runtime.new_agent::<PoolItem>().await;
+    let parent_agent_builder = runtime.new_agent::<PoolItem>().await;
     // Start the parent agent.
     let parent_handle = parent_agent_builder.start().await;
 
     // --- Child Agent ---
     let child_config =
         AgentConfig::new(Ern::with_root("test_find_child_actor_child").unwrap(), None, None)?;
-    let mut child_agent_builder = runtime.new_agent_with_config::<PoolItem>(child_config).await;
+    let child_agent_builder = runtime.new_agent_with_config::<PoolItem>(child_config).await;
     // Get the child's ID before supervision.
     let child_id = child_agent_builder.id().clone();
 

@@ -14,18 +14,19 @@
  * limitations under that License.
  */
 
-use std::any::TypeId;
 use std::time::Duration;
 
-use tokio::runtime::Runtime;
-use tokio::task;
 use tracing::*;
-use tracing::field::debug;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-use crate::setup::*;
+// Use direct paths as re-exports seem problematic in test context
+use crate::setup::{
+    actors::{comedian::Comedian, counter::Counter, parent_child::Parent},
+    messages::{Ping, Pong},
+    initialize_tracing,
+};
 
 mod setup;
 
@@ -88,7 +89,7 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
                 let mut runtime_clone = parent_builder.runtime().clone();
 
                 // Spawn the child agent using the cloned runtime handle and another setup function.
-                let child_handle = runtime_clone
+                let _child_handle = runtime_clone
                     .spawn_agent_with_setup_fn::<Parent>(child_config, |mut child_builder| {
                         // This async block is the setup function for the child agent.
                         Box::pin(async move {
@@ -173,7 +174,7 @@ async fn test_launchpad() -> anyhow::Result<()> {
     let broker_handle = runtime.broker();
 
     // Spawn Comedian using default config + setup function.
-    let comedian_handle = runtime
+    let _comedian_handle = runtime
         .spawn_agent::<Comedian>(|mut agent_builder| {
             // Setup closure for Comedian.
             Box::pin(async move {
@@ -196,7 +197,7 @@ async fn test_launchpad() -> anyhow::Result<()> {
         .await?;
 
     // Spawn Counter using default config + setup function.
-    let counter_handle = runtime
+    let _counter_handle = runtime
         .spawn_agent::<Counter>(|mut agent_builder| {
             // Setup closure for Counter.
             Box::pin(async move {

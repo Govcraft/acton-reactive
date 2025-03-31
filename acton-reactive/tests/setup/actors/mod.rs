@@ -14,7 +14,6 @@
  * limitations under that License.
  */
 
-pub use pool_item::PoolItem;
 // parent_child likely contains multiple related types, might need specific exports later if used directly.
 
 pub mod audience_member;
