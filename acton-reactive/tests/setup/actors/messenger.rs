@@ -19,8 +19,6 @@ use acton_macro::acton_actor;
 
 /// Represents a minimal agent state (model) for tests where the agent's
 /// primary purpose is message handling or interaction, without needing internal state.
-// The `#[acton_actor]` macro likely derives `Default`, `Clone`, `Debug` and potentially other traits
-// needed for the struct to be used as agent state via `runtime.new_agent::<Messenger>()`.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
-// #[derive(Default, Debug, Clone)] // Removed as #[acton_actor] likely provides these
 pub struct Messenger;

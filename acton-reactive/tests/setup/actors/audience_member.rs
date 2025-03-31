@@ -27,8 +27,7 @@ use crate::setup::*;
 
 /// Represents the state (model) for an Audience Member agent in tests.
 /// This agent typically reacts randomly to `Joke` messages.
-// The `#[acton_actor]` macro likely derives `Default` and potentially other traits
-// needed for the struct to be used as agent state via `runtime.new_agent::<AudienceMember>()`.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 pub struct AudienceMember {
     /// Counter for how many jokes this audience member has heard.
