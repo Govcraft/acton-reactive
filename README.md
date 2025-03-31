@@ -1,137 +1,157 @@
-# Acton Reactive Application Framework
+# Acton Reactive: Build Fast, Concurrent Rust Apps Easily
 
-The Acton Reactive Application Framework provides an efficient way to build fast, reactive Rust applications. Designed around an agent-based model, it simplifies concurrency and allows developers to focus on writing scalable, maintainable code. Acton gets its name from the fact that it "acts on" messages you define.
+Welcome to Acton Reactive! This framework helps you build fast, concurrent Rust applications without getting tangled in complex threading or locking code.
 
-## Key Features
+Think of your application's logic broken down into independent workers called **Agents**. Each agent manages its own state and communicates with others by sending **Messages**. Acton Reactive handles the tricky parts of making these agents run concurrently and talk to each other efficiently, letting you focus on your application's features. It's built on top of [Tokio](https://tokio.rs/), Rust's powerful asynchronous runtime.
 
-- **Agent-based Architecture**: Acton uses a Tokio-based agent model, enabling a lock-free and highly concurrent state management system. This architecture helps maintain a natural concurrency model and simplifies building complex systems.
-- **Asynchronous Messaging**: By leveraging Rust's async/await syntax, Acton ensures high-performance, non-blocking communication between components. This asynchronous model helps achieve responsive and efficient applications, even under heavy load.
-- **Extensibility**: The framework is designed to be adaptable, making it easy to extend for various use cases or integrate with existing systems. This flexibility allows developers to tailor the framework to fit specific requirements without compromising performance.
-- **Type-safe Message Handling**: Acton enforces type safety in message passing between agents, providing compile-time checks and reducing runtime errors. This feature ensures that the system remains robust and reliable, even as it scales.
-- **Built-in Instrumentation with Tracing**: Acton integrates with the Tracing crate, offering detailed insight into application behavior. This instrumentation makes it easier to monitor performance, debug issues, and gain visibility into your application's inner workings.
+## Why Acton Reactive?
 
-## Getting Started
+*   **Simplified Concurrency:** Forget manual thread management and complex locking. Agents run independently, managing their own data. Acton ensures messages are processed safely, making concurrent programming more approachable.
+*   **Asynchronous & Performant:** Leverages Rust's `async/await` and Tokio for high-performance, non-blocking operations. Your application stays responsive, even under load.
+*   **Organized & Maintainable Code:** Encourages breaking down complex problems into smaller, self-contained agents. This makes your codebase easier to understand, test, and maintain.
+*   **Type-Safe Communication:** Define clear message types. Rust's compiler helps ensure you're sending and receiving the right kinds of messages, catching errors before runtime.
+*   **Built-in Observability:** Integrates with the `tracing` crate, providing insights into your application's behavior for easier debugging and performance monitoring.
 
-To get started with the Acton framework, add the following to your `Cargo.toml`:
+## Core Concepts Explained Simply
 
-```toml
-[dependencies]
-acton_reactive = { version = "1.1.0-beta.1" }
-```
+Before diving into code, let's understand the main building blocks:
 
-## Example Usage
+1.  **Agent:** The fundamental unit. It's a Rust struct (that implements `Default` and `Debug`) which holds some internal state (its `model`) and reacts to incoming messages. Think of it as an independent worker or service.
+2.  **Message:** A simple Rust struct (that implements `Debug` and `Clone`) used for communication. Agents send messages to other agents (or themselves) to trigger actions or share information. The `#[acton_message]` macro helps derive the required traits easily.
+3.  **Handler (`act_on`):** A piece of code you define for an agent that specifies *how* it should react when it receives a particular type of message. Handlers can modify the agent's internal state (`model`) and send messages. They return an `AgentReply`.
+4.  **Handle (`AgentHandle`):** An inexpensive, cloneable reference to an agent. You use an agent's handle to send messages *to* it from outside, or from other agents.
+5.  **Runtime (`ActonApp` / `AgentRuntime`):** The Acton system environment. You launch it using `ActonApp::launch()`. It manages the agents, their communication channels, and the central message broker.
 
-### Creating and Managing Agents
+## Getting Started: A Basic Example
 
-Here's a simple example of how to create and use agents in the Acton framework:
-- Import the prelude.
-```rust
-use acton_reactive::prelude::*;
-```
-- An agent can be any struct that implements the `Default` and `Debug` traits. Here's an example of a basic agent:
-```rust
-// agents must derive these traits
-#[derive(Debug, Default)]
-struct ABasicAgent {
-    some_state: usize,
-}
-```
-- Define messages that the agent can act on. Messages must implement the `Debug` and `Clone` traits. Here's an example:
-```rust
-// messages must derive these traits
-#[derive(Debug, Clone)]
-struct PingMsg;
-```
-- Here's another example of messages where the required traits are added using the `acton_message` macro:
-```rust
+Let's build a simple counter agent.
 
-// or save a few keystrokes and use the handy macro
-#[acton_message]
-struct PongMsg;
+1.  **Add Acton Reactive to your `Cargo.toml`:**
 
-#[acton_message]
-struct BuhByeMsg;
-```
-- Acton uses tokio and so must be operating under an existing tokio runtime. The `ActonApp` struct is used to launch the Acton system. Here's an example of launching the Acton system and creating an agent:
-```rust
+    ```toml
+    [dependencies]
+    acton_reactive = { version = "1.1.0-beta.1" } # Use the latest version
+    tokio = { version = "1", features = ["full"] } # Acton requires a Tokio runtime
+    anyhow = "1" # Useful for error handling in main
+    ```
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let mut app = ActonApp::launch();
-    let mut the_agent = app.new_agent::<ABasicAgent>().await;
-```
-- Define message handling logic for the agent before the agent is started. 
-Here's an example of handling messages and replying to them:
-```rust
+2.  **Write the code (`src/main.rs`):**
 
-    the_agent
-        .act_on::<PingMsg>(|agent, context| {
-            println!("Pinged. You can mutate me!");
-            agent.model.some_state += 1;
-            // you can reply to the sender (in this case, the agent itself)
-            let envelope = context.reply_envelope();
+    ```rust
+    use acton_reactive::prelude::*;
+    use std::time::Duration;
+    use anyhow::Result;
 
-            // every handler must return a boxed future
-            Box::pin(async move {
-                envelope.send(PongMsg).await;
+    // 1. Define the Agent's state (must be Default + Debug)
+    #[derive(Debug, Default)]
+    struct CounterAgent {
+        count: i32,
+    }
+
+    // 2. Define Messages (must be Debug + Clone)
+    // Use the macro for convenience!
+    #[acton_message]
+    struct IncrementMsg;
+
+    #[acton_message]
+    struct PrintMsg;
+
+    // 3. The main async function (requires a Tokio runtime)
+    #[tokio::main]
+    async fn main() -> Result<()> {
+        println!("Launching Acton application...");
+
+        // 4. Launch the Acton Runtime
+        let mut app = ActonApp::launch();
+
+        // 5. Create an Agent Builder
+        // This prepares an agent but doesn't start its processing loop yet.
+        let mut counter_builder = app.new_agent::<CounterAgent>().await;
+        println!("Created agent builder for: {}", counter_builder.id());
+
+        // 6. Define Message Handlers using `act_on`
+        counter_builder
+            .act_on::<IncrementMsg>(|agent, _context| {
+                // This code runs when the agent receives an IncrementMsg.
+                // We can safely mutate the agent's internal state (`model`).
+                agent.model.count += 1;
+                println!("Agent {}: Incremented count to {}", agent.id(), agent.model.count);
+                // No async work needed here, return immediately.
+                AgentReply::immediate()
             })
-        })
-```
-    Handlers can be chained together to handle multiple message types. Here's an example of chaining handlers:
-```rust
-
-    .act_on::<PongMsg>(|agent, _envelope| {
-            println!("I got ponged!");
-            agent.model.some_state += 1;
-            //if you're replying to the same agent, you can use the agent's handle
-            let handle = agent.handle().clone(); // handle clones are cheap and need to be done when moving into the async boundary
-
-            // if you find the box pin syntax confusing, you use this helper function
-            AgentReply::from_async(async move {
-                handle.send(BuhByeMsg).await;
+            .act_on::<PrintMsg>(|agent, _context| {
+                // This code runs when the agent receives a PrintMsg.
+                println!("Agent {}: Current count is {}", agent.id(), agent.model.count);
+                // We can also perform async operations within a handler.
+                AgentReply::from_async(async move {
+                    // Example: Simulate some async work
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    println!("Agent {}: Finished async work in PrintMsg handler.", agent.id());
+                    // No need to explicitly send anything back here for this example.
+                })
             })
-        })
-        .act_on::<BuhByeMsg>(|agent, envelope| {
-            println!("Thanks for all the fish! Buh Bye!");
-            //if you don't have any async work to do, you can reply with an empty boxed future
-            //or just use this function
-            AgentReply::immediate()
-        })
-```
-- Agents have lifecycle hooks that can be used to perform actions before or after the agent starts or stops. Here's an example of using lifecycle hooks:
-```rust
+            // Optional: Define lifecycle hooks
+            .after_stop(|agent| {
+                 println!("Agent {}: Final count is {}. Stopping.", agent.id(), agent.model.count);
+                 AgentReply::immediate()
+            });
 
-    .after_stop(|agent| {
-            println!("Agent stopped with state value: {}", agent.model.some_state);
-            debug_assert_eq!(agent.model.some_state, 2);
+        // 7. Start the Agent
+        // This spawns the agent's task and returns a handle for sending messages.
+        let counter_handle = counter_builder.start().await;
+        println!("Started agent: {}", counter_handle.id());
 
-            AgentReply::immediate()
-        });
-```
-- Start your agent to spawn listening and get a handle to send messages to it:
-```rust
+        // 8. Send Messages using the Handle
+        println!("Sending IncrementMsg...");
+        counter_handle.send(IncrementMsg).await;
 
-    let the_agent = the_agent.start().await;
+        println!("Sending PrintMsg...");
+        counter_handle.send(PrintMsg).await;
 
-    the_agent.send(PingMsg).await;
-```
-- Finally, shut down the Acton system:
-```rust
+        println!("Sending another IncrementMsg...");
+        counter_handle.send(IncrementMsg).await;
 
-    // shutdown tries to gracefully stop all agents and their children
-    app.shutdown_all().await?;
-    Ok(())
-}
-```
-You can view this example and run it from the examples `basic` folder.
+        // Give the agent a moment to process the last message and its async handler
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
-For more advanced usage, check out the **lifecycles**, **broadcast**, and **fruit_market** examples, which demonstrate other messaging patterns and system-wide coordination across agents.
+        // 9. Shut down the application gracefully
+        // This stops all agents and waits for them to finish.
+        println!("Shutting down application...");
+        app.shutdown_all().await?;
+        println!("Application shut down.");
 
+        Ok(())
+    }
+    ```
+
+3.  **Run it:** `cargo run`
+
+You should see output showing the agent being created, handling messages, incrementing its count, and finally stopping.
+
+## Common Patterns
+
+While the example above covers the basics, Acton Reactive supports more patterns:
+
+*   **Replying to Messages:** Inside a handler, use `context.reply_envelope()` to get an envelope addressed back to the original sender, then use `.send(YourReplyMessage).await`.
+*   **Sending to Specific Agents:** If an agent has the `AgentHandle` of another agent, it can create a new envelope using `context.new_envelope(&target_handle.reply_address())` and then `.send(YourMessage).await`.
+*   **Asynchronous Operations:** As shown in the `PrintMsg` handler, use `AgentReply::from_async(async move { ... })` to perform non-blocking tasks (like I/O) within your handlers.
+*   **Lifecycle Hooks:** Use `.before_start()`, `.after_start()`, `.before_stop()`, and `.after_stop()` on the agent builder to run code during agent initialization or shutdown.
+*   **Publish/Subscribe (Broadcasting):** Agents can subscribe to specific message types using `agent_handle.subscribe::<MyMessageType>().await`. Anyone (often the central `AgentBroker` obtained via `app.broker()` or `agent.broker()`) can then `broadcast(MyMessageType)` to notify all subscribers. This is great for system-wide events.
+*   **Supervision (Parent/Child Agents):** Agents can create and manage child agents using `agent_handle.supervise(child_builder).await`. Stopping the parent will automatically stop its children.
+
+## Explore More Examples
+
+For more detailed examples demonstrating patterns like broadcasting, replies, and agent lifecycles, check out the `acton-reactive/examples/` directory in this repository.
 
 ## Contributing
 
-Contributions to the Acton Reactive Application Framework are welcome! Please feel free to submit issues, fork the repository, and send pull requests!
+Contributions are welcome! Feel free to submit issues, fork the repository, and send pull requests. Let's make Acton Reactive even better together!
 
 ## License
 
-This project is licensed under both the MIT and Apache-2.0 licenses. See the `LICENSE-MIT` and `LICENSE-APACHE` files for details.
+This project is licensed under either of:
+
+*   Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+*   MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
