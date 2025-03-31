@@ -13,219 +13,205 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
+use std::io::{stdout, Write};
+use std::io::Stdout;
 
-// Broadcast Example: A team of agents working together with shared messages
-//
-// This example shows how multiple agents can work together:
-// - Broadcasting messages to multiple agents
-// - Coordinating work between different agents
-// - Using a shared message broker for communication
-// - Pretty printing with colors for better visibility
-
-use acton_reactive::prelude::*;
 use crossterm::{
     execute,
     style::{Color, Print, ResetColor, SetForegroundColor},
 };
-use std::io::Stdout;
-use std::io::{stdout, Write};
 
-// Our team of agents! Each one has a specific job:
-// 1. DataCollector: Collects and stores numbers
-// 2. Aggregator: Adds up all the numbers
-// 3. Printer: Shows what everyone is doing
+use acton_reactive::prelude::*;
+// Import the macro for agent state structs
+use acton_macro::acton_actor;
 
-#[derive(Default, Debug)]
+/// State for the DataCollector agent.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
+#[acton_actor]
 struct DataCollector {
-    // Keeps track of all the numbers we've seen
+    /// Stores received data points.
     data_points: Vec<i32>,
 }
 
-#[derive(Default, Debug)]
+/// State for the Aggregator agent.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
+#[acton_actor]
 struct Aggregator {
-    // Keeps a running total of all numbers
+    /// Stores the running sum of received data.
     sum: i32,
 }
 
+/// State for the Printer agent.
+// Note: Manual Default impl needed because `Stdout` doesn't impl Default.
+// Cannot use `#[acton_actor]` because it attempts to derive Default and Clone,
+// which `Stdout` does not implement. We derive Debug manually.
 #[derive(Debug)]
 struct Printer {
-    // Handles colorful output to the terminal
+    /// Handle to standard output for printing.
     out: Stdout,
 }
 
-// Default setup for our Printer
+// Manual Default implementation for Printer state.
 impl Default for Printer {
     fn default() -> Self {
-        Self { out: stdout() }
+        Self {
+            out: stdout()
+        }
     }
 }
 
-// Messages are like notes our agents pass around
-// NewData: When we get a new number to process
+// --- Messages ---
+
+/// Message broadcast when new data is available.
 #[derive(Clone, Debug)]
 struct NewData(i32);
 
-// Status updates use these types
-type From = String; // Who sent the message
-type Status = String; // What's the message about
+// Type aliases for clarity in StatusUpdate message.
+type From = String;
+type Status = String;
 
-// StatusUpdate: Different kinds of updates agents can share
+/// Message broadcast to report agent status or results.
 #[derive(Clone, Debug)]
 enum StatusUpdate {
-    Ready(From, Status), // "I'm ready to work!"
-    Updated(From, i32),  // "I just processed this number!"
-    Done(i32),           // "All done! Here's the final result!"
+    Ready(From, Status),
+    Updated(From, i32),
+    Done(i32),
 }
+
+// --- Main Application Logic ---
 
 #[tokio::main]
 async fn main() {
-    // Start up our application
-    let mut app = ActonApp::launch();
+    // 1. Launch the Acton runtime environment.
+    let mut runtime = ActonApp::launch();
+    // Get a handle to the central message broker provided by the runtime.
+    let broker_handle = runtime.broker();
 
-    // Create our team of agents
-    let mut data_collector = app.new_agent::<DataCollector>().await;
-    let mut aggregator = app.new_agent::<Aggregator>().await;
-    let mut printer = app.new_agent::<Printer>().await;
+    // 2. Create agent builders.
+    //    These agents will communicate indirectly via the broker.
+    let mut data_collector_builder = runtime.new_agent::<DataCollector>().await;
+    let mut aggregator_builder = runtime.new_agent::<Aggregator>().await;
+    let mut printer_builder = runtime.new_agent::<Printer>().await;
 
-    // Set up the DataCollector agent
-    data_collector
-        // When we get new data...
+    // 3. Configure the DataCollector agent.
+    data_collector_builder
+        // Handler for `NewData` messages.
         .act_on::<NewData>(|agent, envelope| {
-            // Store the new number
+            // Add the received data point to internal state.
             agent.model.data_points.push(envelope.message().0);
 
-            // Let everyone know we got new data
-            let broker = agent.broker().clone();
+            // Broadcast a status update via the broker.
+            let broker_handle = agent.broker().clone();
             let message = envelope.message().0;
-            Box::pin(async move {
-                broker
-                    .broadcast(StatusUpdate::Updated("DataCollector".to_string(), message))
-                    .await
-            })
+            Box::pin(async move { broker_handle.broadcast(StatusUpdate::Updated("DataCollector".to_string(), message)).await })
         })
-        // When we start up...
+        // After starting, broadcast its readiness.
         .after_start(|agent| {
-            let broker = agent.broker().clone();
+            let broker_handle = agent.broker().clone();
             Box::pin(async move {
-                broker
-                    .broadcast(StatusUpdate::Ready(
-                        "DataCollector".to_string(),
-                        "ready to collect data".to_string(),
-                    ))
-                    .await
+                broker_handle.broadcast(StatusUpdate::Ready("DataCollector".to_string(), "ready to collect data".to_string())).await;
             })
         });
 
-    // Set up the Aggregator agent
-    aggregator
-        // When we get new data...
+    // 4. Configure the Aggregator agent.
+    aggregator_builder
+        // Handler for `NewData` messages.
         .act_on::<NewData>(|agent, envelope| {
-            // Add the new number to our sum
+            // Add the received data to the running sum.
             agent.model.sum += envelope.message().0;
 
-            // Let everyone know we updated the sum
-            let broker = agent.broker().clone();
+            // Broadcast an update with the current sum.
+            let broker_handle = agent.broker().clone();
             let sum = agent.model.sum;
-            Box::pin(async move {
-                broker
-                    .broadcast(StatusUpdate::Updated("Aggregator".to_string(), sum))
-                    .await
-            })
+            Box::pin(async move { broker_handle.broadcast(StatusUpdate::Updated("Aggregator".to_string(), sum)).await })
         })
-        // When we start up...
+        // After starting, broadcast its readiness.
         .after_start(|agent| {
-            let broker = agent.broker().clone();
+            let broker_handle = agent.broker().clone();
             Box::pin(async move {
-                broker
-                    .broadcast(StatusUpdate::Ready(
-                        "Aggregator".to_string(),
-                        "ready to sum data".to_string(),
-                    ))
-                    .await
+                broker_handle.broadcast(StatusUpdate::Ready("Aggregator".to_string(), "ready to sum data".to_string())).await;
             })
         })
-        // When we're shutting down...
+        // Before stopping, broadcast the final sum.
         .before_stop(|agent| {
-            let broker = agent.broker().clone();
+            let broker_handle = agent.broker().clone();
             let sum = agent.model.sum;
-            Box::pin(async move { broker.broadcast(StatusUpdate::Done(sum)).await })
+            Box::pin(async move {
+                broker_handle.broadcast(StatusUpdate::Done(sum)).await;
+            })
         });
 
-    // Set up the Printer agent
-    printer
-        // When we get a status update...
+    // 5. Configure the Printer agent.
+    printer_builder
+        // Handler for `StatusUpdate` messages (broadcast by other agents).
         .act_on::<StatusUpdate>(|agent, envelope| {
+            // Use crossterm to print formatted/colored output based on the message variant.
             match &envelope.message() {
-                // Someone is ready to work
                 StatusUpdate::Ready(who, what) => {
                     let _ = execute!(
-                        agent.model.out,
+                        &mut agent.model.out, // Use the Stdout handle from agent state (needs mut ref).
                         SetForegroundColor(Color::DarkYellow),
-                        Print("\u{2713}  "), // Checkmark
+                        Print("\u{2713}  "),
                         SetForegroundColor(Color::Yellow),
-                        Print(format!("{}", who)),
+                        Print(who.to_string()),
                         SetForegroundColor(Color::DarkYellow),
                         Print(format!(" is {}!\n", what)),
                         ResetColor
                     );
                 }
-                // Someone processed new data
-                StatusUpdate::Updated(who, what) => {
+                StatusUpdate::Updated(who, data_value) => {
                     let _ = execute!(
-                        agent.model.out,
+                        &mut agent.model.out,
                         SetForegroundColor(Color::DarkCyan),
-                        Print("\u{2139}  "), // Info symbol
+                        Print("\u{2139}  "),
                         SetForegroundColor(Color::Cyan),
-                        Print(format!("{}", who)),
+                        Print(who.to_string()),
                         SetForegroundColor(Color::DarkCyan),
-                        Print(format!(" is {}!\n", what)),
+                        Print(format!(" updated value: {}!\n", data_value)),
                         ResetColor
                     );
                 }
-                // We're all done!
                 StatusUpdate::Done(sum) => {
                     let _ = execute!(
-                        agent.model.out,
+                        &mut agent.model.out,
                         SetForegroundColor(Color::DarkMagenta),
-                        Print("\u{1F680} "), // Rocket
+                        Print("\u{1F680} "),
                         SetForegroundColor(Color::Red),
                         Print(format!("Final sum {}!\n\n", sum)),
                         ResetColor
                     );
                 }
             }
+
             AgentReply::immediate()
         })
-        // When we start up...
+        // After starting, broadcast its readiness.
         .after_start(|agent| {
-            let broker = agent.broker().clone();
-            Box::pin(async move {
-                broker
-                    .broadcast(StatusUpdate::Ready(
-                        "Printer".to_string(),
-                        "ready to display messages".to_string(),
-                    ))
-                    .await
-            })
+            // Note: We broadcast a message here instead of printing directly because
+            // the `agent` reference in lifecycle hooks is immutable, and `execute!`
+            // requires a mutable reference to `agent.model.out`.
+            let broker_handle = agent.broker().clone();
+            Box::pin(async move { broker_handle.broadcast(StatusUpdate::Ready("Printer".to_string(), "ready to display messages".to_string())).await })
         });
 
-    // Subscribe agents to the messages they care about
-    data_collector.handle().subscribe::<NewData>().await;
-    aggregator.handle().subscribe::<NewData>().await;
-    printer.handle().subscribe::<StatusUpdate>().await;
+    // 6. Subscribe agents to the message types they care about *before* starting them.
+    //    Agents only receive broadcast messages they are subscribed to.
+    data_collector_builder.handle().subscribe::<NewData>().await;
+    aggregator_builder.handle().subscribe::<NewData>().await;
+    printer_builder.handle().subscribe::<StatusUpdate>().await;
 
-    // Start all our agents
-    let _data_collector_handle = data_collector.start().await;
-    let _aggregator_handle = aggregator.start().await;
-    let _printer_handle = printer.start().await;
+    // 7. Start the agents.
+    let _data_collector_handle = data_collector_builder.start().await;
+    let _aggregator_handle = aggregator_builder.start().await;
+    let _printer_handle = printer_builder.start().await;
 
-    // Get the message broker so we can send messages
-    let broker = app.broker();
+    // 8. Broadcast `NewData` messages using the main broker handle.
+    //    Both DataCollector and Aggregator are subscribed and will receive these.
+    broker_handle.broadcast(NewData(5)).await;
+    broker_handle.broadcast(NewData(10)).await;
 
-    // Send some test numbers through the system
-    broker.broadcast(NewData(5)).await;
-    broker.broadcast(NewData(10)).await;
-
-    // Shut everything down nicely
-    app.shutdown_all().await.expect("Failed to shutdown system");
+    // 9. Shut down the runtime.
+    //    This triggers the Aggregator's `before_stop` handler, which broadcasts
+    //    the final `StatusUpdate::Done` message, received by the Printer.
+    runtime.shutdown_all().await.expect("Failed to shutdown system");
 }

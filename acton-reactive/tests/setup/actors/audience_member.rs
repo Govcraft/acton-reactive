@@ -18,64 +18,19 @@
 // They will randomly react to the jokes after which the Comedian will report on how many
 // jokes landed and didn't land
 
-use std::future::Future;
-use std::pin::Pin;
 
-use async_trait::async_trait;
-use rand::Rng;
-use tracing::{debug, error, info, trace};
-
-use acton_core::prelude::*;
 use acton_macro::acton_actor;
 
-use crate::setup::*;
 
+/// Represents the state (model) for an Audience Member agent in tests.
+/// This agent typically reacts randomly to `Joke` messages.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 pub struct AudienceMember {
+    /// Counter for how many jokes this audience member has heard.
     pub jokes_told: usize,
+    /// Counter for how many jokes were found funny (e.g., resulted in Chuckle).
     pub funny: usize,
+    /// Counter for how many jokes bombed (e.g., resulted in Groan).
     pub bombers: usize,
-}
-
-impl AudienceMember {
-    // This trait function details what should happen for each member of the pool we are about to
-    // create, it gets created when the parent actor calls spawn_with_pool
-    async fn initialize(&self, config: AgentConfig) -> AgentHandle {
-        let mut acton: AgentRuntime = ActonApp::launch();
-
-        let broker = acton.broker();
-
-        let actor_config = AgentConfig::new(
-            Ern::with_root("improve_show").expect("Couldn't create pool member Ern"),
-            None,
-            Some(broker.clone()),
-        );
-
-        let mut actor = acton.new_agent::<AudienceMember>().await; //::<Comedian>::create_with_config(actor_config).await;
-        // let mut actor =
-        //     Acton::<AudienceMember>::create_with_config(config.clone());
-
-        actor.act_on::<Joke>(|actor, event| {
-            let sender = actor.new_parent_envelope().unwrap();
-            // let parent_sender = actor.new_parent_envelope().sender.value;
-            // let event_sender = &event.return_address.sender.value;
-            let mut rng = rand::thread_rng();
-            let random_reaction = rng.gen_bool(0.5);
-
-            let reaction = {
-                if random_reaction {
-                    AudienceReactionMsg::Chuckle
-                } else {
-                    AudienceReactionMsg::Groan
-                }
-            };
-            Box::pin(async move { sender.send(reaction).await })
-        });
-
-        // Event: Activating AudienceMember
-        // Description: Activating the AudienceMember actor.
-        // Context: None
-        trace!("Activating the AudienceMember actor.");
-        actor.start().await
-    }
 }

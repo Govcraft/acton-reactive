@@ -14,78 +14,152 @@
  * limitations under that License.
  */
 
-use std::any::TypeId;
-
 use tracing::*;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-use crate::setup::*;
+// Use direct paths as re-exports seem problematic in test context
+use crate::setup::{
+    actors::{messenger::Messenger, pool_item::PoolItem},
+    messages::Ping,
+    initialize_tracing,
+};
 
 mod setup;
 
+/// Tests basic message sending and handling for a `PoolItem` agent.
+///
+/// **Scenario:**
+/// 1. Launch runtime.
+/// 2. Create a `PoolItem` agent builder.
+/// 3. Configure a handler for `Ping` messages that increments the agent's `receive_count`.
+/// 4. Configure an `after_stop` handler to log the final count.
+/// 5. Start the agent.
+/// 6. Send one `Ping` message to the agent.
+/// 7. Stop the agent.
+///
+/// **Verification:**
+/// - Tracing logs show the "Received in sync handler" message.
+/// - Tracing logs from `after_stop` show "Processed 1 Pings".
 #[acton_test]
 async fn test_messaging_behavior() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut system: AgentRuntime = ActonApp::launch();
-    let mut actor = system.new_agent::<PoolItem>().await;
-    actor
-        .act_on::<Ping>(|actor, event| {
+    // Launch the runtime environment.
+    let mut runtime: AgentRuntime = ActonApp::launch();
+    // Create an agent builder for PoolItem state.
+    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>().await;
+
+    // Configure the agent's behavior.
+    pool_item_agent_builder
+        // Handler for `Ping` messages.
+        .act_on::<Ping>(|agent, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in sync handler");
-            actor.model.receive_count += 1;
+            // Mutate the agent's internal state.
+            agent.model.receive_count += 1;
             AgentReply::immediate()
         })
-        .after_stop(|actor| {
-            info!("Processed {} Pings", actor.model.receive_count);
+        // Handler executed after the agent stops.
+        .after_stop(|agent| {
+            info!("Processed {} Pings", agent.model.receive_count);
+            // Implicitly verifies count is 1 based on the log message.
             AgentReply::immediate()
         });
-    let actor_ref = actor.start().await;
-    actor_ref.send(Ping).await;
-    actor_ref.stop().await?;
+
+    // Start the agent and get its handle.
+    let agent_handle = pool_item_agent_builder.start().await;
+    // Send a message to the running agent.
+    agent_handle.send(Ping).await;
+    // Stop the agent.
+    agent_handle.stop().await?;
     Ok(())
 }
 
+/// Tests basic message sending and handling for a `Messenger` agent (no internal state).
+///
+/// **Scenario:**
+/// 1. Launch runtime.
+/// 2. Create a `Messenger` agent builder.
+/// 3. Configure a handler for `Ping` messages that logs receipt.
+/// 4. Configure a simple `after_stop` handler.
+/// 5. Start the agent.
+/// 6. Send one `Ping` message.
+/// 7. Stop the agent.
+///
+/// **Verification:**
+/// - Tracing logs show the "Received in Messenger handler" message.
 #[acton_test]
 async fn test_basic_messenger() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut system: AgentRuntime = ActonApp::launch();
-    let mut actor = system.new_agent::<Messenger>().await;
-    actor
-        .act_on::<Ping>(|actor, event| {
+    let mut runtime: AgentRuntime = ActonApp::launch();
+    // Create an agent builder for Messenger state (which is likely empty or minimal).
+    let mut messenger_agent_builder = runtime.new_agent::<Messenger>().await;
+
+    // Configure the agent's behavior.
+    messenger_agent_builder
+        // Handler for `Ping` messages.
+        .act_on::<Ping>(|_agent, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in Messenger handler");
             AgentReply::immediate()
         })
-        .after_stop(|actor| {
+        // Handler executed after the agent stops.
+        .after_stop(|_agent| {
             info!("Stopping");
             AgentReply::immediate()
         });
-    let actor_ref = actor.start().await;
-    actor_ref.send(Ping).await;
-    actor_ref.stop().await?;
+
+    // Start the agent.
+    let agent_handle = messenger_agent_builder.start().await;
+    // Send a message.
+    agent_handle.send(Ping).await;
+    // Stop the agent.
+    agent_handle.stop().await?;
     Ok(())
 }
 
+/// Tests basic message handling, seemingly intended to test async handlers but uses `AgentReply::immediate`.
+/// Functionally similar to `test_messaging_behavior`.
+///
+/// **Scenario:**
+/// 1. Launch runtime.
+/// 2. Create a `PoolItem` agent builder.
+/// 3. Configure a handler for `Ping` messages that increments `receive_count`.
+/// 4. Configure an `after_stop` handler to log the final count.
+/// 5. Start the agent.
+/// 6. Send one `Ping` message.
+/// 7. Stop the agent.
+///
+/// **Verification:**
+/// - Tracing logs show the "Received in async handler" message.
+/// - Tracing logs from `after_stop` show "Processed 1 Pings".
 #[acton_test]
 async fn test_async_messaging_behavior() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut system: AgentRuntime = ActonApp::launch();
-    let mut actor = system.new_agent::<PoolItem>().await;
-    actor
-        .act_on::<Ping>(|actor, event| {
+    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>().await;
+
+    pool_item_agent_builder
+        // Handler for `Ping` messages. Although the test name suggests async,
+        // this handler currently returns `AgentReply::immediate()`.
+        .act_on::<Ping>(|agent, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in async handler");
-            actor.model.receive_count += 1;
+            agent.model.receive_count += 1;
             AgentReply::immediate()
         })
-        .after_stop(|actor| {
-            info!("Processed {} Pings", actor.model.receive_count);
+        .after_stop(|agent| {
+            info!("Processed {} Pings", agent.model.receive_count);
+            // Implicitly verifies count is 1.
             AgentReply::immediate()
         });
-    let context = actor.start().await;
-    context.send(Ping).await;
-    context.stop().await?;
+
+    // Start the agent.
+    let agent_handle = pool_item_agent_builder.start().await;
+    // Send a message.
+    agent_handle.send(Ping).await;
+    // Stop the agent.
+    agent_handle.stop().await?;
     Ok(())
 }

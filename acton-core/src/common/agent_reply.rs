@@ -17,40 +17,52 @@
 use std::future::Future;
 use std::pin::Pin;
 
-/// A utility struct for creating act_on response futures.
+/// A utility namespace for creating standard return types for `act_on` message handlers.
+///
+/// Message handlers registered with [`ManagedAgent::act_on`](crate::actor::ManagedAgent::act_on)
+/// typically need to return a future that is boxed and pinned, specifically [`FutureBox`].
+/// This struct provides helpers to create common future types that might be needed
+/// as part of that process.
+///
+/// It acts purely as a namespace and is not intended to be instantiated.
 pub struct AgentReply;
 
 impl AgentReply {
-    /// Creates a no-op (no operation) future.
+    /// Creates an immediately resolving, no-operation future, boxed and pinned.
     ///
-    /// This method returns a future that does nothing and completes immediately.
-    /// It's useful in situations where you need to provide a future but don't want
-    /// it to perform any actual work.
+    /// This is useful for message handlers that perform synchronous work or do not need
+    /// to perform any asynchronous operations after processing the message.
     ///
     /// # Returns
     ///
-    /// A pinned boxed future that resolves immediately without doing anything.
-    /// ```
-    pub fn immediate() -> Pin<Box<impl Future<Output=()> + Sized>> {
+    /// A `Pin<Box<impl Future<Output=()>>>` that completes immediately. This can often
+    /// be coerced or converted into the required [`FutureBox`].
+    #[inline]
+    pub fn immediate() -> Pin<Box<impl Future<Output=()> + Sized>> { // Original return type
         Box::pin(async move {})
     }
 
-    /// Wraps a future in a pinned box.
+    /// Wraps an existing future into a `Pin<Box<F>>`.
     ///
-    /// This method is useful for converting a future into a pinned boxed future,
-    /// which is required returning from async act_on message handlers.
+    /// This method takes any future `F` with `Output=()` and boxes and pins it.
+    /// This is often a necessary step before potentially casting or using it where
+    /// a [`FutureBox`] is expected, provided `F` meets the `Send + Sync + 'static` bounds.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the input future. Must have `Output=()`.
     ///
     /// # Arguments
     ///
-    /// * `future` - The future to be wrapped.
+    /// * `future`: The future to be wrapped.
     ///
     /// # Returns
     ///
-    /// A pinned boxed future.
-    /// ```
-    pub fn from_async<F>(future: F) -> Pin<Box<F>>
+    /// A `Pin<Box<F>>` containing the provided future.
+    #[inline]
+    pub fn from_async<F>(future: F) -> Pin<Box<F>> // Original return type
     where
-        F: Future<Output=()> + Sized,
+        F: Future<Output = ()> + Sized, // Original bounds
     {
         Box::pin(future)
     }

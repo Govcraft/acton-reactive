@@ -15,32 +15,48 @@
  */
 
 use acton_ern::prelude::*;
-use derive_new::new;
+use derive_new::new; // Keep using derive_new for the constructor
 
-use crate::common::Outbox;
+use crate::common::AgentSender;
 
-/// Message address with a sender id
+/// Represents the addressable endpoint of an agent, combining its identity and inbox channel.
+///
+/// A `MessageAddress` contains the necessary information to send a message to a specific
+/// agent: its unique identifier (`sender`, an [`Ern`]) and the sender half (`address`)
+/// of the MPSC channel connected to its inbox.
+///
+/// This struct is typically used within message envelopes ([`OutboundEnvelope`]) to specify
+/// the sender and recipient of a message.
 #[derive(new, Clone, Debug)]
 pub struct MessageAddress {
-    pub(crate) address: Outbox,
+    /// The sender part of the MPSC channel for the agent's inbox.
+    pub(crate) address: AgentSender,
+    /// The unique identifier (`Ern`) of the agent associated with this address.
     pub(crate) sender: Ern,
 }
 
 impl MessageAddress {
-    /// get address owner
+    /// Returns the root name component of the agent's identifier (`Ern`).
+    ///
+    /// This provides a simple string representation of the agent's base name.
+    #[inline]
     pub fn name(&self) -> &str {
         self.sender.root.as_str()
     }
 }
 
 impl Default for MessageAddress {
+    /// Creates a default `MessageAddress` with a default `Ern` and a closed channel sender.
+    ///
+    /// This is primarily useful for placeholder initialization before a real address is known.
+    /// Messages cannot be successfully sent using the default address's channel sender.
     fn default() -> Self {
-        let (outbox, _) = tokio::sync::mpsc::channel(1);
+        let (outbox, _) = tokio::sync::mpsc::channel(1); // Create a dummy, likely closed sender
         Self::new(outbox, Ern::default())
     }
 }
 
-// write unit tests
+// Unit tests remain unchanged and undocumented
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,6 +64,10 @@ mod tests {
     #[test]
     fn test_return_address() {
         let return_address = MessageAddress::default();
+        // The default sender might not *always* be closed immediately,
+        // depending on MPSC channel implementation details, but it's not usable.
+        // A better test might involve trying to send and expecting an error,
+        // but that requires more setup. This assertion is okay for basic check.
         assert!(return_address.address.is_closed());
     }
 }

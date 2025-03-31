@@ -14,5 +14,11 @@
  * limitations under that License.
  */
 
-#[derive(Default, Debug, Clone)]
+// Import the macro directly from the acton_macro crate
+use acton_macro::acton_actor;
+
+/// Represents a minimal agent state (model) for tests where the agent's
+/// primary purpose is message handling or interaction, without needing internal state.
+// The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
+#[acton_actor]
 pub struct Messenger;

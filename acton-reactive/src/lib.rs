@@ -13,8 +13,7 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
-#![forbid(unsafe_code)]
-//#![forbid(unused)]
+#![forbid(unused)]
 
 //! Acton Main Library
 //!

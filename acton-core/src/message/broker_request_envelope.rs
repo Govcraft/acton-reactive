@@ -14,6 +14,7 @@
  * limitations under that License.
  */
 
+use std::fmt::Debug; // Import Debug explicitly
 use std::sync::Arc;
 
 use tracing::*;
@@ -21,56 +22,64 @@ use tracing::*;
 use crate::message::BrokerRequest;
 use crate::traits::ActonMessage;
 
-/// Represents an envelope that carries a message within the actor system.
+/// A specialized envelope used by the [`AgentBroker`](crate::common::AgentBroker) to distribute broadcast messages.
 ///
-/// This struct encapsulates a message as an `Arc<dyn ActonMessage>`, allowing for
-/// efficient and thread-safe sharing of the message across the system.
+/// When the broker receives a [`BrokerRequest`], it extracts the message payload
+/// (`Arc<dyn ActonMessage>`) and wraps it in this `BrokerRequestEnvelope` before
+/// sending it to each relevant subscriber. This simplifies the message handling logic
+/// for subscribers receiving broadcast messages, as they receive the payload directly
+/// without the extra metadata contained in the original `BrokerRequest`.
+///
+/// This type is primarily used internally by the broker and message dispatch mechanisms.
 #[derive(Debug, Clone)]
 pub struct BrokerRequestEnvelope {
-    /// The actual message being carried, wrapped in an Arc for thread-safe sharing.
+    /// The original message payload being broadcast, shared via an `Arc`.
     pub message: Arc<dyn ActonMessage + Send + Sync + 'static>,
 }
 
+/// Enables converting a [`BrokerRequest`] directly into a [`BrokerRequestEnvelope`].
 impl From<BrokerRequest> for BrokerRequestEnvelope {
-    /// Converts a `BrokerRequest` into a `BrokerRequestEnvelope`.
-    ///
-    /// This implementation allows for seamless conversion from a `BrokerRequest`
-    /// to a `BrokerRequestEnvelope`, extracting the message from the request.
+    /// Extracts the message payload from a `BrokerRequest`.
     ///
     /// # Arguments
     ///
-    /// * `value` - The `BrokerRequest` to convert.
+    /// * `value`: The `BrokerRequest` to convert.
     ///
     /// # Returns
     ///
-    /// A new `BrokerRequestEnvelope` containing the message from the `BrokerRequest`.
+    /// A new `BrokerRequestEnvelope` containing only the message payload (`Arc`)
+    /// from the original request.
+    #[inline]
     fn from(value: BrokerRequest) -> Self {
-        trace!("{:?}", value);
+        trace!("Converting BrokerRequest to BrokerRequestEnvelope for message type: {}", value.message_type_name);
         Self {
-            message: value.message,
+            message: value.message, // Move the Arc from the request
         }
     }
 }
 
 impl BrokerRequestEnvelope {
-    /// Creates a new `BrokerRequestEnvelope` instance.
+    /// Creates a new `BrokerRequestEnvelope` wrapping the given message.
     ///
-    /// This method takes a message implementing the `ActonMessage` trait and wraps it
-    /// in a `BrokerRequestEnvelope`.
+    /// This constructor takes a concrete message `M`, wraps it in an `Arc`, and
+    /// stores it in the envelope. This is typically used internally or in testing
+    /// scenarios where a `BrokerRequestEnvelope` needs to be created directly.
     ///
     /// # Type Parameters
     ///
-    /// * `M`: The type of the message, which must implement `ActonMessage + Send + Sync + 'static`.
+    /// * `M`: The concrete type of the message. Must implement [`ActonMessage`]
+    ///   and be `Send + Sync + 'static`.
     ///
     /// # Arguments
     ///
-    /// * `request`: The message to be encapsulated in the `BrokerRequestEnvelope`.
+    /// * `message`: The message instance to wrap.
     ///
     /// # Returns
     ///
-    /// A new `BrokerRequestEnvelope` instance containing the provided message.
-    pub fn new<M: ActonMessage + Send + Sync + 'static>(request: M) -> Self {
-        let message = Arc::new(request);
-        Self { message }
+    /// A new `BrokerRequestEnvelope`.
+    pub fn new<M: ActonMessage + Send + Sync + 'static>(message: M) -> Self {
+        let message_arc = Arc::new(message);
+        trace!(message_type = %std::any::type_name::<M>(), "Creating new BrokerRequestEnvelope");
+        Self { message: message_arc }
     }
 }
