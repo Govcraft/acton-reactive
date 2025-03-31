@@ -1,10 +1,9 @@
 [package]
 name = "acton-core"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "Acton Core provides the core functionality and abstractions used by the Acton Reactive crate. It includes the essential building blocks for creating reactive and distributed systems."
-documentation = "https://github.com/Govcraft/acton-reactive/blob/main/README.md"
 homepage = "https://github.com/Govcraft/acton-reactive"
 repository = "https://github.com/Govcraft/acton-reactive"
 
