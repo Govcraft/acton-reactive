@@ -8,9 +8,6 @@ documentation = "https://docs.rs/acton-core/3.0.0/acton_core/"
 homepage = "https://github.com/Govcraft/acton-reactive"
 repository = "https://github.com/Govcraft/acton-reactive"
 
-[lints.rust]
-unused = "allow"
-
 [dependencies]
 acton-macro = { path = "../acton-macro" }
 acton-core = { path = "../acton-core" }

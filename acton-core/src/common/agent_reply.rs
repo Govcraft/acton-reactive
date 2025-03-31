@@ -14,7 +14,6 @@
  * limitations under that License.
  */
 
-use crate::common::FutureBox; // Keep using alias for doc links
 use std::future::Future;
 use std::pin::Pin;
 
