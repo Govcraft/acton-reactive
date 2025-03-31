@@ -47,8 +47,8 @@ pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(&mut ManagedAg
 /// A type alias for a boxed future.
 pub(crate) type FutureBox = Pin<Box<dyn Future<Output=()> + Sync + Send + 'static>>;
 
-/// A type alias for an outbound channel, which sends envelopes.
-pub(crate) type Outbox = Sender<Envelope>;
+/// A type alias for the sending end of an agent's message channel (`mpsc::Sender`).
+pub(crate) type AgentSender = Sender<Envelope>;
 
 /// A type alias for a stop signal, represented by an atomic boolean.
 pub(crate) type HaltSignal = AtomicBool;
