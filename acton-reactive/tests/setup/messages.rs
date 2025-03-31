@@ -13,45 +13,59 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
-#![allow(unused)]
+#![allow(unused)] // Allow unused messages as this is a common setup file for various tests
 
 use acton_reactive::prelude::*;
 
+/// Simple message often used for replies or acknowledgements in tests.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
 pub struct Pong;
 
-// #[acton_message]
+/// Simple message often used to trigger an action or request in tests.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
 pub struct Ping;
 
-#[acton_message]
+/// Represents different types of jokes a `Comedian` agent might tell.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
+#[derive(Clone, Debug)]
 pub enum FunnyJoke {
     ChickenCrossesRoad,
     Pun,
 }
 
-#[acton_message]
+/// Represents a joke targeted at a specific child agent or identified by a string.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
+#[derive(Clone, Debug)]
 pub enum FunnyJokeFor {
     ChickenCrossesRoad(Ern),
     Pun(String),
 }
 
-#[acton_message]
+/// Represents audience reactions to a joke.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
+#[derive(Clone, Debug)]
 pub enum AudienceReactionMsg {
     Chuckle,
     Groan,
 }
 
-// the joke told by the comedian
-#[acton_message]
+/// Generic message representing a joke being told (content not specified).
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
+#[derive(Clone, Debug)]
 pub struct Joke;
 
-#[acton_message]
+/// Message used to instruct the `Counter` agent to increment its count.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
+#[derive(Clone, Debug)]
 pub enum Tally {
     AddCount,
 }
 
-#[acton_message]
+/// Message used by an agent to report its status, often including a count.
+/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
+#[derive(Clone, Debug)]
 pub enum StatusReport {
     Complete(usize),
 }
