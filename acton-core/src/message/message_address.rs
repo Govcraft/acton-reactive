@@ -17,12 +17,12 @@
 use acton_ern::prelude::*;
 use derive_new::new;
 
-use crate::common::Outbox;
+use crate::common::AgentSender;
 
 /// Message address with a sender id
 #[derive(new, Clone, Debug)]
 pub struct MessageAddress {
-    pub(crate) address: Outbox,
+    pub(crate) address: AgentSender,
     pub(crate) sender: Ern,
 }
 

@@ -25,7 +25,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace, warn};
 
 use crate::actor::{Idle, ManagedAgent};
-use crate::common::{BrokerRef, OutboundEnvelope, Outbox, ParentRef};
+use crate::common::{BrokerRef, OutboundEnvelope, AgentSender, ParentRef};
 use crate::message::{BrokerRequest, MessageAddress, SystemSignal};
 use crate::prelude::ActonMessage;
 use crate::traits::{Actor, Broker, Subscriber};
@@ -36,7 +36,7 @@ pub struct AgentHandle {
     /// The unique identifier (ARN) for the context.
     pub(crate) id: Ern,
     /// The outbound channel for sending messages.
-    pub(crate) outbox: Outbox,
+    pub(crate) outbox: AgentSender,
     /// The task tracker for the actor.
     tracker: TaskTracker,
     /// The actor's optional parent context.
