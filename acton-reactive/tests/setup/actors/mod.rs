@@ -14,7 +14,9 @@
  * limitations under that License.
  */
 
-#![allow(unused)]
+/// This module defines various simple structs used as agent state (models)
+/// within the integration tests. These structs represent the internal data
+/// held by different test agents like `Comedian`, `Counter`, etc.
 
 pub use audience_member::AudienceMember;
 pub use comedian::Comedian;
