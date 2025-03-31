@@ -23,7 +23,7 @@ use crate::message::BrokerRequest;
 use crate::prelude::ActonMessage;
 use crate::traits::AgentHandleInterface;
 
-/// A broker is a message broker that can broadcast messages to all connected clients.
+/// Defines the capability to broadcast messages widely to interested agents (subscribers).
 #[async_trait]
 pub trait Broker: Clone + Debug + Default {
     /// Broadcast a message from the broker.
