@@ -20,13 +20,13 @@
  */
 
 pub use acton_message::ActonMessage;
-pub use actor::AgentHandleInterface;
+pub use agent_handle_interface::AgentHandleInterface;
 pub use broker::Broker;
 pub use subscribable::Subscribable;
 pub use subscriber::Subscriber;
 
 mod acton_message;
-mod actor;
+mod agent_handle_interface;
 mod subscribable;
 mod subscriber;
 mod broker;
