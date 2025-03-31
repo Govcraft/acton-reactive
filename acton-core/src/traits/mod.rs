@@ -20,7 +20,7 @@
  */
 
 pub use acton_message::ActonMessage;
-pub use actor::Actor;
+pub use actor::AgentHandleInterface;
 pub use broker::Broker;
 pub use subscribable::Subscribable;
 pub use subscriber::Subscriber;

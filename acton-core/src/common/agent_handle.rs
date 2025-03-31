@@ -28,7 +28,7 @@ use crate::actor::{Idle, ManagedAgent};
 use crate::common::{BrokerRef, OutboundEnvelope, AgentSender, ParentRef};
 use crate::message::{BrokerRequest, MessageAddress, SystemSignal};
 use crate::prelude::ActonMessage;
-use crate::traits::{Actor, Broker, Subscriber};
+use crate::traits::{AgentHandleInterface, Broker, Subscriber};
 
 /// Represents the context in which an actor operates.
 #[derive(Debug, Clone)]
@@ -149,7 +149,7 @@ impl Broker for AgentHandle {
 }
 
 #[async_trait]
-impl Actor for AgentHandle {
+impl AgentHandleInterface for AgentHandle {
     /// Returns the message address for this agent.
     fn reply_address(&self) -> MessageAddress {
         MessageAddress::new(self.outbox.clone(), self.id.clone())
@@ -219,13 +219,13 @@ impl Actor for AgentHandle {
             trace!(actor = self.id.to_string(), "Sending Terminate to");
             actor.reply(SystemSignal::Terminate)?;
 
-            // Event: Waiting for Actor Tasks
+            // Event: Waiting for Agent Tasks
             // Description: Waiting for all actor tasks to complete.
             // Context: None
             trace!("Waiting for all actor tasks to complete.");
             tracker.wait().await;
 
-            // Event: Actor Terminated
+            // Event: Agent Terminated
             // Description: The actor and its subordinates have been terminated.
             // Context: None
             trace!(

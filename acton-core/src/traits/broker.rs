@@ -21,7 +21,7 @@ use async_trait::async_trait;
 
 use crate::message::BrokerRequest;
 use crate::prelude::ActonMessage;
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
 /// A broker is a message broker that can broadcast messages to all connected clients.
 #[async_trait]
@@ -31,7 +31,7 @@ pub trait Broker: Clone + Debug + Default {
     /// Broadcast a message from the broker synchronously.
     fn broadcast_sync(&self, message: impl ActonMessage) -> anyhow::Result<()>
     where
-        Self: Actor,
+        Self: AgentHandleInterface,
     {
         let envelope = self.create_envelope(Some(self.reply_address()));
         envelope.reply(BrokerRequest::new(message))?;

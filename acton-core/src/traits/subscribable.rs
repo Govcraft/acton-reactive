@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use tracing::*;
 
 use crate::message::{SubscribeBroker, UnsubscribeBroker};
-use crate::traits::{ActonMessage, Actor};
+use crate::traits::{ActonMessage, AgentHandleInterface};
 use crate::traits::subscriber::Subscriber;
 
 /// Trait for types that can subscribe to and unsubscribe from messages.
@@ -40,7 +40,7 @@ pub trait Subscribable {
         &self,
     ) -> impl Future<Output=()> + Send + Sync + '_
     where
-        Self: Actor + Subscriber;
+        Self: AgentHandleInterface + Subscriber;
 
     /// Unsubscribes the implementing type from messages of type `T`.
     ///
@@ -49,7 +49,7 @@ pub trait Subscribable {
     /// * `T`: The type of message to unsubscribe from. Must implement `ActonMessage`.
     fn unsubscribe<T: ActonMessage>(&self)
     where
-        Self: Actor + Subscriber + Send + Sync + 'static;
+        Self: AgentHandleInterface + Subscriber + Send + Sync + 'static;
 }
 
 /// Implementation of `Subscribable` for any type that implements `ActonMessage + Send + Sync + 'static`.
@@ -57,7 +57,7 @@ pub trait Subscribable {
 /// Blanket implementation of `Subscribable` for types that can act as actors and subscribers.
 ///
 /// This implementation provides the `subscribe` and `unsubscribe` methods for any type `T`
-/// that implements [`Actor`], [`Subscriber`], and the necessary message bounds (`ActonMessage`, `Send`, `Sync`, `'static`).
+/// that implements [`AgentHandleInterface`], [`Subscriber`], and the necessary message bounds (`ActonMessage`, `Send`, `Sync`, `'static`).
 /// It works by sending the appropriate internal messages ([`SubscribeBroker`] or [`UnsubscribeBroker`])
 /// to the broker obtained via the [`Subscriber::get_broker`] method.
 
@@ -69,7 +69,7 @@ where
         &self,
     ) -> impl Future<Output=()> + Send + Sync + '_
     where
-        Self: Actor + Subscriber + 'static,
+        Self: AgentHandleInterface + Subscriber + 'static,
     {
         let subscriber_id = self.id();
         let message_type_id = TypeId::of::<M>();
@@ -99,7 +99,7 @@ where
     }
     fn unsubscribe<M: ActonMessage>(&self)
     where
-        Self: Actor + Subscriber,
+        Self: AgentHandleInterface + Subscriber,
     {
         // let subscriber_id = self.ern();
         let subscription = UnsubscribeBroker {

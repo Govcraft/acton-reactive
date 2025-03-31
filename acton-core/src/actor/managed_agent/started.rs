@@ -25,7 +25,7 @@ use tracing::{instrument, trace};
 use crate::actor::ManagedAgent;
 use crate::common::{Envelope, OutboundEnvelope, ReactorItem, ReactorMap};
 use crate::message::{BrokerRequestEnvelope, MessageAddress, SystemSignal};
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
 /// The `Started` state of the actor.
 pub struct Started;

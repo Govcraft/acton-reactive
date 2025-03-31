@@ -18,7 +18,7 @@
 use acton_ern::{Ern, ErnParser};
 
 use crate::common::{BrokerRef, ParentRef};
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
 /// Configuration for creating an agent.
 ///
