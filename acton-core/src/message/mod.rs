@@ -1,3 +1,11 @@
+//! Defines core message types, addressing, and signaling mechanisms for the Acton framework.
+//!
+//! This module includes fundamental structures for:
+//! - Representing agent addresses ([`MessageAddress`]).
+//! - Wrapping messages for sending ([`OutboundEnvelope`]).
+//! - Handling broker interactions ([`BrokerRequest`], [`BrokerRequestEnvelope`]).
+//! - System-level signals ([`SystemSignal`]).
+
 /*
  * Copyright (c) 2024. Govcraft
  *

@@ -30,7 +30,6 @@ impl AgentReply {
     /// # Returns
     ///
     /// A pinned boxed future that resolves immediately without doing anything.
-    /// ```
     pub fn immediate() -> Pin<Box<impl Future<Output=()> + Sized>> {
         Box::pin(async move {})
     }
@@ -47,7 +46,6 @@ impl AgentReply {
     /// # Returns
     ///
     /// A pinned boxed future.
-    /// ```
     pub fn from_async<F>(future: F) -> Pin<Box<F>>
     where
         F: Future<Output=()> + Sized,

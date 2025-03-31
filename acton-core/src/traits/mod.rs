@@ -1,3 +1,8 @@
+//! Defines the core traits that underpin the Acton actor framework.
+//!
+//! These traits establish the fundamental contracts for messages, actors,
+//! brokers, and the publish-subscribe mechanism.
+
 /*
  * Copyright (c) 2024. Govcraft
  *

@@ -45,6 +45,12 @@ pub struct ManagedAgent<AgentState, ManagedAgent: Default + Send + Debug + 'stat
     pub(crate) id: Ern,
     pub(crate) runtime: AgentRuntime,
     /// The actor model.
+    /// The user-defined state and logic associated with this agent.
+    ///
+    /// This field holds the instance of the type provided as the second generic
+    /// parameter to `ManagedAgent`, allowing message handlers and lifecycle hooks
+    /// to access and modify the agent's specific state.
+
     pub model: ManagedAgent,
 
     pub(crate) tracker: TaskTracker,

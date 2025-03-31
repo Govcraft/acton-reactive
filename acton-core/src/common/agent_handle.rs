@@ -40,9 +40,15 @@ pub struct AgentHandle {
     /// The task tracker for the actor.
     tracker: TaskTracker,
     /// The actor's optional parent context.
+    /// Optional reference to the parent (supervisor) agent's handle.
+    /// `None` if this is a top-level agent.
+
     pub parent: Option<Box<ParentRef>>,
     /// The system broker for the actor.
     pub broker: Box<Option<BrokerRef>>,
+    /// Optional reference to the system message broker's handle.
+    /// This is boxed to keep the size of `AgentHandle` smaller.
+
     children: DashMap<String, AgentHandle>,
 }
 
@@ -162,6 +168,8 @@ impl Actor for AgentHandle {
         }
     }
 
+    /// Returns a clone of the internal map containing handles to the agent's direct children.
+
     fn children(&self) -> DashMap<String, AgentHandle> {
         self.children.clone()
     }
@@ -179,14 +187,20 @@ impl Actor for AgentHandle {
         self.tracker.clone()
     }
     fn id(&self) -> Ern {
+    /// Returns a clone of the agent's unique Entity Resource Name (ERN).
+
         self.id.clone()
     }
 
     fn name(&self) -> String {
+    /// Returns the agent's root name (the first part of its ERN) as a String.
+
         self.id.root.to_string()
     }
 
     fn clone_ref(&self) -> AgentHandle {
+    /// Returns a clone of this `AgentHandle`.
+
         self.clone()
     }
 

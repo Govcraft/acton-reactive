@@ -1,3 +1,10 @@
+//! Contains common types, utilities, and core components used throughout the Acton framework.
+//!
+//! This module aggregates fundamental building blocks such as:
+//! - System initialization (`ActonApp`) and runtime management (`AgentRuntime`).
+//! - Agent interaction handles (`AgentHandle`) and the message broker (`AgentBroker`).
+//! - Utility types for message handling (`AgentReply`) and internal type definitions (`types`).
+
 /*
  * Copyright (c) 2024. Govcraft
  *

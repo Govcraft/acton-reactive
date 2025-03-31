@@ -1,3 +1,10 @@
+//! Provides the core components for defining and managing actors (agents) within the Acton framework.
+//!
+//! This module includes:
+//! - [`ManagedAgent`]: The central struct representing an agent's runtime and state machine.
+//! - [`AgentConfig`]: Configuration used to initialize an agent.
+//! - State markers like [`Idle`] and [`Started`] used with [`ManagedAgent`] to represent its lifecycle state.
+
 /*
  * Copyright (c) 2024. Govcraft
  *
