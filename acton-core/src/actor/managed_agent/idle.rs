@@ -27,7 +27,7 @@ use crate::actor::{AgentConfig, ManagedAgent, Started};
 use crate::common::{ActonInner, AgentHandle, AgentRuntime,Envelope, FutureBox, OutboundEnvelope, ReactorItem};
 use crate::message::MessageContext;
 use crate::prelude::ActonMessage;
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
 /// The idle state of an actor.
 pub struct Idle;
@@ -170,7 +170,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     /// - `id`: The identifier for the new actor.
     ///
     /// # Returns
-    /// A new `Actor` instance in the idle state.
+    /// A new `ManagedAgent` instance in the idle state.
     #[instrument(skip(self))]
     pub async fn create_child(&self, name: String) -> anyhow::Result<ManagedAgent<Idle, State>> {
         let config = AgentConfig::new(Ern::with_root(name)?, Some(self.handle.clone()), Some(self.runtime.broker().clone()))?;
@@ -197,7 +197,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         debug_assert!(
             !managed_actor.inbox.is_closed(),
-            "Actor mailbox is closed in new"
+            "Agent mailbox is closed in new"
         );
 
         trace!("NEW ACTOR: {}", &managed_actor.handle.id());
@@ -225,7 +225,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         debug_assert!(
             !actor.inbox.is_closed(),
-            "Actor mailbox is closed in activate"
+            "Agent mailbox is closed in activate"
         );
         (actor.before_start)(actor).await;
         actor_ref.tracker().spawn(actor.wake(message_handlers));
@@ -254,7 +254,7 @@ for ManagedAgent<Started, State>
 
         debug_assert!(
             !value.inbox.is_closed(),
-            "Actor mailbox is closed before conversion in From<Actor<Idle, State>>"
+            "Agent mailbox is closed before conversion in From<ManagedAgent<Idle, State>>"
         );
 
         let inbox = value.inbox;
@@ -265,7 +265,7 @@ for ManagedAgent<Started, State>
         // tracing::trace!("Mailbox is not closed, proceeding with conversion");
         if handle.children().is_empty() {
             trace!(
-                "child count before Actor creation {}",
+                "child count before Agent creation {}",
                 handle.children().len()
             );
         }

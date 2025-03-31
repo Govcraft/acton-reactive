@@ -26,7 +26,7 @@ use tracing::trace;
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
 use crate::common::{ActonApp, AgentBroker, AgentHandle, BrokerRef};
 use crate::common::acton_inner::ActonInner;
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
 /// Represents a ready state of the Acton system.
 ///

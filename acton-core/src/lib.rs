@@ -42,5 +42,5 @@ pub mod prelude {
     pub use crate::actor::{AgentConfig, Idle, ManagedAgent, Started};
     pub use crate::common::{ActonApp, AgentBroker, AgentHandle, AgentReply, AgentRuntime};
     pub use crate::message::{BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope};
-    pub use crate::traits::{ActonMessage, Actor, Broker, Subscribable, Subscriber};
+    pub use crate::traits::{ActonMessage, AgentHandleInterface, Broker, Subscribable, Subscriber};
 }

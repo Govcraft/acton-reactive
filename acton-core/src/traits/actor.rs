@@ -26,9 +26,13 @@ use crate::common::*;
 use crate::message::{BrokerRequest, MessageAddress};
 use crate::traits::acton_message::ActonMessage;
 
-/// Trait for actor context, defining common methods for actor management.
+/// Defines the standard operations available on an [`AgentHandle`].
+///
+/// This trait provides methods for interacting with an agent, such as sending messages,
+/// managing its lifecycle (stopping), accessing its identity (`id`, `name`), and
+/// interacting with its children in a hierarchy.
 #[async_trait]
-pub trait Actor {
+pub trait AgentHandleInterface {
     /// Returns the message address for this agent.
     fn reply_address(&self) -> MessageAddress;
     /// Returns an envelope for the specified recipient and message, ready to send.
@@ -45,7 +49,7 @@ pub trait Actor {
     /// # Returns
     ///
     /// An `Option<ActorRef>` containing the child actor if found, or `None` if not found.
-    fn find_child(&self, arn: &Ern) -> Option<AgentHandle>;
+    fn find_child(&self, id: &Ern) -> Option<AgentHandle>;
 
     /// Returns the actor's task tracker.
     fn tracker(&self) -> TaskTracker;
@@ -85,7 +89,7 @@ pub trait Actor {
     /// Send a message synchronously.
     fn send_sync(&self, message: impl ActonMessage, recipient: &AgentHandle) -> anyhow::Result<()>
     where
-        Self: Actor,
+        Self: AgentHandleInterface,
     {
         let envelope = self.create_envelope(Some(recipient.reply_address()));
         envelope.reply(BrokerRequest::new(message))?;

@@ -27,7 +27,7 @@ use tracing::*;
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
 use crate::common::{AgentHandle, BrokerRef};
 use crate::message::{BrokerRequest, BrokerRequestEnvelope, SubscribeBroker};
-use crate::traits::Actor;
+use crate::traits::AgentHandleInterface;
 
 /// A broker that manages subscriptions and broadcasts messages to subscribers.
 ///
@@ -50,7 +50,7 @@ type Subscribers = Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>; // Type al
 ///
 /// This implementation enables accessing the underlying `AgentHandle`'s methods
 /// directly on an `AgentBroker` instance for convenience, particularly for
-/// operations defined by the `Actor` trait that don't require mutable access.
+/// operations defined by the `AgentHandleInterface` trait that don't require mutable access.
 
 impl Deref for AgentBroker {
     type Target = AgentHandle;
