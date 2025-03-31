@@ -34,7 +34,7 @@ pub mod started;
 /// Represents an agent whose lifecycle and message processing loop are managed by the Acton framework.
 ///
 /// This struct encapsulates the agent's state (`Model`), its communication channels (`handle`, `inbox`),
-/// lifecycle hooks (`before_start`, `after_stop`, etc.), and message handlers (`reactors`).
+/// lifecycle hooks (`before_start`, `after_stop`, etc.), and message handlers (`message_handlers`).
 /// The "Managed" aspect signifies that the framework takes care of spawning the agent's task,
 /// receiving messages, dispatching them to the appropriate handlers defined on the `Model`,
 /// and managing shutdown signals.
@@ -67,8 +67,8 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
     pub(crate) before_stop: AsyncLifecycleHandler<Model>,
     /// Reactor called when the actor stops listening for messages.
     pub(crate) after_stop: AsyncLifecycleHandler<Model>,
-    /// Map of reactors for handling different message types.
-    pub(crate) reactors: ReactorMap<Model>,
+    /// Map of message handlers for processing different message types.
+    pub(crate) message_handlers: ReactorMap<Model>,
     _actor_state: std::marker::PhantomData<AgentState>,
 }
 

@@ -107,7 +107,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         );
 
         // Insert the handler into the reactors map.
-        self.reactors.insert(type_id, ReactorItem::FutureReactor(handler_box));
+        self.message_handlers.insert(type_id, ReactorItem::FutureReactor(handler_box));
         self
     }
 
@@ -217,7 +217,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     pub async fn start(mut self) -> AgentHandle {
         trace!("The model is {:?}", self.model);
 
-        let reactors = mem::take(&mut self.reactors);
+        let message_handlers = mem::take(&mut self.message_handlers);
         let actor_ref = self.handle.clone();
         trace!("actor_ref before spawn: {:?}", actor_ref.id.root.to_string());
         let active_actor: ManagedAgent<Started, State> = self.into();
@@ -228,7 +228,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             "Actor mailbox is closed in activate"
         );
         (actor.before_start)(actor).await;
-        actor_ref.tracker().spawn(actor.wake(reactors));
+        actor_ref.tracker().spawn(actor.wake(message_handlers));
         actor_ref.tracker().close();
         trace!("actor_ref after spawn: {:?}", actor_ref.id.root.to_string());
 
@@ -249,7 +249,7 @@ for ManagedAgent<Started, State>
         let id = value.id;
         let tracker = value.tracker;
         let acton = value.runtime;
-        let reactors = value.reactors;
+        let message_handlers = value.message_handlers;
 
 
         debug_assert!(
@@ -284,7 +284,7 @@ for ManagedAgent<Started, State>
             before_stop: on_before_stop,
             after_stop: on_stopped,
             broker,
-            reactors,
+            message_handlers,
             _actor_state: Default::default(),
         }
     }
@@ -314,7 +314,7 @@ for ManagedAgent<Idle, State>
             runtime: Default::default(),
             halt_signal: Default::default(),
             tracker: Default::default(),
-            reactors: Default::default(),
+            message_handlers: Default::default(),
             _actor_state: Default::default(),
         }
     }
