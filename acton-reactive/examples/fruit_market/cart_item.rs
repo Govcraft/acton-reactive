@@ -40,9 +40,9 @@ impl CartItem {
     pub(crate) fn new(name: impl Into<String>, quantity: i32) -> Self {
         let name = name.into();
         let mut upc = "upc_".to_string();
-        upc.push_str(&*name.clone());
+        upc.push_str(&name.clone());
         CartItem {
-            name: name.into(),
+            name,
             quantity,
             upc: upc.create_type_id::<V7>(),
             ..Default::default()

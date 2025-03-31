@@ -13,12 +13,9 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
-use tracing::error;
 
-use acton_core::prelude::*;
 use acton_macro::acton_actor;
 
-use crate::setup::*;
 
 /// Represents the state (model) for a generic "Pool Item" agent in tests.
 ///

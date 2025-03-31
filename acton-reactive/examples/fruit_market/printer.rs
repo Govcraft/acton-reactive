@@ -20,7 +20,7 @@ use std::io::Stdout; // Import Stdout explicitly
 use ansi_term::Color::RGB;
 use crossterm::{
     cursor, execute, queue,
-    style::{Color, Print, ResetColor, SetForegroundColor}, // Added Print
+    style::Print, // Added Print
     terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate},
 };
 use dashmap::DashMap;
@@ -32,8 +32,8 @@ use acton_core::prelude::*;
 
 // Import message types and data structures used by this agent.
 // Removed ToggleHelp as it's defined locally in this file.
-use crate::{ItemScanned, PriceRequest, PriceResponse, PrinterMessage};
-use crate::cart_item::{CartItem, Price};
+use crate::{PriceRequest, PriceResponse, PrinterMessage};
+use crate::cart_item::CartItem;
 
 // --- Constants for UI Layout and Styling ---
 const COLS: u16 = 40; // Width of the receipt area
@@ -155,7 +155,7 @@ impl From<DisplayItem> for FormattedItem {
                         COLOR_MEDIUM_BLUE.2,
                     )
                         .paint(item.quantity().to_string()),
-                    MoneyFmt(**item.cost()).to_string(), // Format cost
+                    MoneyFmt(**item.cost()), // Format cost
                     RGB(COLOR_DARK_GREY.0, COLOR_DARK_GREY.1, COLOR_DARK_GREY.2).paint("│"),
                     RGB(COLOR_GREEN.0, COLOR_GREEN.1, COLOR_GREEN.2)
                         .paint(MoneyFmt(item.price().0).to_string()) // Format total price

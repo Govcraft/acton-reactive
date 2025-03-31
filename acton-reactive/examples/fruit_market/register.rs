@@ -16,7 +16,7 @@
 
 
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use tracing::{debug, trace};
+use tracing::trace;
 
 use acton_core::prelude::*;
 
