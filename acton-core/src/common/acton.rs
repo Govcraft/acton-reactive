@@ -16,26 +16,38 @@
 
 use crate::common::AgentRuntime;
 
-/// Represents the Acton system.
+/// Represents the entry point for initializing the Acton agent system.
 ///
-/// The `ActonSystem` struct serves as the central controller for the Acton framework,
-/// managing the initialization and coordination of various system components.
-/// It provides functionality to launch and prepare the system for operation.
+/// This struct serves as a marker type to initiate the system bootstrap process.
+/// The primary way to use it is via the associated function [`ActonApp::launch`],
+/// which sets up the core components like the message broker and returns an
+/// [`AgentRuntime`] instance representing the active system.
+///
+/// Creating an `ActonApp` instance directly is typically not necessary; use [`ActonApp::launch`] instead.
 #[derive(Default, Debug, Clone)]
 pub struct ActonApp;
 
 impl ActonApp {
-    /// Launches the Acton system.
+    /// Initializes and launches the Acton agent system.
     ///
-    /// This method initializes and starts the Acton system, setting up all necessary
-    /// components and preparing the system for handling tasks and managing actors.
+    /// This is the main entry point for starting the Acton framework. It performs
+    /// the necessary setup, including initializing the system message broker
+    /// and creating the core runtime environment.
+    ///
+    /// The process involves:
+    /// 1. Creating a default `ActonApp` instance.
+    /// 2. Converting this instance into an [`AgentRuntime`] via the `From<ActonApp>` trait.
+    ///    This conversion triggers the actual initialization logic (e.g., broker setup)
+    ///    defined within the `From` implementation for `AgentRuntime`.
     ///
     /// # Returns
     ///
-    /// A [`AgentRuntime`] instance indicating that the system has been successfully launched
-    /// and is ready for operation.
+    /// An [`AgentRuntime`] instance representing the successfully launched and operational
+    /// Acton system. This runtime can then be used to spawn top-level agents.
     pub fn launch() -> AgentRuntime {
         let system: ActonApp = Default::default();
+        // The .into() call triggers the From<ActonApp> for AgentRuntime,
+        // which performs the actual system initialization.
         system.into()
     }
 }
