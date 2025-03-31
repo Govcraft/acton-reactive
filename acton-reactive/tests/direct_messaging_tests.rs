@@ -66,7 +66,7 @@ pub(crate) struct PriceService {
 impl PriceService {
     pub(crate) async fn new(app: &mut AgentRuntime) -> Self {
         let config = AgentConfig::new(Ern::with_root("price_service").unwrap(), None, None).expect("Failed to create actor config");
-        let mut price_service = app.create_actor_with_config::<PriceService>(config).await;
+        let mut price_service = app.new_agent_with_config::<PriceService>(config).await;
         price_service
             .act_on::<Pong>(|agent, context| {
                 trace!("Received Pong");
@@ -91,7 +91,7 @@ impl ShoppingCart {
     pub(crate) async fn new(price_service_handle: AgentHandle, app: &mut AgentRuntime) -> Self {
         // let mut shopping_cart = app.initialize::<ShoppingCart>().await;
         let config = AgentConfig::new(Ern::with_root("shopping_cart").unwrap(), None, None).expect("Failed to create actor config");
-        let mut shopping_cart = app.create_actor_with_config::<ShoppingCart>(config).await;
+        let mut shopping_cart = app.new_agent_with_config::<ShoppingCart>(config).await;
         // Configure agent behavior
         shopping_cart
             .act_on::<Ping>(|agent, context| {

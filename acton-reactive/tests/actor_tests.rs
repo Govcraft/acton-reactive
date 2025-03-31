@@ -35,7 +35,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
     let mut acton: AgentRuntime = ActonApp::launch();
 
     let actor_config = AgentConfig::new(Ern::with_root("improve_show").unwrap(), None, None)?;
-    let mut comedy_show = acton.create_actor_with_config::<Comedian>(actor_config).await;
+    let mut comedy_show = acton.new_agent_with_config::<Comedian>(actor_config).await;
 
     comedy_show
         .act_on::<FunnyJoke>(|actor, record| {
@@ -141,7 +141,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
     let actor_config = AgentConfig::new(Ern::with_root("test_child_actor").unwrap(), None, None)?;
 
     // Create the parent actor
-    let parent_actor = acton.create_actor_with_config::<PoolItem>(actor_config).await;
+    let parent_actor = acton.new_agent_with_config::<PoolItem>(actor_config).await;
 
     let actor_config = AgentConfig::new(
         Ern::with_root("test_child_actor_chile").unwrap(),
@@ -149,7 +149,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
         None,
     )?;
 
-    let mut child_actor = acton.create_actor_with_config::<PoolItem>(actor_config).await;
+    let mut child_actor = acton.new_agent_with_config::<PoolItem>(actor_config).await;
 
     // Set up the child actor with handlers
     child_actor
@@ -214,7 +214,7 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
     let actor_config =
         AgentConfig::new(Ern::with_root("test_find_child_actor").unwrap(), None, None)?;
 
-    let mut child_actor = acton.create_actor_with_config::<PoolItem>(actor_config).await;
+    let mut child_actor = acton.new_agent_with_config::<PoolItem>(actor_config).await;
     // Set up the child actor with handlers
     let child_id = child_actor.id().clone();
     // Activate the child actor
@@ -245,7 +245,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     let actor_config =
         AgentConfig::new(Ern::with_root("test_actor_mutation").unwrap(), None, None)?;
 
-    let mut comedy_show = acton.create_actor_with_config::<Comedian>(actor_config).await;
+    let mut comedy_show = acton.new_agent_with_config::<Comedian>(actor_config).await;
 
     comedy_show
         .act_on::<FunnyJoke>(|actor, record| {
@@ -334,7 +334,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     let child_actor_config = AgentConfig::new(Ern::with_root("child").unwrap(), None, None)?;
 
     // Asynchronously create the Counter actor with the specified configuration and await its creation
-    let mut child = acton.create_actor_with_config::<Counter>(child_actor_config).await;
+    let mut child = acton.new_agent_with_config::<Counter>(child_actor_config).await;
     info!("Created child actor with id: {}", child.id());
 
     // Define the message handler for Ping messages in the Child actor
