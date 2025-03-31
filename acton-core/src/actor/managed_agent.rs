@@ -31,9 +31,14 @@ use crate::prelude::AgentRuntime;
 mod idle;
 pub mod started;
 
-/// A managed agent is a wrapper around an actor that provides a set of lifecycle hooks and
-///  message handling reactors.
-pub struct ManagedAgent<AgentState, ManagedAgent: Default + Send + Debug + 'static> {
+/// Represents an agent whose lifecycle and message processing loop are managed by the Acton framework.
+///
+/// This struct encapsulates the agent's state (`Model`), its communication channels (`handle`, `inbox`),
+/// lifecycle hooks (`before_start`, `after_stop`, etc.), and message handlers (`reactors`).
+/// The "Managed" aspect signifies that the framework takes care of spawning the agent's task,
+/// receiving messages, dispatching them to the appropriate handlers defined on the `Model`,
+/// and managing shutdown signals.
+pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
     pub(crate) handle: AgentHandle,
 
     pub(crate) parent: Option<ParentRef>,
@@ -44,33 +49,31 @@ pub struct ManagedAgent<AgentState, ManagedAgent: Default + Send + Debug + 'stat
 
     pub(crate) id: Ern,
     pub(crate) runtime: AgentRuntime,
-    /// The actor model.
     /// The user-defined state and logic associated with this agent.
     ///
-    /// This field holds the instance of the type provided as the second generic
-    /// parameter to `ManagedAgent`, allowing message handlers and lifecycle hooks
-    /// to access and modify the agent's specific state.
-
-    pub model: ManagedAgent,
+    /// This field holds the instance of the type provided as the `Model` generic
+    /// parameter. Message handlers and lifecycle hooks operate on this `model`
+    /// to manage the agent's behavior and data.
+    pub model: Model,
 
     pub(crate) tracker: TaskTracker,
 
     pub(crate) inbox: Receiver<Envelope>,
     /// Reactor called when the actor wakes up but before listening begins.
-    pub(crate) before_start: AsyncLifecycleHandler<ManagedAgent>,
+    pub(crate) before_start: AsyncLifecycleHandler<Model>,
     /// Reactor called when the actor wakes up but before listening begins.
-    pub(crate) after_start: AsyncLifecycleHandler<ManagedAgent>,
+    pub(crate) after_start: AsyncLifecycleHandler<Model>,
     /// Reactor called just before the actor stops listening for messages.
-    pub(crate) before_stop: AsyncLifecycleHandler<ManagedAgent>,
+    pub(crate) before_stop: AsyncLifecycleHandler<Model>,
     /// Reactor called when the actor stops listening for messages.
-    pub(crate) after_stop: AsyncLifecycleHandler<ManagedAgent>,
+    pub(crate) after_stop: AsyncLifecycleHandler<Model>,
     /// Map of reactors for handling different message types.
-    pub(crate) reactors: ReactorMap<ManagedAgent>,
+    pub(crate) reactors: ReactorMap<Model>,
     _actor_state: std::marker::PhantomData<AgentState>,
 }
 
 // implement getter functions for ManagedAgent
-impl<ActorState, ManagedEntity: Default + Send + Debug + 'static> ManagedAgent<ActorState, ManagedEntity> {
+impl<AgentState, Model: Default + Send + Debug + 'static> ManagedAgent<AgentState, Model> {
     /// Returns the unique identifier of the actor.
     pub fn id(&self) -> &Ern {
         &self.id
@@ -99,11 +102,11 @@ impl<ActorState, ManagedEntity: Default + Send + Debug + 'static> ManagedAgent<A
     }
 }
 
-impl<ActorState, ManagedEntity: Default + Send + Debug + 'static> Debug
-for ManagedAgent<ActorState, ManagedEntity>
+impl<AgentState, Model: Default + Send + Debug + 'static> Debug
+for ManagedAgent<AgentState, Model>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ManagedActor")
+        f.debug_struct("ManagedAgent")
             .field("key", &self.id)
             .finish()
     }
