@@ -14,17 +14,21 @@
  * limitations under that License.
  */
 
-use std::any::TypeId;
-use std::pin::Pin;
-use std::time::Duration;
-
-use tracing::{debug, info, trace};
-use tracing_subscriber::fmt::writer::EitherWriter::A;
+use tracing::{info, trace};
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-use crate::setup::*;
+// Explicitly import necessary types from the setup module
+// Use direct paths as re-exports seem problematic in test context
+use crate::setup::{
+    actors::{
+        comedian::Comedian, counter::Counter, messenger::Messenger,
+        pool_item::PoolItem,
+    },
+    messages::{AudienceReactionMsg, FunnyJoke, FunnyJokeFor, Ping, Tally},
+    initialize_tracing,
+};
 mod setup;
 
 /// Tests the ability of an agent to handle asynchronous operations within its message handlers (`act_on`).

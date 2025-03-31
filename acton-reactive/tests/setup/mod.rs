@@ -21,11 +21,10 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 // Re-export actors and messages for easy access within tests.
 pub use actors::*;
-pub use messages::*;
 
 // Declare the submodules.
-mod actors;
-mod messages;
+pub mod actors;
+pub mod messages;
 
 // Ensures tracing initialization happens only once across all tests.
 static INIT: Once = Once::new();
