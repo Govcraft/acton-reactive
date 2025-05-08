@@ -15,7 +15,8 @@
  */
 
 
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::seq::IndexedMutRandom;
+use rand::prelude::*;
 use tracing::trace;
 
 use acton_core::prelude::*;
@@ -72,7 +73,7 @@ impl Register {
     /// Sends an `ItemScanned` message to the PriceService agent.
     pub async fn scan(&self) -> anyhow::Result<()> {
         // Use a seeded RNG for potentially reproducible results if needed, otherwise `from_entropy` is fine.
-        let mut rng = StdRng::from_entropy();
+        let mut rng = StdRng::from_os_rng();
 
         // Choose a random item name from the list.
         let item_name = GROCERY_ITEMS
@@ -81,7 +82,7 @@ impl Register {
             .to_string();
 
         // Generate a random quantity.
-        let quantity = rng.gen_range(QUANTITY_MIN..=QUANTITY_MAX);
+        let quantity = rng.random_range(QUANTITY_MIN..=QUANTITY_MAX);
 
         // Create a new CartItem and wrap it in an ItemScanned message.
         // Send the message to the PriceService agent using its stored handle.
