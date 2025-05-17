@@ -26,10 +26,29 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
+fn has_derive(input: &DeriveInput, trait_name: &str) -> bool {
+    input.attrs.iter().any(|attr| {
+        if attr.path().is_ident("derive") {
+            let mut found = false;
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident(trait_name) {
+                    found = true;
+                }
+                Ok(())
+            });
+            found
+        } else {
+            false
+        }
+    })
+}
+
+
 /// A procedural macro to derive the necessary traits for an Acton message.
 ///
-/// This macro will automatically implement `Clone`, `Debug`, `ActonMessage`, and `Sync`
-/// for the annotated type.
+/// This macro will automatically implement `Clone`, `Debug`, and `ActonMessage`
+/// for the annotated type. The `Sync` trait is implemented automatically by the
+/// compiler when possible, so an explicit unsafe implementation is unnecessary.
 #[proc_macro_attribute]
 pub fn acton_message(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input tokens into a syntax tree.
@@ -41,9 +60,15 @@ pub fn acton_message(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Generate the expanded code.
+    let clone_attr = if has_derive(&input, "Clone") {
+        quote!()
+    } else {
+        quote!(#[derive(Clone)])
+    };
+
     let expanded = quote! {
-        // Derive the Clone trait.
-        #[derive(Clone)]
+        // Derive the Clone trait if not already present.
+        #clone_attr
         #input
 
         // Implement the Debug trait.
@@ -53,14 +78,16 @@ pub fn acton_message(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-        // Implement the Sync trait.
-        unsafe impl #impl_generics Sync for #name #ty_generics #where_clause {}
     };
 
     // Return the generated tokens.
     TokenStream::from(expanded)
 }
 
+/// A procedural macro to derive boilerplate traits for Acton actors.
+///
+/// This macro ensures the annotated type implements `Default`, `Clone`, and
+/// `Debug`. Existing derives for these traits are preserved.
 #[proc_macro_attribute]
 pub fn acton_actor(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input tokens into a syntax tree.
@@ -72,9 +99,18 @@ pub fn acton_actor(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Generate the expanded code.
+    let need_default = !has_derive(&input, "Default");
+    let need_clone = !has_derive(&input, "Clone");
+    let derives = {
+        let mut traits = Vec::new();
+        if need_default { traits.push(quote!(Default)); }
+        if need_clone { traits.push(quote!(Clone)); }
+        if traits.is_empty() { quote!() } else { quote!(#[derive(#(#traits),*)]) }
+    };
+
     let expanded = quote! {
-        // Derive the Clone trait.
-        #[derive(Default, Clone)]
+        // Derive Default and Clone if not already present.
+        #derives
         #input
 
         // Implement the Debug trait.
