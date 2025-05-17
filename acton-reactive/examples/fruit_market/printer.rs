@@ -38,7 +38,6 @@ use crate::cart_item::CartItem;
 // --- Constants for UI Layout and Styling ---
 const COLS: u16 = 40; // Width of the receipt area
 const PAD_LEFT: u16 = 3; // Left padding for the receipt
-const MARGIN_TOP: u16 = 1; // Top margin (unused currently)
 const PAD_TOP: u16 = 2; // Top padding for the receipt content
 const HEADER_HEIGHT: u16 = 4; // Height reserved for the header section
 const TRANSACTION_RECEIPT: &str = "Transaction Receipt"; // Header title

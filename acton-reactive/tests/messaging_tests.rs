@@ -14,6 +14,8 @@
  * limitations under that License.
  */
 
+#![allow(dead_code, unused_doc_comments)]
+
 use tracing::*;
 
 use acton_reactive::prelude::*;
@@ -62,6 +64,7 @@ async fn test_messaging_behavior() -> anyhow::Result<()> {
         })
         // Handler executed after the agent stops.
         .after_stop(|agent| {
+            assert_eq!(agent.model.receive_count, 1, "expected one Ping");
             info!("Processed {} Pings", agent.model.receive_count);
             // Implicitly verifies count is 1 based on the log message.
             AgentReply::immediate()
@@ -150,6 +153,7 @@ async fn test_async_messaging_behavior() -> anyhow::Result<()> {
             AgentReply::immediate()
         })
         .after_stop(|agent| {
+            assert_eq!(agent.model.receive_count, 1, "expected one Ping");
             info!("Processed {} Pings", agent.model.receive_count);
             // Implicitly verifies count is 1.
             AgentReply::immediate()
