@@ -240,7 +240,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
 
     // --- Child Agent ---
     let child_config = AgentConfig::new(
-        Ern::with_root("test_child_actor_chile").unwrap(),
+        Ern::with_root("test_child_actor_child").unwrap(),
         None,
         None,
     )?;
