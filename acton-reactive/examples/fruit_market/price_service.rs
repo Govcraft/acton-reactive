@@ -86,6 +86,6 @@ impl PriceService {
         // Simulate network/database latency.
         tokio::time::sleep(Duration::from_millis(MOCK_DELAY_MS)).await;
         // Generate a random price within the defined range (in cents).
-        rand::thread_rng().gen_range(PRICE_MIN..=PRICE_MAX)
+        rand::rng().random_range(PRICE_MIN..=PRICE_MAX)
     }
 }

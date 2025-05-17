@@ -14,6 +14,8 @@
  * limitations under that License.
  */
 
+#![allow(dead_code, unused_doc_comments)]
+
 use tracing::*;
 
 use acton_reactive::prelude::*;
