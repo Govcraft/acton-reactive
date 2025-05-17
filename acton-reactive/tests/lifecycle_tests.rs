@@ -13,6 +13,8 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
+#![allow(dead_code, unused_doc_comments)]
+
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 

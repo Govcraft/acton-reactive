@@ -13,7 +13,7 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
-use std::io::{stdout, Write};
+use std::io::stdout;
 use std::io::Stdout;
 
 use crossterm::{

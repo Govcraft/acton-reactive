@@ -57,13 +57,6 @@ const LOG_FILENAME: &str = "fruit_market.log"; // Base name for log files.
 #[derive(Clone, Debug)]
 struct ItemScanned(CartItem);
 
-/// Message sent to finalize the transaction, possibly containing the total price.
-#[derive(Clone, Debug)]
-struct FinalizeSale(Price);
-
-/// Message sent to request the current list of items from the register/cart.
-#[derive(Clone, Debug)]
-struct GetItems;
 
 /// Message sent to request the price of a specific item.
 #[derive(Clone, Debug)]
