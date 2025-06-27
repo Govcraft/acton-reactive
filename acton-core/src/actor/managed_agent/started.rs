@@ -130,10 +130,32 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
             // Dispatch to registered handler or handle system signals
             if let Some(reactor) = reactors.get(&type_id) {
                 match reactor.value() {
-                    ReactorItem::FutureReactor(fut) => fut(self, &mut envelope).await,
-                    ReactorItem::FutureReactorResult(_fut) => {
-                        // Placeholder: New-style result-based handler support coming soon!
-                        // For now, just do nothing.
+                    ReactorItem::FutureReactor(fut) => {
+                        // Legacy handler: await, always Ok
+                        fut(self, &mut envelope).await;
+                    }
+                    ReactorItem::FutureReactorResult(fut) => {
+                        // New Result-based handler: await and trigger error handler on Err
+                        let result = fut(self, &mut envelope).await;
+                        if let Err(err) = result {
+                            // Avoid mutable and immutable borrow collision by collecting handlers first.
+                            let mut handled = false;
+                            let handlers: Vec<_> =
+                                self.error_handler_map.values().cloned().collect();
+                            for handler_arc in handlers {
+                                let fut = handler_arc(self, &mut envelope, err.as_ref());
+                                fut.await;
+                                handled = true;
+                                break;
+                            }
+                            if !handled {
+                                tracing::error!(
+                                    "Unhandled error from message handler in agent {}: {:?}",
+                                    self.id(),
+                                    err
+                                );
+                            }
+                        }
                     }
                 }
             } else if let Some(SystemSignal::Terminate) =

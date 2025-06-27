@@ -95,9 +95,11 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
     pub(crate) after_stop: AsyncLifecycleHandler<Model>,
     /// Map storing registered message handlers (`TypeId` -> handler function).
     pub(crate) message_handlers: ReactorMap<Model>,
-    /// Map storing registered error handlers (`TypeId` -> error handler closure).
-    pub(crate) error_handler_map:
-        std::collections::HashMap<std::any::TypeId, Box<crate::common::ErrorHandler<Model>>>,
+    /// Map storing registered error handlers (`TypeId` -> error handler closure, wrapped in Arc for clone safety).
+    pub(crate) error_handler_map: std::collections::HashMap<
+        std::any::TypeId,
+        std::sync::Arc<Box<crate::common::ErrorHandler<Model>>>,
+    >,
     /// Phantom data to associate the `AgentState` type parameter.
     _actor_state: std::marker::PhantomData<AgentState>,
 }

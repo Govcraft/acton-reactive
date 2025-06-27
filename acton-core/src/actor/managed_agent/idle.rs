@@ -69,6 +69,9 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     ///
     /// Returns a mutable reference to `self` to allow for method chaining during configuration.
     #[instrument(skip(self, message_processor), level = "debug")]
+    #[deprecated(
+        note = "act_on for handlers returning () will be deprecated in the next version. Use act_on_result for Result-returning handlers."
+    )]
     pub fn act_on<M>(
         &mut self,
         message_processor: impl for<'a> Fn(&'a mut ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> FutureBox
@@ -80,18 +83,14 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         M: ActonMessage + Clone + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<M>();
-        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding message handler");
-        // Create a boxed handler that performs downcasting and calls the user's processor.
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding legacy message handler (will be deprecated)");
         let handler_box = Box::new(
             move |actor: &mut ManagedAgent<Started, State>, envelope: &mut Envelope| -> FutureBox {
-                // Downcast the trait object message back to the concrete type M.
                 if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
                     trace!(
                         "Downcast successful for message type: {}",
                         std::any::type_name::<M>()
                     );
-
-                    // Prepare the MessageContext for the handler.
                     let mut msg_context = {
                         let origin_envelope = OutboundEnvelope::new_with_recipient(
                             envelope.reply_to.clone(),
@@ -108,23 +107,75 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                             reply_envelope,
                         }
                     };
-
-                    // Call the user-provided message processor.
-                    message_processor(actor, &mut msg_context) // Return the FutureBox directly
+                    message_processor(actor, &mut msg_context)
                 } else {
-                    // This should ideally not happen if type registration is correct.
                     error!(
                         type_name = std::any::type_name::<M>(),
                         "Message handler called with incompatible message type (downcast failed)"
                     );
-                    Box::pin(async {}) // Return an empty future on error.
+                    Box::pin(async {})
                 }
             },
         );
-
-        // Store the type-erased handler.
         self.message_handlers
             .insert(type_id, ReactorItem::FutureReactor(handler_box));
+        self
+    }
+
+    /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
+    pub fn act_on_result<M, E>(
+        &mut self,
+        message_processor: impl for<'a> Fn(
+                &'a mut ManagedAgent<Started, State>,
+                &'a mut MessageContext<M>,
+            ) -> crate::common::FutureBoxResult
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self
+    where
+        M: ActonMessage + Clone + Send + Sync + 'static,
+        E: std::error::Error + 'static,
+    {
+        let type_id = TypeId::of::<M>();
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding Result-returning message handler");
+        let handler_box = Box::new(
+            move |actor: &mut ManagedAgent<Started, State>,
+                  envelope: &mut Envelope|
+                  -> crate::common::FutureBoxResult {
+                if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
+                    trace!(
+                        "Downcast successful for message type: {}",
+                        std::any::type_name::<M>()
+                    );
+                    let mut msg_context = {
+                        let origin_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.reply_to.clone(),
+                            envelope.recipient.clone(),
+                        );
+                        let reply_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.recipient.clone(),
+                            envelope.reply_to.clone(),
+                        );
+                        MessageContext {
+                            message: concrete_msg.clone(),
+                            timestamp: envelope.timestamp,
+                            origin_envelope,
+                            reply_envelope,
+                        }
+                    };
+                    message_processor(actor, &mut msg_context)
+                } else {
+                    error!(
+                        type_name = std::any::type_name::<M>(),
+                        "Result handler called with incompatible message type (downcast failed)"
+                    );
+                    Box::pin(async { Ok(()) })
+                }
+            },
+        );
+        self.message_handlers
+            .insert(type_id, ReactorItem::FutureReactorResult(handler_box));
         self
     }
 
@@ -363,8 +414,9 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     {
         use std::any::TypeId;
         // Wrap handler for dynamic dispatch
-        let handler_box: Box<crate::common::ErrorHandler<State>> =
-            Box::new(move |agent, envelope, err| {
+        use std::sync::Arc;
+        let handler_box: Arc<Box<crate::common::ErrorHandler<State>>> =
+            Arc::new(Box::new(move |agent, envelope, err| {
                 // Downcast the error to &E
                 if let Some(specific) = err.downcast_ref::<E>() {
                     error_handler(agent, envelope, specific)
@@ -372,7 +424,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                     // If type doesn't match, do nothing
                     Box::pin(async {})
                 }
-            });
+            }));
         self.error_handler_map
             .insert(TypeId::of::<E>(), handler_box);
         self
