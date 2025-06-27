@@ -138,15 +138,15 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         // New Result-based handler: await and trigger error handler on Err
                         let result = fut(self, &mut envelope).await;
                         if let Err(err) = result {
-                            // Avoid mutable and immutable borrow collision by collecting handlers first.
+                            // Call every registered error handler; closure does downcast & handles only if type matches
                             let mut handled = false;
-                            let handlers: Vec<_> =
+                            let handler_arcs: Vec<_> =
                                 self.error_handler_map.values().cloned().collect();
-                            for handler_arc in handlers {
+                            for handler_arc in handler_arcs {
+                                // Handler returns immediately if error type doesn't match
                                 let fut = handler_arc(self, &mut envelope, err.as_ref());
                                 fut.await;
-                                handled = true;
-                                break;
+                                handled = true; // mark as handled since at least one handler exists
                             }
                             if !handled {
                                 tracing::error!(

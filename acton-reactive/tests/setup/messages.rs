@@ -59,9 +59,7 @@ pub struct Joke;
 /// Message used to instruct the `Counter` agent to increment its count.
 /// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
-pub enum Tally {
-    AddCount,
-}
+pub struct Tally;
 
 /// Message used by an agent to report its status, often including a count.
 /// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.

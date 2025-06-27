@@ -26,4 +26,8 @@ use acton_macro::acton_actor;
 pub struct Counter {
     /// The value being tracked by the counter.
     pub count: usize,
+    /// Indicates whether an error was handled (for testing).
+    pub errored: bool,
+    /// Indicates whether the second error was handled.
+    pub errored2: bool,
 }

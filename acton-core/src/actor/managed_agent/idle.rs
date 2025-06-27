@@ -123,19 +123,17 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     }
 
     /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
-    pub fn act_on_result<M, E>(
+    pub fn act_on_result<M, E, Fut>(
         &mut self,
-        message_processor: impl for<'a> Fn(
-                &'a mut ManagedAgent<Started, State>,
-                &'a mut MessageContext<M>,
-            ) -> crate::common::FutureBoxResult
+        message_processor: impl for<'a> Fn(&'a mut ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> Fut
             + Send
             + Sync
             + 'static,
     ) -> &mut Self
     where
         M: ActonMessage + Clone + Send + Sync + 'static,
-        E: std::error::Error + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<(), E>> + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<M>();
         trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding Result-returning message handler");
@@ -164,7 +162,13 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                             reply_envelope,
                         }
                     };
-                    message_processor(actor, &mut msg_context)
+                    let fut = message_processor(actor, &mut msg_context);
+                    Box::pin(async move {
+                        match fut.await {
+                            Ok(()) => Ok(()),
+                            Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+                        }
+                    })
                 } else {
                     error!(
                         type_name = std::any::type_name::<M>(),
