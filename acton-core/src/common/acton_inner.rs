@@ -18,9 +18,11 @@ use acton_ern::{Ern};
 use dashmap::DashMap;
 
 use crate::common::{AgentHandle, BrokerRef};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ActonInner {
     pub(crate) broker: BrokerRef,
     pub(crate) roots: DashMap<Ern, AgentHandle>,
+    pub(crate) cancellation_token: CancellationToken,
 }
