@@ -178,7 +178,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
 
     // Send `Tally::AddCount` message four times.
     for _ in 0..4 {
-        counter_handle.send(Tally::AddCount).await;
+        counter_handle.send(Tally {}).await;
     }
 
     // --- Messenger Agent ---
