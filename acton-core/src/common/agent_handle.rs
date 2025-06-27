@@ -294,8 +294,8 @@ impl AgentHandleInterface for AgentHandle {
 
             trace!(actor = %self.id, "Sending Terminate signal");
             // Send the Terminate signal. Use `?` to propagate potential send errors.
-            self_envelope.reply(SystemSignal::Terminate)?;
-
+            //self_envelope.reply(SystemSignal::Terminate)?;
+            self_envelope.send(SystemSignal::Terminate).await;
             // Determine agent shutdown timeout from env or use default (10s)
             let timeout_ms: u64 = env::var("ACTON_AGENT_SHUTDOWN_TIMEOUT_MS")
                 .ok()
