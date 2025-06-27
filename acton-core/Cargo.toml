@@ -25,6 +25,5 @@ acton-ern = "1.0.0"
 dashmap = "6.1.0"
 tokio = { version = "1.37.0", features = ["full"] }
 acton-test = { path = "../acton-test" }
-acton_test_macro = { path = "../acton-test/acton_test_macro", version = "3.3.0" }
 tokio-util = { version = "0.7.10", features = ["rt"] }
 acton-ern = "1.0.0"
