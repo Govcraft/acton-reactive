@@ -1,6 +1,6 @@
 [package]
 name = "acton-core"
-version = "3.2.1"
+version = "3.3.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "Acton Core provides the core functionality and abstractions used by the Acton Reactive crate. It includes the essential building blocks for creating reactive and distributed systems."
@@ -24,6 +24,7 @@ acton-ern = "1.0.0"
 [dev-dependencies]
 dashmap = "6.1.0"
 tokio = { version = "1.37.0", features = ["full"] }
-acton_test = { path = "../acton-test" }
+acton-test = { path = "../acton-test" }
+acton_test_macro = { path = "../acton-test/acton_test_macro", version = "3.3.0" }
 tokio-util = { version = "0.7.10", features = ["rt"] }
 acton-ern = "1.0.0"
