@@ -41,16 +41,42 @@ pub(crate) type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntit
 #[allow(dead_code)] // Allow dead_code for potential future variants like SignalReactor
 pub(crate) enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     // SignalReactor(Box<SignalHandler<ActorEntity>>),
-    /// A handler that processes a message and returns a future.
+    /// A handler that processes a message and returns a future (legacy style, will be deprecated).
     FutureReactor(Box<FutureHandler<ActorEntity>>),
+    /// A handler that processes a message and returns a Result future. Experimental, will become the main style.
+    FutureReactorResult(Box<FutureHandlerResult<ActorEntity>>),
 }
 
 /// Crate-internal: Type alias for the function signature of a message handler
 /// that returns a future.
+/// Legacy handler type: async closure returning () (will be deprecated in the next version).
+/// Diagnostic: This handler signature will be deprecated in the next version. Please migrate to Result-based handlers when available.
+#[deprecated(
+    note = "Legacy handler: returning () will be deprecated in the next version. Please migrate to Result-based handlers."
+)]
 pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
-    &'a mut ManagedAgent<Started, ManagedEntity>, // Takes mutable agent in Started state
-    &'b mut Envelope, // Takes mutable envelope containing the message
-) -> FutureBox // Returns a pinned, boxed future
+        &'a mut ManagedAgent<Started, ManagedEntity>, // Takes mutable agent in Started state
+        &'b mut Envelope, // Takes mutable envelope containing the message
+    ) -> FutureBox // Returns a pinned, boxed future
+    + Send
+    + Sync
+    + 'static;
+
+/// New handler type: async closure returning Result<(), Box<dyn std::error::Error + Send + Sync>>
+pub(crate) type FutureHandlerResult<ManagedEntity> = dyn for<'a, 'b> Fn(
+        &'a mut ManagedAgent<Started, ManagedEntity>,
+        &'b mut Envelope,
+    ) -> FutureBoxResult
+    + Send
+    + Sync
+    + 'static;
+
+/// New: Handler for error types.
+pub(crate) type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
+        &'a mut ManagedAgent<Started, ManagedEntity>,
+        &'b mut Envelope,
+        &(dyn std::error::Error + 'static),
+    ) -> FutureBox
     + Send
     + Sync
     + 'static;
@@ -60,6 +86,15 @@ pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
 /// This is the required return type for asynchronous message handlers (`act_on`).
 pub(crate) type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
+/// New: Box for Future-based handlers returning Result.
+pub(crate) type FutureBoxResult = Pin<
+    Box<
+        dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+>;
 
 /// Crate-internal: Type alias for the sender part of an agent's MPSC channel.
 pub(crate) type AgentSender = Sender<Envelope>;

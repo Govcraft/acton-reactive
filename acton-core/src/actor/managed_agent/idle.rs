@@ -19,12 +19,14 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::mem;
 
-use acton_ern::{Ern};
+use acton_ern::Ern;
 use tokio::sync::mpsc::channel;
 use tracing::*;
 
 use crate::actor::{AgentConfig, ManagedAgent, Started};
-use crate::common::{ActonInner, AgentHandle, AgentRuntime,Envelope, FutureBox, OutboundEnvelope, ReactorItem};
+use crate::common::{
+    ActonInner, AgentHandle, AgentRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
+};
 use crate::message::MessageContext;
 use crate::prelude::ActonMessage;
 use crate::traits::AgentHandleInterface;
@@ -37,6 +39,9 @@ use crate::traits::AgentHandleInterface;
 /// transitioned to the [`Started`](super::started::Started) state by calling [`ManagedAgent::start`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Idle;
+
+use crate::common::ErrorHandler;
+use std::collections::HashMap;
 
 impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     /// Registers an asynchronous message handler for a specific message type `M`.
@@ -66,13 +71,10 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     #[instrument(skip(self, message_processor), level = "debug")]
     pub fn act_on<M>(
         &mut self,
-        message_processor: impl for<'a> Fn(
-            &'a mut ManagedAgent<Started, State>,
-            &'a mut MessageContext<M>,
-        ) -> FutureBox
-        + Send
-        + Sync
-        + 'static,
+        message_processor: impl for<'a> Fn(&'a mut ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> FutureBox
+            + Send
+            + Sync
+            + 'static,
     ) -> &mut Self
     where
         M: ActonMessage + Clone + Send + Sync + 'static,
@@ -81,9 +83,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding message handler");
         // Create a boxed handler that performs downcasting and calls the user's processor.
         let handler_box = Box::new(
-            move |actor: &mut ManagedAgent<Started, State>,
-                  envelope: &mut Envelope|
-                  -> FutureBox {
+            move |actor: &mut ManagedAgent<Started, State>, envelope: &mut Envelope| -> FutureBox {
                 // Downcast the trait object message back to the concrete type M.
                 if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
                     trace!(
@@ -93,8 +93,14 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
                     // Prepare the MessageContext for the handler.
                     let mut msg_context = {
-                        let origin_envelope = OutboundEnvelope::new_with_recipient(envelope.reply_to.clone(), envelope.recipient.clone());
-                        let reply_envelope = OutboundEnvelope::new_with_recipient(envelope.recipient.clone(), envelope.reply_to.clone());
+                        let origin_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.reply_to.clone(),
+                            envelope.recipient.clone(),
+                        );
+                        let reply_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.recipient.clone(),
+                            envelope.reply_to.clone(),
+                        );
                         MessageContext {
                             message: concrete_msg.clone(),
                             timestamp: envelope.timestamp,
@@ -117,10 +123,10 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         );
 
         // Store the type-erased handler.
-        self.message_handlers.insert(type_id, ReactorItem::FutureReactor(handler_box));
+        self.message_handlers
+            .insert(type_id, ReactorItem::FutureReactor(handler_box));
         self
     }
-
 
     /// Registers an asynchronous hook to be executed *after* the agent successfully starts its message loop.
     ///
@@ -138,7 +144,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     pub fn after_start<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output=()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + Sync + 'static,
     {
         self.after_start = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
         self
@@ -160,7 +166,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     pub fn before_start<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output=()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + Sync + 'static,
     {
         self.before_start = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
         self
@@ -182,7 +188,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     pub fn after_stop<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output=()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + Sync + 'static,
     {
         self.after_stop = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
         self
@@ -204,7 +210,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     pub fn before_stop<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output=()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + Sync + 'static,
     {
         self.before_stop = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
         self
@@ -239,9 +245,9 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     pub async fn create_child(&self, name: String) -> anyhow::Result<ManagedAgent<Idle, State>> {
         // Configure the child with parent and broker references.
         let config = AgentConfig::new(
-            Ern::with_root(name)?, // Child's name segment
-            Some(self.handle.clone()), // Parent handle
-            Some(self.runtime.broker().clone()) // Inherited broker handle
+            Ern::with_root(name)?,               // Child's name segment
+            Some(self.handle.clone()),           // Parent handle
+            Some(self.runtime.broker().clone()), // Inherited broker handle
         )?;
         // Create the Idle agent using the internal constructor.
         Ok(ManagedAgent::new(&Some(self.runtime().clone()), Some(config)).await)
@@ -273,10 +279,12 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         trace!("NEW ACTOR: {}", &managed_actor.handle.id());
 
-        managed_actor.runtime = runtime.clone().unwrap_or_else(|| AgentRuntime(ActonInner {
-            broker: managed_actor.handle.broker.clone().unwrap_or_default(),
-            ..Default::default()
-        }));
+        managed_actor.runtime = runtime.clone().unwrap_or_else(|| {
+            AgentRuntime(ActonInner {
+                broker: managed_actor.handle.broker.clone().unwrap_or_default(),
+                ..Default::default()
+            })
+        });
 
         managed_actor.id = managed_actor.handle.id();
 
@@ -324,6 +332,51 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         trace!("Agent {} started successfully.", actor_ref.id());
         actor_ref // Return the handle.
     }
+
+    /// Registers an asynchronous error handler for a specific error type `E`.
+    ///
+    /// This allows the agent to handle errors of type `E` by executing the given closure
+    /// whenever a message handler returns an error of this type.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `E`: The concrete error type to handle. Must implement `std::error::Error` and be `'static`.
+    ///
+    /// # Arguments
+    /// * `error_handler`: The handler closure executed with agent, envelope, and error reference.
+    ///
+    /// # Returns
+    /// A mutable reference to `self` for chaining.
+    pub fn on_error<E>(
+        &mut self,
+        error_handler: impl for<'a, 'b> Fn(
+                &'a mut ManagedAgent<Started, State>,
+                &'b mut crate::message::Envelope,
+                &'b E,
+            ) -> crate::common::FutureBox
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self
+    where
+        E: std::error::Error + 'static,
+    {
+        use std::any::TypeId;
+        // Wrap handler for dynamic dispatch
+        let handler_box: Box<crate::common::ErrorHandler<State>> =
+            Box::new(move |agent, envelope, err| {
+                // Downcast the error to &E
+                if let Some(specific) = err.downcast_ref::<E>() {
+                    error_handler(agent, envelope, specific)
+                } else {
+                    // If type doesn't match, do nothing
+                    Box::pin(async {})
+                }
+            });
+        self.error_handler_map
+            .insert(TypeId::of::<E>(), handler_box);
+        self
+    }
 }
 
 // --- Utility Function ---
@@ -356,7 +409,7 @@ pub fn downcast_message<T: ActonMessage + 'static>(msg: &dyn ActonMessage) -> Op
 // (Default, From, default_handler remain internal and undocumented)
 
 impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
-for ManagedAgent<Started, State>
+    for ManagedAgent<Started, State>
 {
     fn from(value: ManagedAgent<Idle, State>) -> Self {
         // Move all fields from Idle state to Started state.
@@ -375,18 +428,17 @@ for ManagedAgent<Started, State>
             after_stop: value.after_stop,
             broker: value.broker,
             message_handlers: value.message_handlers,
+            error_handler_map: value.error_handler_map, // transfer error handlers
             _actor_state: Default::default(),
         }
     }
 }
 
-impl<State: Default + Send + Debug + 'static> Default
-for ManagedAgent<Idle, State>
-{
+impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, State> {
     fn default() -> Self {
         let (outbox, inbox) = channel(255); // Default channel size
         let id: Ern = Default::default();
-        let mut handle: AgentHandle = Default::default();
+        let mut handle: crate::common::AgentHandle = Default::default();
         handle.id = id.clone();
         handle.outbox = outbox.clone();
 
@@ -401,6 +453,7 @@ for ManagedAgent<Idle, State>
             after_stop: Box::new(|_| default_handler()),
             model: State::default(),
             broker: Default::default(),
+            error_handler_map: std::collections::HashMap::new(),
             parent: Default::default(),
             runtime: Default::default(),
             halt_signal: Default::default(),
