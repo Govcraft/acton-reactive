@@ -19,7 +19,7 @@ tokio = "1.37.0"
 futures = "0.3.30"
 
 [dev-dependencies]
-acton-test = { path = "../acton-test", version = "3.3.0" }
+acton_test = { path = "../acton-test", version = "3.3.0" }
 crossterm = { version = "0.28.1", features = ["event-stream"] }  # or the latest version available
 mti = "1.0.0"
 tracing-appender = "0.2.3"
