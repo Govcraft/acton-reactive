@@ -17,15 +17,18 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
-use acton_ern::{Ern};
+use acton_ern::Ern;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use std::env;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::timeout as tokio_timeout;
 use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace, warn}; // warn seems unused
 
 use crate::actor::{Idle, ManagedAgent};
-use crate::common::{BrokerRef, OutboundEnvelope, AgentSender, ParentRef};
+use crate::common::{AgentSender, BrokerRef, OutboundEnvelope, ParentRef};
 use crate::message::{BrokerRequest, MessageAddress, SystemSignal};
 use crate::prelude::ActonMessage;
 use crate::traits::{AgentHandleInterface, Broker, Subscriber};
@@ -135,14 +138,19 @@ impl AgentHandle {
     /// *   `Ok(AgentHandle)`: The handle of the successfully started and registered child agent.
     /// *   `Err(anyhow::Error)`: If starting the child agent fails.
     #[instrument(skip(self, child))] // Skip child in instrument
-    pub async fn supervise<State: Default + Send + Debug + 'static>( // Add 'static bound
+    pub async fn supervise<State: Default + Send + Debug + 'static>(
+        // Add 'static bound
         &self,
         child: ManagedAgent<Idle, State>,
     ) -> anyhow::Result<AgentHandle> {
         let child_id = child.id().clone(); // Get ID before consuming child
         trace!("Supervising child agent with id: {}", child_id);
         let handle = child.start().await; // Start the child agent
-        trace!("Child agent {} started, adding to parent {} children map", child_id, self.id);
+        trace!(
+            "Child agent {} started, adding to parent {} children map",
+            child_id,
+            self.id
+        );
         self.children.insert(handle.id.to_string(), handle.clone()); // Store child handle
         Ok(handle)
     }
@@ -159,7 +167,7 @@ impl Broker for AgentHandle {
     /// # Arguments
     ///
     /// * `message`: The message payload (must implement `ActonMessage`) to be broadcast.
-    fn broadcast(&self, message: impl ActonMessage) -> impl Future<Output=()> + Send + Sync + '_ {
+    fn broadcast(&self, message: impl ActonMessage) -> impl Future<Output = ()> + Send + Sync + '_ {
         trace!("Attempting broadcast via handle: {}", self.id);
         async move {
             if let Some(broker_handle) = self.broker.as_ref() {
@@ -168,7 +176,10 @@ impl Broker for AgentHandle {
                 broker_handle.send(BrokerRequest::new(message)).await;
             } else {
                 // Log an error if no broker is configured for this agent handle.
-                error!("No broker configured for agent handle {}, cannot broadcast.", self.id);
+                error!(
+                    "No broker configured for agent handle {}, cannot broadcast.",
+                    self.id
+                );
             }
         }
     }
@@ -228,8 +239,8 @@ impl AgentHandleInterface for AgentHandle {
     fn find_child(&self, ern: &Ern) -> Option<AgentHandle> {
         trace!("Searching for child with ERN: {}", ern);
         // Access the DashMap using the ERN's string representation as the key.
-        self.children.get(&ern.to_string()).map(|entry|
-            entry.value().clone() // Clone the handle if found
+        self.children.get(&ern.to_string()).map(
+            |entry| entry.value().clone(), // Clone the handle if found
         )
     }
 
@@ -275,7 +286,7 @@ impl AgentHandleInterface for AgentHandle {
     /// is already closed).
     #[allow(clippy::manual_async_fn)] // Keep async_trait style
     #[instrument(skip(self))]
-    fn stop(&self) -> impl Future<Output=anyhow::Result<()>> + Send + Sync + '_ {
+    fn stop(&self) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_ {
         async move {
             let tracker = self.tracker();
             // Create an envelope to send the signal from self to self.
@@ -285,12 +296,32 @@ impl AgentHandleInterface for AgentHandle {
             // Send the Terminate signal. Use `?` to propagate potential send errors.
             self_envelope.reply(SystemSignal::Terminate)?;
 
-            trace!(actor = %self.id, "Waiting for agent tasks to complete...");
-            // Wait for the agent's main task and any tracked tasks to finish.
-            tracker.wait().await;
+            // Determine agent shutdown timeout from env or use default (10s)
+            let timeout_ms: u64 = env::var("ACTON_AGENT_SHUTDOWN_TIMEOUT_MS")
+                .ok()
+                .and_then(|val| val.parse().ok())
+                .unwrap_or(10_000);
 
-            trace!(actor = %self.id, "Agent terminated successfully.");
-            Ok(())
+            trace!(actor = %self.id, timeout_ms, "Waiting for agent tasks to complete...");
+
+            // Wait for the agent's main task and any tracked tasks to finish, within timeout.
+            let wait_fut = tracker.wait();
+            match tokio_timeout(Duration::from_millis(timeout_ms), wait_fut).await {
+                Ok(()) => {
+                    trace!(actor = %self.id, "Agent terminated successfully.");
+                    Ok(())
+                }
+                Err(_) => {
+                    error!(
+                        "Shutdown timeout for agent {} after {} ms",
+                        self.id, timeout_ms
+                    );
+                    Err(anyhow::anyhow!(
+                        "Timeout while waiting for agent {} to shut down",
+                        self.id
+                    ))
+                }
+            }
         }
     }
 }

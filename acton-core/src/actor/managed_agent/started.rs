@@ -81,7 +81,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
             // Create an envelope where the recipient is the parent and the sender is self.
             OutboundEnvelope::new_with_recipient(
                 MessageAddress::new(self.handle.outbox.clone(), self.id.clone()), // Self is sender
-                parent_handle.reply_address() // Parent is recipient
+                parent_handle.reply_address(), // Parent is recipient
             )
         })
         // The original implementation `parent.create_envelope(None).clone()` might have different semantics.
@@ -100,8 +100,14 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         while let Some(incoming_envelope) = self.inbox.recv().await {
             let type_id;
             let mut envelope;
-            trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root);
-            trace!("Message type: {}", type_name_of_val(&incoming_envelope.message));
+            trace!(
+                "Received envelope from: {}",
+                incoming_envelope.reply_to.sender.root
+            );
+            trace!(
+                "Message type: {}",
+                type_name_of_val(&incoming_envelope.message)
+            );
 
             // Handle potential BrokerRequestEnvelope indirection
             if let Some(broker_request_envelope) = incoming_envelope
@@ -125,6 +131,10 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
             if let Some(reactor) = reactors.get(&type_id) {
                 match reactor.value() {
                     ReactorItem::FutureReactor(fut) => fut(self, &mut envelope).await,
+                    ReactorItem::FutureReactorResult(_fut) => {
+                        // Placeholder: New-style result-based handler support coming soon!
+                        // For now, just do nothing.
+                    }
                 }
             } else if let Some(SystemSignal::Terminate) =
                 envelope.message.as_any().downcast_ref::<SystemSignal>()
@@ -132,13 +142,17 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                 trace!("Terminate signal received for agent: {}", self.id());
                 terminate_requested = true;
                 (self.before_stop)(self).await; // Execute before_stop hook
-                // Short delay to allow before_stop processing, if needed.
+                                                // Short delay to allow before_stop processing, if needed.
                 sleep(Duration::from_millis(10)).await;
                 self.inbox.close(); // Close inbox to stop receiving new messages
                 trace!("Inbox closed for agent: {}", self.id());
             } else {
-                 trace!("No handler found for message type {:?} for agent {}", type_id, self.id());
-                 // Optionally log or handle unknown message types
+                trace!(
+                    "No handler found for message type {:?} for agent {}",
+                    type_id,
+                    self.id()
+                );
+                // Optionally log or handle unknown message types
             }
 
             // Check if termination requested and inbox is now empty and closed
@@ -157,18 +171,57 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     async fn terminate(&mut self) {
         trace!("Terminating children for agent: {}", self.id());
         // Stop all child agents concurrently.
-        let stop_futures: Vec<_> = self.handle.children().iter().map(|item| {
-            let child_handle = item.value().clone();
-            async move {
-                trace!("Sending stop signal to child: {}", child_handle.id());
-                let _ = child_handle.stop().await; // Ignore result, best effort stop
-                trace!("Stop signal sent to child: {}", child_handle.id());
-            }
-        }).collect();
+        use std::env;
+        use std::time::Duration;
+        use tokio::time::timeout as tokio_timeout;
+
+        let timeout_ms: u64 = env::var("ACTON_AGENT_SHUTDOWN_TIMEOUT_MS")
+            .ok()
+            .and_then(|val| val.parse().ok())
+            .unwrap_or(10_000);
+
+        let stop_futures: Vec<_> = self
+            .handle
+            .children()
+            .iter()
+            .map(|item| {
+                let child_handle = item.value().clone();
+                async move {
+                    trace!("Sending stop signal to child: {}", child_handle.id());
+                    let stop_res =
+                        tokio_timeout(Duration::from_millis(timeout_ms), child_handle.stop()).await;
+                    match stop_res {
+                        Ok(Ok(())) => {
+                            trace!(
+                                "Stop signal sent to and child {} shut down successfully.",
+                                child_handle.id()
+                            );
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!(
+                                "Stop signal to child {} returned error: {:?}",
+                                child_handle.id(),
+                                e
+                            );
+                        }
+                        Err(_) => {
+                            tracing::error!(
+                                "Shutdown timeout for child {} after {} ms",
+                                child_handle.id(),
+                                timeout_ms
+                            );
+                        }
+                    }
+                }
+            })
+            .collect();
 
         join_all(stop_futures).await; // Wait for all stop signals to be sent/processed.
 
-        trace!("All children stopped for agent: {}. Closing own inbox.", self.id());
+        trace!(
+            "All children stopped for agent: {}. Closing own inbox.",
+            self.id()
+        );
         // Ensure inbox is closed (might be redundant if closed in wake loop, but safe).
         self.inbox.close();
     }

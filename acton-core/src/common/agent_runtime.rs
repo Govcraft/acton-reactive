@@ -21,11 +21,11 @@ use std::pin::Pin;
 use acton_ern::Ern;
 use futures::future::join_all;
 use tokio::sync::oneshot;
-use tracing::{trace, error}; // Added error import
+use tracing::{error, trace}; // Added error import
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
-use crate::common::{ActonApp, AgentBroker, AgentHandle, BrokerRef};
 use crate::common::acton_inner::ActonInner;
+use crate::common::{ActonApp, AgentBroker, AgentHandle, BrokerRef};
 use crate::traits::AgentHandleInterface;
 
 /// Represents the initialized and active Acton agent system runtime.
@@ -74,14 +74,17 @@ impl AgentRuntime {
     {
         let actor_config = AgentConfig::new(
             Ern::with_root(name).expect("Failed to create root Ern for new agent"), // Use expect for clarity
-            None, // No parent for top-level agent
+            None,                        // No parent for top-level agent
             Some(self.0.broker.clone()), // Use system broker
-        ).expect("Failed to create actor config");
+        )
+        .expect("Failed to create actor config");
 
         let runtime = self.clone();
         let new_actor = ManagedAgent::new(&Some(runtime), Some(actor_config)).await;
         trace!("Registering new top-level agent: {}", new_actor.id());
-        self.0.roots.insert(new_actor.id.clone(), new_actor.handle.clone());
+        self.0
+            .roots
+            .insert(new_actor.id.clone(), new_actor.handle.clone());
         new_actor
     }
 
@@ -153,8 +156,13 @@ impl AgentRuntime {
             config.broker = Some(self.0.broker.clone());
         }
         let new_agent = ManagedAgent::new(&Some(acton_ready), Some(config)).await;
-        trace!("Created new agent builder with config, id: {}", new_agent.id());
-        self.0.roots.insert(new_agent.id.clone(), new_agent.handle.clone());
+        trace!(
+            "Created new agent builder with config, id: {}",
+            new_agent.id()
+        );
+        self.0
+            .roots
+            .insert(new_agent.id.clone(), new_agent.handle.clone());
         new_agent
     }
 
@@ -193,7 +201,7 @@ impl AgentRuntime {
         mut config: AgentConfig,
         setup_fn: impl FnOnce(
             ManagedAgent<Idle, State>,
-        ) -> Pin<Box<dyn Future<Output=AgentHandle> + Send + 'static>>,
+        ) -> Pin<Box<dyn Future<Output = AgentHandle> + Send + 'static>>,
     ) -> anyhow::Result<AgentHandle>
     where
         State: Default + Send + Debug + 'static,
@@ -224,6 +232,10 @@ impl AgentRuntime {
     /// An `anyhow::Result<()>` indicating whether the shutdown process completed successfully.
     /// Errors during the stopping of individual agents or the broker will be propagated.
     pub async fn shutdown_all(&mut self) -> anyhow::Result<()> {
+        use std::env;
+        use std::time::Duration;
+        use tokio::time::timeout as tokio_timeout;
+
         trace!("Initiating shutdown of all top-level agents...");
         // Collect stop futures for all root agents.
         let stop_futures = self.0.roots.iter().map(|item| {
@@ -234,8 +246,29 @@ impl AgentRuntime {
             }
         });
 
-        // Wait for all root agents (and their children) to stop.
-        let results: Vec<anyhow::Result<()>> = join_all(stop_futures).await;
+        // Determine system shutdown timeout from env or use default (30s)
+        let timeout_ms: u64 = env::var("ACTON_SYSTEM_SHUTDOWN_TIMEOUT_MS")
+            .ok()
+            .and_then(|val| val.parse().ok())
+            .unwrap_or(30_000);
+
+        // Wait for all root agents (and their children) to stop, with timeout.
+        let roots_fut = join_all(stop_futures);
+        let results: Vec<anyhow::Result<()>> = match tokio_timeout(
+            Duration::from_millis(timeout_ms),
+            roots_fut,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                error!("System-wide shutdown timeout expired after {} ms. Some agents may not have stopped.", timeout_ms);
+                return Err(anyhow::anyhow!(
+                    "Timeout: not all root agents stopped within {} ms",
+                    timeout_ms
+                ));
+            }
+        };
         trace!("All root agent stop futures completed.");
 
         // Check for errors during agent shutdown.
@@ -247,7 +280,20 @@ impl AgentRuntime {
         }
 
         trace!("Stopping the system broker...");
-        self.0.broker.stop().await?; // Stop the broker agent
+        // Stop the broker agent, using same system shutdown timeout.
+        match tokio_timeout(Duration::from_millis(timeout_ms), self.0.broker.stop()).await {
+            Ok(res) => res?,
+            Err(_) => {
+                error!(
+                    "Timeout waiting for broker to shut down after {} ms",
+                    timeout_ms
+                );
+                return Err(anyhow::anyhow!(
+                    "Timeout while waiting for system broker to shut down after {} ms",
+                    timeout_ms
+                ));
+            }
+        }
         trace!("System shutdown complete.");
         Ok(())
     }
@@ -281,7 +327,7 @@ impl AgentRuntime {
         &mut self,
         setup_fn: impl FnOnce(
             ManagedAgent<Idle, State>,
-        ) -> Pin<Box<dyn Future<Output=AgentHandle> + Send + 'static>>,
+        ) -> Pin<Box<dyn Future<Output = AgentHandle> + Send + 'static>>,
     ) -> anyhow::Result<AgentHandle>
     where
         State: Default + Send + Debug + 'static,
@@ -332,6 +378,9 @@ impl From<ActonApp> for AgentRuntime {
         trace!("Broker handle received, constructing AgentRuntime.");
 
         // Create the runtime with the initialized broker.
-        AgentRuntime(ActonInner { broker, ..Default::default() })
+        AgentRuntime(ActonInner {
+            broker,
+            ..Default::default()
+        })
     }
 }

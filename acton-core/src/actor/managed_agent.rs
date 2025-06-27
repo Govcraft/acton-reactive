@@ -24,7 +24,9 @@ use tokio_util::task::TaskTracker;
 
 pub use idle::Idle;
 
-use crate::common::{AgentHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap};
+use crate::common::{
+    AgentHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap,
+};
 use crate::message::Envelope;
 use crate::prelude::AgentRuntime;
 
@@ -93,6 +95,9 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
     pub(crate) after_stop: AsyncLifecycleHandler<Model>,
     /// Map storing registered message handlers (`TypeId` -> handler function).
     pub(crate) message_handlers: ReactorMap<Model>,
+    /// Map storing registered error handlers (`TypeId` -> error handler closure).
+    pub(crate) error_handler_map:
+        std::collections::HashMap<std::any::TypeId, Box<crate::common::ErrorHandler<Model>>>,
     /// Phantom data to associate the `AgentState` type parameter.
     _actor_state: std::marker::PhantomData<AgentState>,
 }
@@ -142,7 +147,7 @@ impl<AgentState, Model: Default + Send + Debug + 'static> ManagedAgent<AgentStat
 }
 
 impl<AgentState, Model: Default + Send + Debug + 'static> Debug
-for ManagedAgent<AgentState, Model>
+    for ManagedAgent<AgentState, Model>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ManagedAgent")
