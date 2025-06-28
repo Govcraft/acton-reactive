@@ -20,6 +20,7 @@ static_assertions = "1.1.0"
 dyn-clone = "1.0.17"
 derive-new = "0.7.0"
 acton-ern = "1.0.0"
+tracing-appender = "0.2.3"
 
 [dev-dependencies]
 dashmap = "6.1.0"

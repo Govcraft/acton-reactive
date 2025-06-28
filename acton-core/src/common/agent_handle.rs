@@ -300,6 +300,10 @@ impl AgentHandleInterface for AgentHandle {
     fn stop(&self) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_ {
         async move {
             let tracker = self.tracker();
+
+            // Cancel this agent's token before sending the Terminate signal.
+            self.cancellation_token.cancel();
+
             // Create an envelope to send the signal from self to self.
             let self_envelope = self.create_envelope(Some(self.reply_address()));
 

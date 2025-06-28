@@ -16,6 +16,8 @@
 
 #![allow(dead_code, unused_doc_comments)]
 
+use std::time::Duration;
+
 use tracing::{info, trace};
 
 use acton_reactive::prelude::*;
@@ -126,7 +128,9 @@ async fn test_async_reactor() -> anyhow::Result<()> {
     // The agent will finish processing any messages currently in its inbox,
     // then execute its `after_stop` handler before fully terminating.
     // The `.await` ensures we wait for the shutdown to complete.
-    comedian_handle.stop().await?;
+
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    runtime.shutdown_all().await?;
 
     Ok(())
 }
@@ -199,9 +203,9 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
     // Start the messenger agent.
     let messenger_handle = messenger_agent_builder.start().await;
 
+    tokio::time::sleep(Duration::from_millis(100)).await;
     // Stop both agents.
-    counter_handle.stop().await?;
-    messenger_handle.stop().await?;
+    runtime.shutdown_all().await?;
 
     Ok(())
 }
@@ -315,7 +319,9 @@ async fn test_child_actor() -> anyhow::Result<()> {
     // this will also initiate the stop sequence for the child agent.
     // The parent waits for the child to stop before it fully stops itself.
     trace!("Stopping parent agent (which should stop the child)");
-    parent_handle.stop().await?;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    runtime.shutdown_all().await?;
 
     Ok(())
 }
@@ -375,9 +381,10 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
         child_id
     );
     let _child_handle = found_child_handle.unwrap(); // We just need to confirm it was found.
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Stop the parent agent (and implicitly the child).
-    parent_handle.stop().await?;
+    runtime.shutdown_all().await?;
 
     Ok(())
 }
@@ -414,30 +421,30 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     // Configure agent behavior.
     comedian_agent_builder
         // Handler for `FunnyJoke` messages.
-        //      .act_on::<FunnyJoke>(|agent, envelope| {
-        //          // Mutate state: increment jokes_told count.
-        //          agent.model.jokes_told += 1;
-        //          // Create a new envelope targeted back at this agent's address.
-        //          let self_envelope = agent.new_envelope();
-        //          // Clone the incoming message content to determine the reaction.
-        //          let message = envelope.message().clone();
-        //          // Return an async block to send the reaction message.
-        //          Box::pin(async move {
-        //              // Ensure the envelope was created successfully.
-        //              if let Some(self_envelope) = self_envelope {
-        //                  match message {
-        //                      FunnyJoke::ChickenCrossesRoad => {
-        //                          // Send a "Chuckle" reaction back to self.
-        //                          let _ = self_envelope.send(AudienceReactionMsg::Chuckle).await;
-        //                      }
-        //                      FunnyJoke::Pun => {
-        //                          // Send a "Groan" reaction back to self.
-        //                          let _ = self_envelope.send(AudienceReactionMsg::Groan).await;
-        //                      }
-        //                  }
-        //              }
-        //          })
-        //      })
+        .act_on::<FunnyJoke>(|agent, envelope| {
+            // Mutate state: increment jokes_told count.
+            agent.model.jokes_told += 1;
+            // Create a new envelope targeted back at this agent's address.
+            let self_envelope = agent.new_envelope();
+            // Clone the incoming message content to determine the reaction.
+            let message = envelope.message().clone();
+            // Return an async block to send the reaction message.
+            Box::pin(async move {
+                // Ensure the envelope was created successfully.
+                if let Some(self_envelope) = self_envelope {
+                    match message {
+                        FunnyJoke::ChickenCrossesRoad => {
+                            // Send a "Chuckle" reaction back to self.
+                            let _ = self_envelope.send(AudienceReactionMsg::Chuckle).await;
+                        }
+                        FunnyJoke::Pun => {
+                            // Send a "Groan" reaction back to self.
+                            let _ = self_envelope.send(AudienceReactionMsg::Groan).await;
+                        }
+                    }
+                }
+            })
+        })
         // Handler for `AudienceReactionMsg` (sent from the FunnyJoke handler above).
         .act_on::<AudienceReactionMsg>(|agent, envelope| {
             // Mutate state based on the reaction message content.
@@ -469,9 +476,9 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     // Send the initial jokes to trigger the handlers.
     comedian_handle.send(FunnyJoke::ChickenCrossesRoad).await;
     comedian_handle.send(FunnyJoke::Pun).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Stop the agent and wait for shutdown completion.
-    comedian_handle.stop().await?;
     runtime.shutdown_all().await?;
 
     Ok(())
@@ -596,9 +603,9 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     parent_handle
         .send(FunnyJokeFor::ChickenCrossesRoad(child_id))
         .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Stop the parent agent (which will also stop the supervised child).
-    parent_handle.stop().await?;
-
+    runtime.shutdown_all().await?;
     Ok(())
 }

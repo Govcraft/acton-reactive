@@ -17,6 +17,7 @@ anyhow = "1.0.82"
 async-trait = "0.1.8"
 tokio = "1.37.0"
 futures = "0.3.30"
+tracing-appender = "0.2.3"
 
 [dev-dependencies]
 acton_test = { path = "../acton-test", version = "3.3.1" }

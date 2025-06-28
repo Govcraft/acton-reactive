@@ -345,6 +345,11 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             "AgentRuntime must be provided to ManagedAgent::new"
         );
         managed_actor.runtime = runtime.clone().unwrap();
+        managed_actor
+            .runtime
+            .0
+            .roots
+            .insert(managed_actor.handle.id(), managed_actor.handle.clone());
 
         managed_actor.id = managed_actor.handle.id();
 
