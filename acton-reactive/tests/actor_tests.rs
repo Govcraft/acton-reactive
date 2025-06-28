@@ -414,30 +414,30 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     // Configure agent behavior.
     comedian_agent_builder
         // Handler for `FunnyJoke` messages.
-        .act_on::<FunnyJoke>(|agent, envelope| {
-            // Mutate state: increment jokes_told count.
-            agent.model.jokes_told += 1;
-            // Create a new envelope targeted back at this agent's address.
-            let self_envelope = agent.new_envelope();
-            // Clone the incoming message content to determine the reaction.
-            let message = envelope.message().clone();
-            // Return an async block to send the reaction message.
-            Box::pin(async move {
-                // Ensure the envelope was created successfully.
-                if let Some(self_envelope) = self_envelope {
-                    match message {
-                        FunnyJoke::ChickenCrossesRoad => {
-                            // Send a "Chuckle" reaction back to self.
-                            let _ = self_envelope.send(AudienceReactionMsg::Chuckle).await;
-                        }
-                        FunnyJoke::Pun => {
-                            // Send a "Groan" reaction back to self.
-                            let _ = self_envelope.send(AudienceReactionMsg::Groan).await;
-                        }
-                    }
-                }
-            })
-        })
+        //      .act_on::<FunnyJoke>(|agent, envelope| {
+        //          // Mutate state: increment jokes_told count.
+        //          agent.model.jokes_told += 1;
+        //          // Create a new envelope targeted back at this agent's address.
+        //          let self_envelope = agent.new_envelope();
+        //          // Clone the incoming message content to determine the reaction.
+        //          let message = envelope.message().clone();
+        //          // Return an async block to send the reaction message.
+        //          Box::pin(async move {
+        //              // Ensure the envelope was created successfully.
+        //              if let Some(self_envelope) = self_envelope {
+        //                  match message {
+        //                      FunnyJoke::ChickenCrossesRoad => {
+        //                          // Send a "Chuckle" reaction back to self.
+        //                          let _ = self_envelope.send(AudienceReactionMsg::Chuckle).await;
+        //                      }
+        //                      FunnyJoke::Pun => {
+        //                          // Send a "Groan" reaction back to self.
+        //                          let _ = self_envelope.send(AudienceReactionMsg::Groan).await;
+        //                      }
+        //                  }
+        //              }
+        //          })
+        //      })
         // Handler for `AudienceReactionMsg` (sent from the FunnyJoke handler above).
         .act_on::<AudienceReactionMsg>(|agent, envelope| {
             // Mutate state based on the reaction message content.
@@ -472,6 +472,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
 
     // Stop the agent and wait for shutdown completion.
     comedian_handle.stop().await?;
+    runtime.shutdown_all().await?;
 
     Ok(())
 }

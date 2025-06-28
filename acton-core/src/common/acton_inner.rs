@@ -14,13 +14,25 @@
  * limitations under that License.
  */
 
-use acton_ern::{Ern};
+use acton_ern::Ern;
 use dashmap::DashMap;
+use tokio_util::sync::CancellationToken;
 
 use crate::common::{AgentHandle, BrokerRef};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ActonInner {
     pub(crate) broker: BrokerRef,
     pub(crate) roots: DashMap<Ern, AgentHandle>,
+    pub(crate) cancellation_token: CancellationToken,
+}
+
+impl Default for ActonInner {
+    fn default() -> Self {
+        Self {
+            broker: Default::default(),
+            roots: Default::default(),
+            cancellation_token: CancellationToken::new(),
+        }
+    }
 }

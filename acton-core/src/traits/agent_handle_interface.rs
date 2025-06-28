@@ -17,7 +17,7 @@
 use std::fmt::Debug; // Import Debug
 use std::future::Future;
 
-use acton_ern::{Ern};
+use acton_ern::Ern;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio_util::task::TaskTracker;
@@ -35,7 +35,8 @@ use crate::traits::acton_message::ActonMessage;
 ///
 /// Implementors of this trait provide the concrete mechanisms for these operations.
 #[async_trait]
-pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static { // Added bounds
+pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static {
+    // Added bounds
     /// Returns the [`MessageAddress`] associated with this agent handle.
     ///
     /// This address contains the agent's unique ID (`Ern`) and the sender channel
@@ -96,10 +97,7 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static { // Added
     ///
     /// * `message`: The message payload to send. Must implement [`ActonMessage`].
     #[instrument(skip(self, message), fields(message_type = std::any::type_name_of_val(&message)))]
-    fn send(
-        &self,
-        message: impl ActonMessage,
-    ) -> impl Future<Output = ()> + Send + Sync + '_
+    fn send(&self, message: impl ActonMessage) -> impl Future<Output = ()> + Send + Sync + '_
     where
         Self: Sync, // Required by the async move block
     {
@@ -119,11 +117,6 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static { // Added
     /// existing asynchronous context. Prefer using asynchronous methods like [`AgentHandleInterface::send`]
     /// or [`OutboundEnvelope::send`] where possible.
     ///
-    /// This method wraps the message in a [`BrokerRequest`] before sending via the envelope's
-    /// `reply` method, which seems potentially incorrect unless the intent is specifically
-    /// to interact with the broker synchronously via the recipient. Consider if a direct
-    /// synchronous send mechanism is needed or if the asynchronous `send` should be used.
-    ///
     /// # Arguments
     ///
     /// * `message`: The message payload to send. Must implement [`ActonMessage`].
@@ -139,9 +132,6 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static { // Added
     {
         trace!(sender = %self.id(), recipient = %recipient.id(), "Sending message synchronously");
         let envelope = self.create_envelope(Some(recipient.reply_address()));
-        // Warning: Wrapping the message in BrokerRequest here might be unintended.
-        // If the goal is just to send `message` to `recipient`, it should likely be:
-        // envelope.reply(message)?;
         envelope.reply(BrokerRequest::new(message))?; // Uses the potentially problematic OutboundEnvelope::reply
         Ok(())
     }

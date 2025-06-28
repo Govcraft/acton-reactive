@@ -57,6 +57,7 @@ impl<S> MessageContext<S> {
         OutboundEnvelope::new_with_recipient(
             self.reply_envelope.return_address.clone(),
             recipient.clone(),
+            self.origin_envelope().cancellation_token.clone(),
         )
     }
 

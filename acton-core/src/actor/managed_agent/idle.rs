@@ -95,10 +95,12 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                         let origin_envelope = OutboundEnvelope::new_with_recipient(
                             envelope.reply_to.clone(),
                             envelope.recipient.clone(),
+                            actor.handle.cancellation_token.clone(),
                         );
                         let reply_envelope = OutboundEnvelope::new_with_recipient(
                             envelope.recipient.clone(),
                             envelope.reply_to.clone(),
+                            actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
                             message: concrete_msg.clone(),
@@ -150,10 +152,12 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                         let origin_envelope = OutboundEnvelope::new_with_recipient(
                             envelope.reply_to.clone(),
                             envelope.recipient.clone(),
+                            actor.handle.cancellation_token.clone(),
                         );
                         let reply_envelope = OutboundEnvelope::new_with_recipient(
                             envelope.recipient.clone(),
                             envelope.reply_to.clone(),
+                            actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
                             message: concrete_msg.clone(),
@@ -316,6 +320,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         if let Some(app) = runtime {
             managed_actor.broker = app.0.broker.clone();
             managed_actor.handle.broker = Box::new(Some(app.0.broker.clone()));
+            managed_actor.cancellation_token = Some(app.0.cancellation_token.child_token());
         }
 
         if let Some(config) = &config {
@@ -334,12 +339,12 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         trace!("NEW ACTOR: {}", &managed_actor.handle.id());
 
-        managed_actor.runtime = runtime.clone().unwrap_or_else(|| {
-            AgentRuntime(ActonInner {
-                broker: managed_actor.handle.broker.clone().unwrap_or_default(),
-                ..Default::default()
-            })
-        });
+        // Ensure runtime always exists; creating a new one here is an error.
+        assert!(
+            runtime.is_some(),
+            "AgentRuntime must be provided to ManagedAgent::new"
+        );
+        managed_actor.runtime = runtime.clone().unwrap();
 
         managed_actor.id = managed_actor.handle.id();
 
@@ -468,6 +473,11 @@ impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
     for ManagedAgent<Started, State>
 {
     fn from(value: ManagedAgent<Idle, State>) -> Self {
+        // Ensure cancellation_token is always present when transitioning to Started state
+        assert!(
+            value.cancellation_token.is_some(),
+            "Cannot transition to ManagedAgent<Started, State> without a cancellation_token"
+        );
         // Move all fields from Idle state to Started state.
         ManagedAgent::<Started, State> {
             handle: value.handle,
@@ -485,6 +495,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
             broker: value.broker,
             message_handlers: value.message_handlers,
             error_handler_map: value.error_handler_map, // transfer error handlers
+            cancellation_token: value.cancellation_token,
             _actor_state: Default::default(),
         }
     }
@@ -514,6 +525,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, Sta
             runtime: Default::default(),
             halt_signal: Default::default(),
             tracker: Default::default(),
+            cancellation_token: Default::default(),
             message_handlers: Default::default(),
             _actor_state: Default::default(),
         }

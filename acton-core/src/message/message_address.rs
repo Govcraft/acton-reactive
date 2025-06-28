@@ -14,11 +14,11 @@
  * limitations under that License.
  */
 
+use crate::common::AgentSender;
 use acton_ern::prelude::*;
 use derive_new::new; // Keep using derive_new for the constructor
-
-use crate::common::AgentSender;
-
+use tokio::sync::mpsc::channel;
+use tokio_util::sync::CancellationToken;
 /// Represents the addressable endpoint of an agent, combining its identity and inbox channel.
 ///
 /// A `MessageAddress` contains the necessary information to send a message to a specific
@@ -33,6 +33,7 @@ pub struct MessageAddress {
     pub(crate) address: AgentSender,
     /// The unique identifier (`Ern`) of the agent associated with this address.
     pub(crate) sender: Ern,
+    pub(crate) cancellation_token: CancellationToken,
 }
 
 impl MessageAddress {
@@ -52,7 +53,7 @@ impl Default for MessageAddress {
     /// Messages cannot be successfully sent using the default address's channel sender.
     fn default() -> Self {
         let (outbox, _) = tokio::sync::mpsc::channel(1); // Create a dummy, likely closed sender
-        Self::new(outbox, Ern::default())
+        Self::new(outbox, Ern::default(), CancellationToken::default())
     }
 }
 
