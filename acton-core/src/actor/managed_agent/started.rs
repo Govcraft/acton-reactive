@@ -55,12 +55,16 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     /// Returns `None` only if the agent's handle somehow lacks an outbox, which
     /// should not occur under normal circumstances.
     pub fn new_envelope(&self) -> Option<OutboundEnvelope> {
-        // The Option wrapper seems unnecessary given the implementation always returns Some.
-        // Consider changing return type to just OutboundEnvelope if None is impossible.
-        Some(OutboundEnvelope::new(MessageAddress::new(
-            self.handle.outbox.clone(),
-            self.id.clone(),
-        )))
+        self.cancellation_token.clone().map(|cancellation_token| {
+            OutboundEnvelope::new(
+                MessageAddress::new(
+                    self.handle.outbox.clone(),
+                    self.id.clone(),
+                    self.handle.cancellation_token.clone(),
+                ),
+                cancellation_token,
+            )
+        })
     }
 
     /// Creates a new [`OutboundEnvelope`] addressed to this agent's parent.
@@ -76,19 +80,19 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     ///     and the `recipient_address` will be this agent's address.
     /// *   `None`: If this agent does not have a parent (i.e., it's a top-level agent).
     pub fn new_parent_envelope(&self) -> Option<OutboundEnvelope> {
-        // Clones the parent's handle and creates an envelope targeting the parent.
+        // Only construct if both parent and cancellation_token exist
+        let cancellation_token = self.cancellation_token.clone()?;
         self.parent.as_ref().map(|parent_handle| {
-            // Create an envelope where the recipient is the parent and the sender is self.
             OutboundEnvelope::new_with_recipient(
-                MessageAddress::new(self.handle.outbox.clone(), self.id.clone()), // Self is sender
+                MessageAddress::new(
+                    self.handle.outbox.clone(),
+                    self.id.clone(),
+                    self.handle.cancellation_token.clone(),
+                ), // Self is sender
                 parent_handle.reply_address(), // Parent is recipient
+                cancellation_token,
             )
         })
-        // The original implementation `parent.create_envelope(None).clone()` might have different semantics.
-        // The above implementation assumes sending *to* the parent *from* self.
-        // If the intent was to create an envelope *as if* it came from the parent,
-        // the original logic might be needed, but seems less common. Let's stick to the clearer intent.
-        // Original logic: self.parent.as_ref().map(|parent| parent.create_envelope(None).clone())
     }
 
     // wake() and terminate() are internal implementation details (`pub(crate)` or private)
@@ -97,91 +101,109 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     pub(crate) async fn wake(&mut self, reactors: ReactorMap<Agent>) {
         (self.after_start)(self).await;
         let mut terminate_requested = false;
-        while let Some(incoming_envelope) = self.inbox.recv().await {
-            let type_id;
-            let mut envelope;
-            trace!(
-                "Received envelope from: {}",
-                incoming_envelope.reply_to.sender.root
-            );
-            trace!(
-                "Message type: {}",
-                type_name_of_val(&incoming_envelope.message)
-            );
+        // Assert that cancellation_token always exists; it must never be missing.
+        assert!(
+            self.cancellation_token.is_some(),
+            "ManagedAgent in Started state must always have a cancellation_token"
+        );
+        let cancel_token = self.cancellation_token.as_ref().cloned().unwrap();
+        let mut cancel = Box::pin(cancel_token.cancelled());
 
-            // Handle potential BrokerRequestEnvelope indirection
-            if let Some(broker_request_envelope) = incoming_envelope
-                .message
-                .as_any()
-                .downcast_ref::<BrokerRequestEnvelope>()
-            {
-                trace!("Processing message via BrokerRequestEnvelope");
-                envelope = Envelope::new(
-                    broker_request_envelope.message.clone(), // Extract inner message
-                    incoming_envelope.reply_to.clone(),
-                    incoming_envelope.recipient.clone(),
-                );
-                type_id = broker_request_envelope.message.as_any().type_id(); // Use inner message TypeId
-            } else {
-                envelope = incoming_envelope;
-                type_id = envelope.message.as_any().type_id();
-            }
+        loop {
+            tokio::select! {
+                // React immediately to cancellation
+                _ = &mut cancel => {
+                    trace!("Cancellation token triggered for agent: {}", self.id());
+                    break;
+                }
+                incoming_opt = self.inbox.recv() => {
+                    let Some(incoming_envelope) = incoming_opt else { break; };
+                    let type_id;
+                    let mut envelope;
+                    trace!(
+                        "Received envelope from: {}",
+                        incoming_envelope.reply_to.sender.root
+                    );
+                    trace!(
+                        "Message type: {}",
+                        type_name_of_val(&incoming_envelope.message)
+                    );
 
-            // Dispatch to registered handler or handle system signals
-            if let Some(reactor) = reactors.get(&type_id) {
-                match reactor.value() {
-                    ReactorItem::FutureReactor(fut) => {
-                        // Legacy handler: await, always Ok
-                        fut(self, &mut envelope).await;
+                    // Handle potential BrokerRequestEnvelope indirection
+                    if let Some(broker_request_envelope) = incoming_envelope
+                        .message
+                        .as_any()
+                        .downcast_ref::<BrokerRequestEnvelope>()
+                    {
+                        trace!("Processing message via BrokerRequestEnvelope");
+                        envelope = Envelope::new(
+                            broker_request_envelope.message.clone(), // Extract inner message
+                            incoming_envelope.reply_to.clone(),
+                            incoming_envelope.recipient.clone(),
+                        );
+                        type_id = broker_request_envelope.message.as_any().type_id(); // Use inner message TypeId
+                    } else {
+                        envelope = incoming_envelope;
+                        type_id = envelope.message.as_any().type_id();
                     }
-                    ReactorItem::FutureReactorResult(fut) => {
-                        // New Result-based handler: await and trigger error handler on Err
-                        let result = fut(self, &mut envelope).await;
-                        if let Err(err) = result {
-                            // Call every registered error handler; closure does downcast & handles only if type matches
-                            let mut handled = false;
-                            let handler_arcs: Vec<_> =
-                                self.error_handler_map.values().cloned().collect();
-                            for handler_arc in handler_arcs {
-                                // Handler returns immediately if error type doesn't match
-                                let fut = handler_arc(self, &mut envelope, err.as_ref());
-                                fut.await;
-                                handled = true; // mark as handled since at least one handler exists
+
+                    // Dispatch to registered handler or handle system signals
+                    if let Some(reactor) = reactors.get(&type_id) {
+                        match reactor.value() {
+                            ReactorItem::FutureReactor(fut) => {
+                                // Legacy handler: await, always Ok
+                                fut(self, &mut envelope).await;
                             }
-                            if !handled {
-                                tracing::error!(
-                                    "Unhandled error from message handler in agent {}: {:?}",
-                                    self.id(),
-                                    err
-                                );
+                            ReactorItem::FutureReactorResult(fut) => {
+                                // New Result-based handler: await and trigger error handler on Err
+                                let result = fut(self, &mut envelope).await;
+                                if let Err(err) = result {
+                                    // Call every registered error handler; closure does downcast & handles only if type matches
+                                    let mut handled = false;
+                                    let handler_arcs: Vec<_> =
+                                        self.error_handler_map.values().cloned().collect();
+                                    for handler_arc in handler_arcs {
+                                        // Handler returns immediately if error type doesn't match
+                                        let fut = handler_arc(self, &mut envelope, err.as_ref());
+                                        fut.await;
+                                        handled = true; // mark as handled since at least one handler exists
+                                    }
+                                    if !handled {
+                                        tracing::error!(
+                                            "Unhandled error from message handler in agent {}: {:?}",
+                                            self.id(),
+                                            err
+                                        );
+                                    }
+                                }
                             }
                         }
+                    } else if let Some(SystemSignal::Terminate) =
+                        envelope.message.as_any().downcast_ref::<SystemSignal>()
+                    {
+                        trace!("Terminate signal received for agent: {}", self.id());
+                        terminate_requested = true;
+                        (self.before_stop)(self).await; // Execute before_stop hook
+                                                        // Short delay to allow before_stop processing, if needed.
+                        sleep(Duration::from_millis(10)).await;
+                        self.inbox.close(); // Close inbox to stop receiving new messages
+                        trace!("Inbox closed for agent: {}", self.id());
+                    } else {
+                        trace!(
+                            "No handler found for message type {:?} for agent {}",
+                            type_id,
+                            self.id()
+                        );
+                        // Optionally log or handle unknown message types
+                    }
+
+                    // Check if termination requested and inbox is now empty and closed
+                    if terminate_requested && self.inbox.is_empty() && self.inbox.is_closed() {
+                        trace!("Inbox empty and closed after terminate request, initiating termination for agent: {}", self.id());
+                        self.terminate().await; // Initiate graceful shutdown of children etc.
+                        break; // Exit the loop
                     }
                 }
-            } else if let Some(SystemSignal::Terminate) =
-                envelope.message.as_any().downcast_ref::<SystemSignal>()
-            {
-                trace!("Terminate signal received for agent: {}", self.id());
-                terminate_requested = true;
-                (self.before_stop)(self).await; // Execute before_stop hook
-                                                // Short delay to allow before_stop processing, if needed.
-                sleep(Duration::from_millis(10)).await;
-                self.inbox.close(); // Close inbox to stop receiving new messages
-                trace!("Inbox closed for agent: {}", self.id());
-            } else {
-                trace!(
-                    "No handler found for message type {:?} for agent {}",
-                    type_id,
-                    self.id()
-                );
-                // Optionally log or handle unknown message types
-            }
-
-            // Check if termination requested and inbox is now empty and closed
-            if terminate_requested && self.inbox.is_empty() && self.inbox.is_closed() {
-                trace!("Inbox empty and closed after terminate request, initiating termination for agent: {}", self.id());
-                self.terminate().await; // Initiate graceful shutdown of children etc.
-                break; // Exit the loop
             }
         }
         trace!("Message loop finished for agent: {}", self.id());

@@ -67,6 +67,8 @@ pub struct AgentHandle {
     /// A map holding handles to the direct children supervised by this agent.
     /// Keys are the string representation of the child agent's `Ern`.
     children: DashMap<String, AgentHandle>,
+    /// The agent's cancellation token (clone).
+    pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
 }
 
 impl Default for AgentHandle {
@@ -84,6 +86,7 @@ impl Default for AgentHandle {
             parent: None,
             broker: Box::new(None),
             children: DashMap::new(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
         }
     }
 }
@@ -191,7 +194,11 @@ impl AgentHandleInterface for AgentHandle {
     /// Returns the [`MessageAddress`] for this agent, used for sending replies.
     #[inline]
     fn reply_address(&self) -> MessageAddress {
-        MessageAddress::new(self.outbox.clone(), self.id.clone())
+        MessageAddress::new(
+            self.outbox.clone(),
+            self.id.clone(),
+            self.cancellation_token.clone(),
+        )
     }
 
     /// Creates an [`OutboundEnvelope`] for sending a message from this agent.
@@ -210,9 +217,13 @@ impl AgentHandleInterface for AgentHandle {
         let return_address = self.reply_address();
         trace!(sender = %return_address.sender.root, recipient = ?recipient_address.as_ref().map(|r| r.sender.root.as_str()), "Creating envelope");
         if let Some(recipient) = recipient_address {
-            OutboundEnvelope::new_with_recipient(return_address, recipient)
+            OutboundEnvelope::new_with_recipient(
+                return_address,
+                recipient,
+                self.cancellation_token.clone(),
+            )
         } else {
-            OutboundEnvelope::new(return_address)
+            OutboundEnvelope::new(return_address, self.cancellation_token.clone())
         }
     }
 

@@ -19,8 +19,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use acton_ern::Ern;
+use futures::channel::oneshot::Canceled;
 use futures::future::join_all;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, trace}; // Added error import
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
@@ -237,6 +239,9 @@ impl AgentRuntime {
         use tokio::time::timeout as tokio_timeout;
 
         trace!("Initiating shutdown of all top-level agents...");
+        // Trigger the system-wide cancellation_token for all agents.
+        self.0.cancellation_token.cancel();
+
         // Collect stop futures for all root agents.
         let stop_futures = self.0.roots.iter().map(|item| {
             let root_handle = item.value().clone();
@@ -360,11 +365,18 @@ impl From<ActonApp> for AgentRuntime {
     fn from(_acton: ActonApp) -> Self {
         trace!("Starting Acton system initialization (From<ActonApp>)");
         let (sender, receiver) = oneshot::channel();
-
+        // We do this so the broker gets access to the cancellation token.
+        let mut runtime = AgentRuntime(ActonInner::default());
         // Spawn broker initialization in a separate task.
+        let runtime_clone = runtime.clone();
+        // Assert that the cancellation_token is present in the clone before broker initialization
+        assert!(
+            !runtime_clone.0.cancellation_token.is_cancelled(),
+            "ActonInner cancellation_token must be present and active before Broker initialization"
+        );
         tokio::spawn(async move {
             trace!("Broker initialization task started.");
-            let broker = AgentBroker::initialize().await;
+            let broker = AgentBroker::initialize(runtime_clone).await;
             trace!("Broker initialization task finished, sending handle.");
             let _ = sender.send(broker); // Send broker handle back
         });
@@ -376,11 +388,9 @@ impl From<ActonApp> for AgentRuntime {
                 .block_on(async { receiver.await.expect("Broker initialization failed") })
         });
         trace!("Broker handle received, constructing AgentRuntime.");
+        runtime.0.broker = broker;
 
         // Create the runtime with the initialized broker.
-        AgentRuntime(ActonInner {
-            broker,
-            ..Default::default()
-        })
+        runtime
     }
 }

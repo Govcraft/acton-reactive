@@ -19,13 +19,15 @@ use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use acton_ern::{Ern};
+use acton_ern::Ern;
 use dashmap::DashMap;
+use futures::channel::oneshot::Canceled;
 use futures::future::join_all;
+use tokio_util::sync::CancellationToken;
 use tracing::*;
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
-use crate::common::{AgentHandle, BrokerRef};
+use crate::common::{AgentHandle, AgentRuntime, BrokerRef};
 use crate::message::{BrokerRequest, BrokerRequestEnvelope, SubscribeBroker};
 use crate::traits::AgentHandleInterface;
 
@@ -88,13 +90,19 @@ impl AgentBroker {
     ///
     /// Returns the `AgentHandle` of the initialized broker agent.
     #[instrument]
-    pub(crate) async fn initialize() -> BrokerRef {
+    pub(crate) async fn initialize(runtime: AgentRuntime) -> BrokerRef {
         let actor_config = AgentConfig::new(Ern::with_root("broker_main").unwrap(), None, None)
             .expect("Couldn't create initial broker config");
 
+        // Assert that the cancellation_token in the runtime is not cancelled before agent creation.
+        assert!(
+            !runtime.0.cancellation_token.is_cancelled(),
+            "ActonInner cancellation_token must be present and active before creating ManagedAgent in AgentBroker::initialize"
+        );
+
         // Create the ManagedAgent for the broker. The model state *is* the AgentBroker itself.
         let mut broker_agent: ManagedAgent<Idle, AgentBroker> =
-            ManagedAgent::new(&None, Some(actor_config)).await;
+            ManagedAgent::new(&Some(runtime), Some(actor_config)).await;
 
         // Configure the broker agent's message handlers.
         broker_agent

@@ -100,6 +100,9 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
         std::any::TypeId,
         std::sync::Arc<Box<crate::common::ErrorHandler<Model>>>,
     >,
+    /// Tokio cancellation token for managing shutdown/cancellation.
+    /// This will be set to Some(token) when the agent is created, by cloning the root token.
+    pub(crate) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     /// Phantom data to associate the `AgentState` type parameter.
     _actor_state: std::marker::PhantomData<AgentState>,
 }

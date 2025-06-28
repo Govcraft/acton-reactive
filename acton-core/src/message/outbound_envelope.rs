@@ -37,13 +37,15 @@ use crate::traits::ActonMessage;
 /// and [`OutboundEnvelope::reply`] (synchronous wrapper).
 ///
 /// Equality and hashing are based solely on the `return_address`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OutboundEnvelope {
     /// The address of the agent sending the message.
     pub(crate) return_address: MessageAddress,
     /// The address of the intended recipient agent, if specified directly.
     /// If `None`, the recipient might be implied (e.g., sending back to `return_address`).
     pub(crate) recipient_address: Option<MessageAddress>,
+    /// The cancellation token for the sending agent.
+    pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
 }
 
 // Note: The PartialEq impl for MessageAddress is defined here, but ideally should be
@@ -73,7 +75,6 @@ impl Hash for OutboundEnvelope {
     }
 }
 
-
 impl OutboundEnvelope {
     /// Creates a new `OutboundEnvelope` with only a return address specified.
     ///
@@ -89,9 +90,16 @@ impl OutboundEnvelope {
     ///
     /// A new `OutboundEnvelope` instance.
     #[instrument(skip(return_address))]
-    pub fn new(return_address: MessageAddress) -> Self {
+    pub fn new(
+        return_address: MessageAddress,
+        cancellation_token: tokio_util::sync::CancellationToken,
+    ) -> Self {
         trace!(sender = %return_address.sender, "Creating new OutboundEnvelope");
-        OutboundEnvelope { return_address, recipient_address: None }
+        OutboundEnvelope {
+            return_address,
+            recipient_address: None,
+            cancellation_token,
+        }
     }
 
     /// Returns a clone of the sender's [`MessageAddress`].
@@ -108,11 +116,18 @@ impl OutboundEnvelope {
 
     /// Crate-internal constructor: Creates a new `OutboundEnvelope` with specified sender and recipient.
     #[instrument(skip(return_address, recipient_address))]
-    pub(crate) fn new_with_recipient(return_address: MessageAddress, recipient_address: MessageAddress) -> Self {
+    pub(crate) fn new_with_recipient(
+        return_address: MessageAddress,
+        recipient_address: MessageAddress,
+        cancellation_token: tokio_util::sync::CancellationToken,
+    ) -> Self {
         trace!(sender = %return_address.sender, recipient = %recipient_address.sender, "Creating new OutboundEnvelope with recipient");
-        OutboundEnvelope { return_address, recipient_address: Some(recipient_address) }
+        OutboundEnvelope {
+            return_address,
+            recipient_address: Some(recipient_address),
+            cancellation_token,
+        }
     }
-
 
     /// Sends a message using this envelope, blocking the current thread until sent.
     ///
@@ -134,10 +149,8 @@ impl OutboundEnvelope {
     /// * `Err(MessageError)`: Currently, this implementation always returns `Ok(())`, but the signature
     ///   allows for future error handling. Potential errors (like closed channels) are logged internally.
     #[instrument(skip(self, message), fields(message_type = std::any::type_name_of_val(&message)))]
-    pub fn reply(
-        &self,
-        message: impl ActonMessage + 'static,
-    ) -> Result<(), MessageError> { // Consider changing return type if errors aren't propagated.
+    pub fn reply(&self, message: impl ActonMessage + 'static) -> Result<(), MessageError> {
+        // Consider changing return type if errors aren't propagated.
         let envelope = self.clone();
         let message_arc = Arc::new(message); // Arc the message once
 
@@ -161,28 +174,40 @@ impl OutboundEnvelope {
     #[instrument(skip(self, message), level = "debug", fields(message_type = ?message.type_id()))]
     async fn send_message_inner(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
         // Determine the target address: recipient if Some, otherwise return_address.
-        let target_address = self.recipient_address.as_ref().unwrap_or(&self.return_address);
+        let target_address = self
+            .recipient_address
+            .as_ref()
+            .unwrap_or(&self.return_address);
         let target_id = &target_address.sender;
         let channel_sender = target_address.address.clone(); // Keep the owned clone
-        
+
         trace!(sender = %self.return_address.sender, recipient = %target_id, "Attempting to send message");
 
-        if !channel_sender.is_closed() { // Check the cloned sender
-            let permit_result = channel_sender.reserve().await; // Await and bind the result first
-            match permit_result { // Match on the bound result
-                Ok(permit) => {
-                    // Create the internal Envelope to put on the channel.
-                    let internal_envelope = Envelope::new(
-                        message, // Pass the Arc'd message
-                        self.return_address.clone(),
-                        target_address.clone(),
-                    );
-                    trace!(sender = %self.return_address.sender, recipient = %target_id, "Sending message via permit");
-                    permit.send(internal_envelope); // Send using the permit
+        if !channel_sender.is_closed() {
+            // Cancellation-aware reservation of a send permit
+            let cancellation = self.cancellation_token.clone();
+            tokio::select! {
+                _ = cancellation.cancelled() => {
+                    error!(sender = %self.return_address.sender, recipient = %target_id, "Send aborted: cancellation_token triggered");
+                    return;
                 }
-                Err(e) => {
-                    // Error reserving capacity (likely channel closed).
-                    error!(sender = %self.return_address.sender, recipient = %target_id, error = %e, "Failed to reserve channel capacity");
+                permit_result = channel_sender.reserve() => {
+                    match permit_result {
+                        Ok(permit) => {
+                            // Create the internal Envelope to put on the channel.
+                            let internal_envelope = Envelope::new(
+                                message, // Pass the Arc'd message
+                                self.return_address.clone(),
+                                target_address.clone(),
+                            );
+                            trace!(sender = %self.return_address.sender, recipient = %target_id, "Sending message via permit");
+                            permit.send(internal_envelope); // Send using the permit
+                        }
+                        Err(e) => {
+                            // Error reserving capacity (likely channel closed).
+                            error!(sender = %self.return_address.sender, recipient = %target_id, error = %e, "Failed to reserve channel capacity");
+                        }
+                    }
                 }
             }
         } else {
