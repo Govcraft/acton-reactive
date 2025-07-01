@@ -67,3 +67,6 @@ pub struct Tally;
 pub enum StatusReport {
     Complete(usize),
 }
+
+#[acton_message]
+pub struct Increment;

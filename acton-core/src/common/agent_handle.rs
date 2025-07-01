@@ -301,16 +301,13 @@ impl AgentHandleInterface for AgentHandle {
         async move {
             let tracker = self.tracker();
 
-            // Cancel this agent's token before sending the Terminate signal.
-            self.cancellation_token.cancel();
-
             // Create an envelope to send the signal from self to self.
             let self_envelope = self.create_envelope(Some(self.reply_address()));
 
             trace!(actor = %self.id, "Sending Terminate signal");
-            // Send the Terminate signal. Use `?` to propagate potential send errors.
-            //self_envelope.reply(SystemSignal::Terminate)?;
+            // Send the Terminate signal to initiate graceful shutdown.
             self_envelope.send(SystemSignal::Terminate).await;
+
             // Determine agent shutdown timeout from env or use default (10s)
             let timeout_ms: u64 = env::var("ACTON_AGENT_SHUTDOWN_TIMEOUT_MS")
                 .ok()
@@ -328,9 +325,11 @@ impl AgentHandleInterface for AgentHandle {
                 }
                 Err(_) => {
                     error!(
-                        "Shutdown timeout for agent {} after {} ms",
+                        "Graceful shutdown timeout for agent {} after {} ms. Forcefully cancelling.",
                         self.id, timeout_ms
                     );
+                    // If graceful shutdown times out, forcefully cancel the token.
+                    self.cancellation_token.cancel();
                     Err(anyhow::anyhow!(
                         "Timeout while waiting for agent {} to shut down",
                         self.id
