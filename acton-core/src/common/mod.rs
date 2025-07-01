@@ -41,7 +41,6 @@ pub use agent_reply::AgentReply;
 pub use agent_runtime::AgentRuntime;
 
 // --- Crate-Internal Re-exports ---
-pub(crate) use acton_inner::ActonInner;
 pub(crate) use types::*; // Re-export all types from the internal `types` module
 pub(crate) use crate::message::{Envelope, MessageError, OutboundEnvelope}; // Used by common components
 

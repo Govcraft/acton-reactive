@@ -303,8 +303,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
     let found_child_handle = parent_handle.find_child(&child_id);
     assert!(
         found_child_handle.is_some(),
-        "Couldn't find child with id {}",
-        child_id
+        "Couldn't find child with id {child_id}"
     );
     // We get an Option<AgentHandle>, so unwrap it.
     let child_handle = found_child_handle.unwrap();
@@ -377,8 +376,7 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
     let found_child_handle = parent_handle.find_child(&child_id);
     assert!(
         found_child_handle.is_some(),
-        "Couldn't find child with id {}",
-        child_id
+        "Couldn't find child with id {child_id}"
     );
     let _child_handle = found_child_handle.unwrap(); // We just need to confirm it was found.
     tokio::time::sleep(Duration::from_millis(100)).await;

@@ -30,7 +30,7 @@ pub fn acton_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let inputs = &sig.inputs;
     let output = &sig.output;
 
-    let async_name = syn::Ident::new(&format!("__{}_async", name), name.span());
+    let async_name = syn::Ident::new(&format!("__{name}_async"), name.span());
 
     let output = quote! {
             #[test]

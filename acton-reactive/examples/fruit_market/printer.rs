@@ -542,7 +542,7 @@ impl Printer {
         queue!(stdout, cursor::MoveTo(total_due_start_col, top + 3))?;
         queue!(stdout, Clear(ClearType::CurrentLine))?;
         // Use write! macro for potentially colored string
-        write!(stdout, "{}", total_due_str)?;
+        write!(stdout, "{total_due_str}")?;
 
 
         execute!(stdout, EndSynchronizedUpdate)?;

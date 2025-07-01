@@ -17,7 +17,6 @@
 use crate::common::AgentSender;
 use acton_ern::prelude::*;
 use derive_new::new; // Keep using derive_new for the constructor
-use tokio::sync::mpsc::channel;
 use tokio_util::sync::CancellationToken;
 /// Represents the addressable endpoint of an agent, combining its identity and inbox channel.
 ///

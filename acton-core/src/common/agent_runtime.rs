@@ -19,10 +19,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use acton_ern::Ern;
-use futures::channel::oneshot::Canceled;
 use futures::future::join_all;
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, trace}; // Added error import
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};

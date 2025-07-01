@@ -58,7 +58,7 @@ async fn main() {
         // Handler for `AddItem` messages.
         .act_on::<AddItem>(|agent, envelope| {
             let item = &envelope.message().0;
-            println!("Adding item: {}", item);
+            println!("Adding item: {item}");
             // Mutate the agent's internal state.
             agent.model.items.push(item.clone());
             AgentReply::immediate()
@@ -72,7 +72,7 @@ async fn main() {
             AgentReply::from_async(async move {
                 // Simulate a delay (e.g., fetching from a database).
                 sleep(Duration::from_secs(2)).await;
-                println!("Current items: {:?}", items);
+                println!("Current items: {items:?}");
             })
         })
         // Hook executed *before* the agent starts its shutdown process
