@@ -258,8 +258,9 @@ impl AgentRuntime {
             .unwrap_or(30_000);
 
         trace!("Waiting for all agents to finish gracefully...");
-        if let Err(_) =
-            tokio_timeout(Duration::from_millis(timeout_ms), join_all(stop_futures)).await
+        if tokio_timeout(Duration::from_millis(timeout_ms), join_all(stop_futures))
+            .await
+            .is_err()
         {
             error!("System-wide shutdown timeout expired after {} ms. Forcefully cancelling remaining tasks.", timeout_ms);
             self.0.cancellation_token.cancel(); // Forceful cancellation
