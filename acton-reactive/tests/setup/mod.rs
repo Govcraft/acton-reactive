@@ -69,6 +69,7 @@ pub fn initialize_tracing() {
                     .parse()
                     .unwrap(),
             )
+            .add_directive("broker_tests=trace".parse().unwrap())
             .add_directive("actor_tests=trace".parse().unwrap())
             .add_directive("tokio=trace".parse().unwrap())
             .add_directive(tracing_subscriber::filter::LevelFilter::TRACE.into());

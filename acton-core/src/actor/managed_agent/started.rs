@@ -100,7 +100,6 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     #[instrument(skip(reactors, self))]
     pub(crate) async fn wake(&mut self, reactors: ReactorMap<Agent>) {
         (self.after_start)(self).await;
-        let mut terminate_requested = false;
         // Assert that cancellation_token always exists; it must never be missing.
         assert!(
             self.cancellation_token.is_some(),
@@ -109,12 +108,14 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         let cancel_token = self.cancellation_token.as_ref().cloned().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
 
+        let mut terminate_signal_received = false;
+
         loop {
             tokio::select! {
                 // React immediately to cancellation
                 _ = &mut cancel => {
-                    trace!("Cancellation token triggered for agent: {}", self.id());
-                    break;
+                    trace!("Forceful cancellation triggered for agent: {}", self.id());
+                    break; // Immediate break on forceful cancellation.
                 }
                 incoming_opt = self.inbox.recv() => {
                     let Some(incoming_envelope) = incoming_opt else { break; };
@@ -181,13 +182,11 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                     } else if let Some(SystemSignal::Terminate) =
                         envelope.message.as_any().downcast_ref::<SystemSignal>()
                     {
-                        trace!("Terminate signal received for agent: {}", self.id());
-                        terminate_requested = true;
+                        trace!("Terminate signal received for agent: {}. Closing inbox.", self.id());
+                        terminate_signal_received = true; // Set flag
                         (self.before_stop)(self).await; // Execute before_stop hook
-                                                        // Short delay to allow before_stop processing, if needed.
-                        sleep(Duration::from_millis(10)).await;
-                        self.inbox.close(); // Close inbox to stop receiving new messages
-                        trace!("Inbox closed for agent: {}", self.id());
+                        self.inbox.close(); // Close inbox to stop receiving new messages.
+                        // Do NOT break here. Allow loop to drain existing messages.
                     } else {
                         trace!(
                             "No handler found for message type {:?} for agent {}",
@@ -197,17 +196,17 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         // Optionally log or handle unknown message types
                     }
 
-                    // Check if termination requested and inbox is now empty and closed
-                    if terminate_requested && self.inbox.is_empty() && self.inbox.is_closed() {
-                        trace!("Inbox empty and closed after terminate request, initiating termination for agent: {}", self.id());
-                        self.terminate().await; // Initiate graceful shutdown of children etc.
-                        break; // Exit the loop
-                    }
+
                 }
             }
         }
-        trace!("Message loop finished for agent: {}", self.id());
-        (self.after_stop)(self).await; // Execute after_stop hook
+        // After loop breaks (either gracefully or forcefully), perform final termination steps.
+        trace!(
+            "Message loop finished for agent: {}. Initiating final termination.",
+            self.id()
+        );
+        self.terminate().await; // Stop children and other cleanup.
+        (self.after_stop)(self).await;
         trace!("Agent {} stopped.", self.id());
     }
 
@@ -262,11 +261,6 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
         join_all(stop_futures).await; // Wait for all stop signals to be sent/processed.
 
-        trace!(
-            "All children stopped for agent: {}. Closing own inbox.",
-            self.id()
-        );
-        // Ensure inbox is closed (might be redundant if closed in wake loop, but safe).
-        self.inbox.close();
+        trace!("All children stopped for agent: {}.", self.id());
     }
 }

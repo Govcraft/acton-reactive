@@ -238,41 +238,36 @@ impl AgentRuntime {
         use std::time::Duration;
         use tokio::time::timeout as tokio_timeout;
 
-        trace!("Initiating shutdown of all top-level agents...");
-        // Trigger the system-wide cancellation_token for all agents.
-        self.0.cancellation_token.cancel();
+        // Phase 1: Concurrently signal all root agents to terminate gracefully.
+        trace!("Sending Terminate signal to all root agents.");
+        let stop_futures: Vec<_> = self
+            .0
+            .roots
+            .iter()
+            .map(|item| {
+                let handle = item.value().clone();
+                async move {
+                    if let Err(e) = handle.stop().await {
+                        error!("Error stopping agent {}: {:?}", handle.id(), e);
+                    }
+                }
+            })
+            .collect();
 
-        // Wait for all agent tracker tasks to complete, draining all roots' trackers.
-        // This ensures that all root agents (and their children) have finished execution.
-        // The timeouts control how long we wait for all trackers to resolve.
         let timeout_ms: u64 = env::var("ACTON_SYSTEM_SHUTDOWN_TIMEOUT_MS")
             .ok()
             .and_then(|val| val.parse().ok())
             .unwrap_or(30_000);
 
-        let tracker_futures: Vec<_> = self
-            .0
-            .roots
-            .iter()
-            .map(|item| {
-                let root_handle = item.value().clone();
-                async move {
-                    trace!("Waiting for tracker for root agent: {}", root_handle.id());
-                    root_handle.tracker().wait().await;
-                }
-            })
-            .collect();
-
-        match tokio_timeout(Duration::from_millis(timeout_ms), join_all(tracker_futures)).await {
-            Ok(_) => trace!("All agent trackers completed."),
-            Err(_) => {
-                error!("System-wide tracker shutdown timeout expired after {} ms. Some agent tasks may remain running.", timeout_ms);
-                return Err(anyhow::anyhow!(
-                    "Timeout: not all agent tracker tasks completed within {} ms",
-                    timeout_ms
-                ));
-            }
-        };
+        trace!("Waiting for all agents to finish gracefully...");
+        if let Err(_) =
+            tokio_timeout(Duration::from_millis(timeout_ms), join_all(stop_futures)).await
+        {
+            error!("System-wide shutdown timeout expired after {} ms. Forcefully cancelling remaining tasks.", timeout_ms);
+            self.0.cancellation_token.cancel(); // Forceful cancellation
+        } else {
+            trace!("All agents completed gracefully.");
+        }
 
         trace!("Stopping the system broker...");
         // Stop the broker agent, using same system shutdown timeout.
