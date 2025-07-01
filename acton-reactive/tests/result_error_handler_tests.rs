@@ -45,7 +45,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
     // Result-based handler for Ping
     agent_builder
-        .act_on_result::<Ping, TestErr, _>(|_agent, _msg_ctx| async { Err(TestErr) })
+        .act_on_fallible::<Ping, TestErr>(|_agent, _msg_ctx| Box::pin(async { Err(TestErr) }))
         .on_error::<TestErr>(|agent, _env, _err| {
             agent.model.errored = true;
             AgentReply::immediate()
@@ -53,9 +53,9 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
     // Result-based handler for Tally triggers TestErr2
     agent_builder
-        .act_on_result::<Tally, TestErr2, _>(|_agent, _msg_ctx| {
+        .act_on_fallible::<Tally, TestErr2>(|_agent, _msg_ctx| {
             println!("Ping handler for Tally fired!");
-            async { Err(TestErr2) }
+            Box::pin(async { Err(TestErr2) })
         })
         .on_error::<TestErr2>(|agent, _env, _err| {
             assert!(
