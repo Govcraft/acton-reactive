@@ -55,11 +55,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     pub fn new_envelope(&self) -> Option<OutboundEnvelope> {
         self.cancellation_token.clone().map(|cancellation_token| {
             OutboundEnvelope::new(
-                MessageAddress::new(
-                    self.handle.outbox.clone(),
-                    self.id.clone(),
-                    self.handle.cancellation_token.clone(),
-                ),
+                MessageAddress::new(self.handle.outbox.clone(), self.id.clone()),
                 cancellation_token,
             )
         })
@@ -82,11 +78,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         let cancellation_token = self.cancellation_token.clone()?;
         self.parent.as_ref().map(|parent_handle| {
             OutboundEnvelope::new_with_recipient(
-                MessageAddress::new(
-                    self.handle.outbox.clone(),
-                    self.id.clone(),
-                    self.handle.cancellation_token.clone(),
-                ), // Self is sender
+                MessageAddress::new(self.handle.outbox.clone(), self.id.clone()), // Self is sender
                 parent_handle.reply_address(), // Parent is recipient
                 cancellation_token,
             )
@@ -106,7 +98,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         let cancel_token = self.cancellation_token.as_ref().cloned().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
 
-        let mut terminate_signal_received = false;
+        let mut _terminate_signal_received = false;
 
         loop {
             tokio::select! {
@@ -178,7 +170,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         envelope.message.as_any().downcast_ref::<SystemSignal>()
                     {
                         trace!("Terminate signal received for agent: {}. Closing inbox.", self.id());
-                        terminate_signal_received = true; // Set flag
+                        _terminate_signal_received = true; // Set flag
                         (self.before_stop)(self).await; // Execute before_stop hook
                         self.inbox.close(); // Close inbox to stop receiving new messages.
                         // Do NOT break here. Allow loop to drain existing messages.
