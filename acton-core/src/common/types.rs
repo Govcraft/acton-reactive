@@ -89,7 +89,7 @@ pub(crate) type FutureBoxResult = Pin<
         dyn Future<
                 Output = Result<
                     Box<dyn ActonMessageReply + Send>,
-                    Box<dyn std::error::Error + Send + Sync>,
+                    (Box<dyn std::error::Error + Send + Sync>, TypeId),
                 >,
             > + Send
             + Sync

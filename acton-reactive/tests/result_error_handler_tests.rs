@@ -11,8 +11,9 @@ use crate::setup::{
     messages::{Increment, Ping, Tally},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TestErr;
+#[derive(Debug, Clone)]
 struct TestErr2;
 
 impl std::fmt::Display for TestErr {
@@ -23,11 +24,6 @@ impl std::fmt::Display for TestErr {
 impl std::error::Error for TestErr {}
 
 impl std::fmt::Display for TestErr2 {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Deliberate second test error")
-    }
-}
-impl std::fmt::Debug for TestErr2 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "Deliberate second test error")
     }
@@ -46,7 +42,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
     // Result-based handler for Ping
     agent_builder
         .act_on_fallible::<Ping, (), TestErr>(|_agent, _msg_ctx| Box::pin(async { Err(TestErr) }))
-        .on_error::<TestErr>(|agent, _env, _err| {
+        .on_error::<Ping, TestErr>(|agent, _env, _err| {
             agent.model.errored = Some(true);
             AgentReply::immediate()
         });
@@ -57,7 +53,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
             println!("Ping handler for Tally fired!");
             Box::pin(async { Err(TestErr2) })
         })
-        .on_error::<TestErr2>(|agent, _env, _err| {
+        .on_error::<Tally, TestErr2>(|agent, _env, _err| {
             assert!(
                 agent.model.errored2.is_none(),
                 "TestErr2 error handler called more than once!"
@@ -102,7 +98,7 @@ async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
             let current_count = agent.model.count;
             Box::pin(async move { Ok(current_count) })
         })
-        .on_error::<TestErr>(|_, _, _| {
+        .on_error::<Increment, TestErr>(|_, _, _| {
             // This should not be called
             panic!("on_error should not be called in this test");
         })

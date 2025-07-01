@@ -137,11 +137,11 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     ///
     /// # Returns
     /// A mutable reference to `self` for chaining.
-    pub fn on_error<E>(
+    pub fn on_error<M, E>(
         &mut self,
         error_handler: impl for<'a, 'b> Fn(
                 &'a mut ManagedAgent<Started, State>,
-                &'b mut crate::message::Envelope,
+                &'b mut MessageContext<M>,
                 &'b E,
             ) -> crate::common::FutureBox
             + Send
@@ -149,23 +149,49 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             + 'static,
     ) -> &mut Self
     where
+        M: ActonMessage + Clone + Send + Sync + 'static,
         E: std::error::Error + 'static,
     {
         use std::any::TypeId;
+        let message_type_id = TypeId::of::<M>();
+        let error_type_id = TypeId::of::<E>();
+
         // Wrap handler for dynamic dispatch
-        use std::sync::Arc;
-        let handler_box: Arc<Box<crate::common::ErrorHandler<State>>> =
-            Arc::new(Box::new(move |agent, envelope, err| {
-                // Downcast the error to &E
-                if let Some(specific) = err.downcast_ref::<E>() {
-                    error_handler(agent, envelope, specific)
+        let handler_box: Box<crate::common::ErrorHandler<State>> =
+            Box::new(move |agent, envelope, err| {
+                if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
+                    // Downcast the error to &E
+                    if let Some(specific_err) = err.downcast_ref::<E>() {
+                        let mut msg_context = {
+                            let origin_envelope = OutboundEnvelope::new_with_recipient(
+                                envelope.reply_to.clone(),
+                                envelope.recipient.clone(),
+                                agent.handle.cancellation_token.clone(),
+                            );
+                            let reply_envelope = OutboundEnvelope::new_with_recipient(
+                                envelope.recipient.clone(),
+                                envelope.reply_to.clone(),
+                                agent.handle.cancellation_token.clone(),
+                            );
+                            MessageContext {
+                                message: concrete_msg.clone(),
+                                timestamp: envelope.timestamp,
+                                origin_envelope,
+                                reply_envelope,
+                            }
+                        };
+                        error_handler(agent, &mut msg_context, specific_err)
+                    } else {
+                        // If type doesn't match, do nothing
+                        Box::pin(async {})
+                    }
                 } else {
                     // If type doesn't match, do nothing
                     Box::pin(async {})
                 }
-            }));
+            });
         self.error_handler_map
-            .insert(TypeId::of::<E>(), handler_box);
+            .insert((message_type_id, error_type_id), handler_box);
         self
     }
     /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
@@ -218,7 +244,13 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                     Box::pin(async move {
                         match fut.await {
                             Ok(val) => Ok(Box::new(val) as Box<dyn ActonMessageReply + Send>),
-                            Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+                            Err(e) => {
+                                let error_type_id = TypeId::of::<E>();
+                                Err((
+                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>,
+                                    error_type_id,
+                                ))
+                            }
                         }
                     })
                 } else {
