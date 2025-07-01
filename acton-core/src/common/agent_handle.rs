@@ -191,11 +191,7 @@ impl AgentHandleInterface for AgentHandle {
     /// Returns the [`MessageAddress`] for this agent, used for sending replies.
     #[inline]
     fn reply_address(&self) -> MessageAddress {
-        MessageAddress::new(
-            self.outbox.clone(),
-            self.id.clone(),
-            self.cancellation_token.clone(),
-        )
+        MessageAddress::new(self.outbox.clone(), self.id.clone())
     }
 
     /// Creates an [`OutboundEnvelope`] for sending a message from this agent.
