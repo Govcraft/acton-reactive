@@ -71,22 +71,3 @@ impl AgentReply {
         Box::pin(future)
     }
 }
-
-/// New: Returns a pinned future that is ready and yields `Ok(())` in ergonomics for result-based handler.
-#[inline]
-pub fn immediate_result<E>() -> Pin<Box<impl Future<Output = Result<(), E>> + Sized>>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    Box::pin(async { Ok(()) })
-}
-
-/// New: Returns a pinned future from the given future which yields `Result<(), E>` (for async result-based handler).
-#[inline]
-pub fn from_async_result<F, E>(future: F) -> Pin<Box<F>>
-where
-    F: Future<Output = Result<(), E>> + Sized,
-    E: std::error::Error + Send + Sync + 'static,
-{
-    Box::pin(future)
-}
