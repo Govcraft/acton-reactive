@@ -158,18 +158,15 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                             ReactorItem::FutureReactorResult(fut) => {
                                 // New Result-based handler: await and trigger error handler on Err
                                 let result = fut(self, &mut envelope).await;
-                                if let Err(err) = result {
-                                    // Call every registered error handler; closure does downcast & handles only if type matches
-                                    let mut handled = false;
-                                    let handler_arcs: Vec<_> =
-                                        self.error_handler_map.values().cloned().collect();
-                                    for handler_arc in handler_arcs {
-                                        // Handler returns immediately if error type doesn't match
-                                        let fut = handler_arc(self, &mut envelope, err.as_ref());
+                                if let Err((err, error_type_id)) = result {
+                                    let message_type_id = envelope.message.as_any().type_id();
+                                    if let Some(handler) =
+                                        self.error_handler_map.remove(&(message_type_id, error_type_id))
+                                    {
+                                        let fut = handler(self, &mut envelope, err.as_ref());
                                         fut.await;
-                                        handled = true; // mark as handled since at least one handler exists
-                                    }
-                                    if !handled {
+                                        self.error_handler_map.insert((message_type_id, error_type_id), handler);
+                                    } else {
                                         tracing::error!(
                                             "Unhandled error from message handler in agent {}: {:?}",
                                             self.id(),

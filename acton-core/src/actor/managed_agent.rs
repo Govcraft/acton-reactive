@@ -97,8 +97,8 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
     pub(crate) message_handlers: ReactorMap<Model>,
     /// Map storing registered error handlers (`TypeId` -> error handler closure, wrapped in Arc for clone safety).
     pub(crate) error_handler_map: std::collections::HashMap<
-        std::any::TypeId,
-        std::sync::Arc<Box<crate::common::ErrorHandler<Model>>>,
+        (std::any::TypeId, std::any::TypeId),
+        Box<crate::common::ErrorHandler<Model>>,
     >,
     /// Tokio cancellation token for managing shutdown/cancellation.
     /// This will be set to Some(token) when the agent is created, by cloning the root token.
