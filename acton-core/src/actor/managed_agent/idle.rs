@@ -442,52 +442,6 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         trace!("Agent {} started successfully.", actor_ref.id());
         actor_ref // Return the handle.
     }
-
-    /// Registers an asynchronous error handler for a specific error type `E`.
-    ///
-    /// This allows the agent to handle errors of type `E` by executing the given closure
-    /// whenever a message handler returns an error of this type.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `E`: The concrete error type to handle. Must implement `std::error::Error` and be `'static`.
-    ///
-    /// # Arguments
-    /// * `error_handler`: The handler closure executed with agent, envelope, and error reference.
-    ///
-    /// # Returns
-    /// A mutable reference to `self` for chaining.
-    pub fn on_error<E>(
-        &mut self,
-        error_handler: impl for<'a, 'b> Fn(
-                &'a mut ManagedAgent<Started, State>,
-                &'b mut crate::message::Envelope,
-                &'b E,
-            ) -> crate::common::FutureBox
-            + Send
-            + Sync
-            + 'static,
-    ) -> &mut Self
-    where
-        E: std::error::Error + 'static,
-    {
-        use std::any::TypeId;
-        // Wrap handler for dynamic dispatch
-        use std::sync::Arc;
-        let handler_box: Arc<Box<crate::common::ErrorHandler<State>>> =
-            Arc::new(Box::new(move |agent, envelope, err| {
-                // Downcast the error to &E
-                if let Some(specific) = err.downcast_ref::<E>() {
-                    error_handler(agent, envelope, specific)
-                } else {
-                    // If type doesn't match, do nothing
-                    Box::pin(async {})
-                }
-            }));
-        self.error_handler_map
-            .insert(TypeId::of::<E>(), handler_box);
-        self
-    }
 }
 
 // --- Utility Function ---
