@@ -156,24 +156,21 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                             }
                             ReactorItem::FutureReactorResult(fut) => {
                                 // New Result-based handler: await and trigger error handler on Err
-                                let result = fut(self, &mut envelope).await;
-                                if let Err(err) = result {
-                                    // Call every registered error handler; closure does downcast & handles only if type matches
-                                    let mut handled = false;
-                                    let handler_arcs: Vec<_> =
-                                        self.error_handler_map.values().cloned().collect();
-                                    for handler_arc in handler_arcs {
-                                        // Handler returns immediately if error type doesn't match
-                                        let fut = handler_arc(self, &mut envelope, err.as_ref());
-                                        fut.await;
-                                        handled = true; // mark as handled since at least one handler exists
+                                match fut(self, &mut envelope).await {
+                                    Ok(_reply) => {
+                                        // The reply is ignored for now, but the infrastructure is in place.
+                                        trace!("Received successful reply from fallible handler.");
                                     }
-                                    if !handled {
-                                        tracing::error!(
-                                            "Unhandled error from message handler in agent {}: {:?}",
-                                            self.id(),
-                                            err
-                                        );
+                                    Err(err) => {
+                                        // Call every registered error handler; closure does downcast & handles only if type matches
+                                        let handler_arcs: Vec<_> =
+                                            self.error_handler_map.values().cloned().collect();
+                                        for handler_arc in handler_arcs {
+                                            // Handler returns immediately if error type doesn't match
+                                            let fut =
+                                                handler_arc(self, &mut envelope, err.as_ref());
+                                            fut.await;
+                                        }
                                     }
                                 }
                             }

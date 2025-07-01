@@ -36,6 +36,7 @@
 
 // --- Public Re-exports ---
 pub use acton_message::ActonMessage;
+pub use acton_message_reply::ActonMessageReply;
 pub use agent_handle_interface::AgentHandleInterface;
 pub use broker::Broker;
 pub use subscribable::Subscribable;
@@ -45,6 +46,7 @@ pub use subscriber::Subscriber;
 
 /// Defines the [`ActonMessage`] marker trait.
 mod acton_message;
+mod acton_message_reply;
 /// Defines the [`AgentHandleInterface`] trait for agent interaction.
 mod agent_handle_interface;
 /// Defines the [`Broker`] trait for message broadcasting.
