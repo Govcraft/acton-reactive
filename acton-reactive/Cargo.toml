@@ -1,6 +1,6 @@
 [package]
 name = "acton-reactive"
-version = "3.4.0"
+version = "4.0.0"
 edition = "2021"
 description = "Acton Reactive is the main crate of the Acton framework, designed for building reactive, event-driven, and asynchronous systems. It provides intuitive abstractions to make working with distributed agents seamless and efficient."
 license = "Apache-2.0 OR MIT"
@@ -8,8 +8,8 @@ homepage = "https://github.com/Govcraft/acton-reactive"
 repository = "https://github.com/Govcraft/acton-reactive"
 
 [dependencies]
-acton-macro = { path = "../acton-macro", version = "3.4.0" }
-acton-core = { path = "../acton-core", version = "3" }
+acton-macro = { path = "../acton-macro", version = "4.0.0" }
+acton-core = { path = "../acton-core", version = "4" }
 rand = "0.9.1"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
@@ -20,7 +20,7 @@ futures = "0.3.30"
 tracing-appender = "0.2.3"
 
 [dev-dependencies]
-acton_test = { path = "../acton-test", version = "3.4.0" }
+acton_test = { path = "../acton-test", version = "4.0.0" }
 crossterm = { version = "0.28.1", features = ["event-stream"] }  # or the latest version available
 mti = "1.0.0"
 tracing-appender = "0.2.3"
