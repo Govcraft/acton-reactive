@@ -41,7 +41,6 @@ mod printer;
 mod register;
 
 // Import specific types used in messages.
-use crate::cart_item::Price;
 
 // Constants for error messages and configuration.
 const FAILED_TO_ENABLE_RAW_MODE: &str = "Failed to enable raw mode";

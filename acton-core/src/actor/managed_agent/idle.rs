@@ -27,7 +27,7 @@ use tracing::*;
 
 use crate::actor::{AgentConfig, ManagedAgent, Started};
 use crate::common::{
-    ActonInner, AgentHandle, AgentRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
+    AgentHandle, AgentRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
 };
 use crate::message::MessageContext;
 use crate::prelude::ActonMessage;
@@ -42,8 +42,6 @@ use crate::traits::AgentHandleInterface;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Idle;
 
-use crate::common::ErrorHandler;
-use std::collections::HashMap;
 
 impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     /// Registers an asynchronous message handler for a specific message type `M`.

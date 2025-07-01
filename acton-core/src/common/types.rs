@@ -20,7 +20,7 @@
 //! implementation details to improve code readability and maintainability. It also
 //! defines public type aliases for specific uses of [`AgentHandle`].
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;

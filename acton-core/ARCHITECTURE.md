@@ -36,7 +36,8 @@ This document provides a high-level overview of the architecture and functionali
 - **Role**: Defines the core `ManagedAgent` struct, the runtime representation of an agent.
 - **Functionality**:
     - Acts as a generic state machine wrapper around user-defined agent logic (`Model` generic parameter) and state markers (`AgentState` generic parameter, e.g., `Idle`, `Started`).
-    - Encapsulates essential agent runtime components: `AgentHandle`, `parent` ref, `broker` ref, message `inbox`, lifecycle hooks (`before_start`, `after_start`, etc.), message `message_handlers` map, user `model`, `TaskTracker`, and `HaltSignal`.
+    - Encapsulates essential agent runtime components: `AgentHandle`, `parent` ref, `broker` ref, message `inbox`, lifecycle hooks (`before_start`, `after_start`, etc.), `message_handlers` map, `error_handler_map`, user `model`, `TaskTracker`, and `HaltSignal`.
+    - The `error_handler_map` stores specific handlers for `(Message, Error)` pairs, keyed by their respective `TypeId`s.
     - Provides public getters for accessing agent context (`id`, `name`, `handle`, etc.).
     - Declares `idle` and `started` submodules for state-specific implementations.
     - Re-exports the `Idle` state marker struct.
@@ -46,7 +47,9 @@ This document provides a high-level overview of the architecture and functionali
 - **Functionality**:
     - Defines the `Idle` unit struct as a type-state marker.
     - Implements methods on `ManagedAgent<Idle, State>`:
-        - `act_on`: Registers asynchronous message handlers (`message_handlers`) for specific message types. Handles type erasure and downcasting.
+        - `act_on`: Registers an infallible asynchronous message handler.
+        - `act_on_fallible`: Registers a fallible asynchronous message handler that returns a `Result`. If the handler returns an `Err`, the framework will attempt to dispatch it to a corresponding error handler.
+        - `on_error`: Registers an error handler for a specific `(Message, Error)` pair. The handler receives the `MessageContext` and the concrete error type, allowing for precise, context-aware error handling.
         - `before_start`, `after_start`, `before_stop`, `after_stop`: Registers asynchronous lifecycle callback functions.
         - `create_child`: Allows an idle agent to configure and create child agents.
         - `start`: Transitions the agent from `Idle` to `Started`, spawns its main task loop (`wake`), and returns an `AgentHandle`.
@@ -60,7 +63,7 @@ This document provides a high-level overview of the architecture and functionali
     - Defines the `Started` unit struct as a type-state marker for active agents.
     - Implements methods on `ManagedAgent<Started, State>`:
         - `new_envelope`, `new_parent_envelope`: Public helpers for creating `OutboundEnvelope`s for sending messages.
-        - `wake` (internal): The main asynchronous event loop task. Receives messages from the inbox, dispatches them to registered message handlers, handles `SystemSignal::Terminate`, and calls `after_start`/`after_stop` lifecycle hooks.
+        - `wake` (internal): The main asynchronous event loop task. It receives messages from the inbox and dispatches them to registered handlers. For fallible handlers, if an `Err` is returned, it looks up the specific error handler based on the message and error type IDs and executes it. It also handles `SystemSignal::Terminate` and calls lifecycle hooks.
         - `terminate` (internal): Helper function for graceful shutdown. Stops all child agents concurrently before closing the agent's own inbox.
 
 ### `src/common/mod.rs`
@@ -119,7 +122,8 @@ This document provides a high-level overview of the architecture and functionali
 - **Role**: Centralizes common internal type definitions and aliases.
 - **Functionality**:
     - Defines internal (`pub(crate)`) type aliases for agent implementation details: `ReactorMap`, `FutureHandler`, `FutureBox`, `AgentSender`, `HaltSignal`, `AsyncLifecycleHandler`.
-    - Defines the public `ReactorItem` enum (wraps `FutureReactor`).
+    - Defines `FutureBoxResult`, the return type for fallible handlers. Its `Err` variant is a tuple `(Box<dyn Error>, TypeId)` to carry the error and its `TypeId` for handler dispatch.
+    - Defines the public `ReactorItem` enum (wraps `FutureReactor` and `FutureReactorResult`).
     - Defines public type aliases `BrokerRef` and `ParentRef` as semantic wrappers around `AgentHandle`.
 
 ### `src/message/mod.rs`
@@ -216,12 +220,13 @@ The `acton-core` crate provides the foundational components for an asynchronous 
 1.  **Agents**: The core computational units are represented by user-defined state (`State`) wrapped within a `ManagedAgent`. `ManagedAgent` handles the runtime aspects, including lifecycle management and message processing, using a type-state pattern (`Idle`, `Started`).
 2.  **Handles (`AgentHandle`)**: Interaction with agents happens exclusively through `AgentHandle`s. These handles provide methods for sending messages (`send`, `send_sync`), managing lifecycle (`stop`), supervising children (`supervise`), and accessing agent metadata. They implement the core `AgentHandleInterface` trait.
 3.  **Messaging**: Communication occurs via asynchronous message passing using Tokio MPSC channels (`AgentSender`). Messages must implement the `ActonMessage` marker trait. Envelopes (`OutboundEnvelope`, internal `Envelope`) wrap messages with sender/recipient addressing (`MessageAddress`).
-4.  **Message Handling**: Agents register message handlers (reactors) using the `act_on` method during the `Idle` state. When a `Started` agent receives a message, its `wake` loop dynamically dispatches the message to the appropriate message handler based on the message's `TypeId`.
-5.  **Publish/Subscribe (`AgentBroker`)**: A central `AgentBroker` agent manages topic-based subscriptions. Actors use the `Subscribable` trait (via their `AgentHandle`) to send `SubscribeBroker` messages to the broker. The `Broker` trait (implemented by `AgentHandle`) allows sending `BrokerRequest` messages to the broker, which then uses its internal subscription map to `broadcast` the message payload to all interested subscribers.
-6.  **Lifecycle Management**: Agents have distinct `Idle` and `Started` states. Lifecycle hooks (`before_start`, `after_start`, etc.) allow custom logic execution during state transitions and shutdown. The `stop` method on `AgentHandle` initiates graceful shutdown using `SystemSignal::Terminate` and `TaskTracker`.
-7.  **Supervision**: `AgentHandle`s maintain a map of their direct `children` and provide methods (`supervise`, `find_child`) to manage the hierarchy. Termination propagates down the hierarchy (`terminate` stops children).
-8.  **System Runtime (`AgentRuntime`)**: The `ActonApp::launch()` function initializes the system (including the broker) and returns an `AgentRuntime`, which acts as the main entry point for creating top-level agents and managing the overall system lifecycle (`shutdown_all`).
-9.  **Traits**: Core functionalities are defined through traits (`Actor`, `Broker`, `Subscriber`, `Subscribable`, `ActonMessage`), promoting composability and abstraction. Blanket implementations are provided for convenience.
-10. **Prelude**: A `prelude` module re-exports the most commonly used public types and traits for easy import by users of the main `acton-reactive` crate.
+4.  **Message & Error Handling**: Agents register message handlers using `act_on` (for infallible operations) or `act_on_fallible` (for operations that return a `Result`). When a `Started` agent receives a message, its `wake` loop dynamically dispatches it to the appropriate handler based on the message's `TypeId`.
+5.  **Context-Aware Error Handling**: If a fallible handler returns an `Err`, the framework uses the combination of the message's `TypeId` and the error's `TypeId` to look up and execute a specific error handler registered with `on_error`. This gives the developer access to the original message context when handling the error, enabling robust and precise recovery logic.
+6.  **Publish/Subscribe (`AgentBroker`)**: A central `AgentBroker` agent manages topic-based subscriptions. Actors use the `Subscribable` trait (via their `AgentHandle`) to send `SubscribeBroker` messages to the broker. The `Broker` trait (implemented by `AgentHandle`) allows sending `BrokerRequest` messages to the broker, which then uses its internal subscription map to `broadcast` the message payload to all interested subscribers.
+7.  **Lifecycle Management**: Agents have distinct `Idle` and `Started` states. Lifecycle hooks (`before_start`, `after_start`, etc.) allow custom logic execution during state transitions and shutdown. The `stop` method on `AgentHandle` initiates graceful shutdown using `SystemSignal::Terminate` and `TaskTracker`.
+8.  **Supervision**: `AgentHandle`s maintain a map of their direct `children` and provide methods (`supervise`, `find_child`) to manage the hierarchy. Termination propagates down the hierarchy (`terminate` stops children).
+9.  **System Runtime (`AgentRuntime`)**: The `ActonApp::launch()` function initializes the system (including the broker) and returns an `AgentRuntime`, which acts as the main entry point for creating top-level agents and managing the overall system lifecycle (`shutdown_all`).
+10. **Traits**: Core functionalities are defined through traits (`Actor`, `Broker`, `Subscriber`, `Subscribable`, `ActonMessage`), promoting composability and abstraction. Blanket implementations are provided for convenience.
+11. **Prelude**: A `prelude` module re-exports the most commonly used public types and traits for easy import by users of the main `acton-reactive` crate.
 
 Overall, `acton-core` establishes a robust, asynchronous, message-passing framework with clear separation of concerns for agent state, runtime management, communication, and lifecycle.

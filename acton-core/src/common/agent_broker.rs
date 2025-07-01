@@ -21,9 +21,7 @@ use std::sync::Arc;
 
 use acton_ern::Ern;
 use dashmap::DashMap;
-use futures::channel::oneshot::Canceled;
 use futures::future::join_all;
-use tokio_util::sync::CancellationToken;
 use tracing::*;
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};

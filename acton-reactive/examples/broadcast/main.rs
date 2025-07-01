@@ -155,7 +155,7 @@ async fn main() {
                         SetForegroundColor(Color::Yellow),
                         Print(who.to_string()),
                         SetForegroundColor(Color::DarkYellow),
-                        Print(format!(" is {}!\n", what)),
+                        Print(format!(" is {what}!\n")),
                         ResetColor
                     );
                 }
@@ -167,7 +167,7 @@ async fn main() {
                         SetForegroundColor(Color::Cyan),
                         Print(who.to_string()),
                         SetForegroundColor(Color::DarkCyan),
-                        Print(format!(" updated value: {}!\n", data_value)),
+                        Print(format!(" updated value: {data_value}!\n")),
                         ResetColor
                     );
                 }
@@ -177,7 +177,7 @@ async fn main() {
                         SetForegroundColor(Color::DarkMagenta),
                         Print("\u{1F680} "),
                         SetForegroundColor(Color::Red),
-                        Print(format!("Final sum {}!\n\n", sum)),
+                        Print(format!("Final sum {sum}!\n\n")),
                         ResetColor
                     );
                 }
