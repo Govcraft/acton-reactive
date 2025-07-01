@@ -15,6 +15,8 @@
  */
 
 use std::any::TypeId;
+
+use crate::traits::ActonMessageReply;
 use std::fmt::Debug;
 use std::future::Future;
 use std::mem;
@@ -167,19 +169,20 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         self
     }
     /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
-    pub fn act_on_fallible<M, E>(
+    pub fn act_on_fallible<M, T, E>(
         &mut self,
         message_processor: impl for<'a> Fn(
                 &'a mut ManagedAgent<Started, State>,
                 &'a mut MessageContext<M>,
             ) -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<(), E>> + Send + Sync + 'static>,
+                Box<dyn std::future::Future<Output = Result<T, E>> + Send + Sync + 'static>,
             > + Send
             + Sync
             + 'static,
     ) -> &mut Self
     where
         M: ActonMessage + Clone + Send + Sync + 'static,
+        T: ActonMessageReply + 'static,
         E: std::error::Error + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<M>();
@@ -214,7 +217,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                     let fut = message_processor(actor, &mut msg_context);
                     Box::pin(async move {
                         match fut.await {
-                            Ok(()) => Ok(()),
+                            Ok(val) => Ok(Box::new(val) as Box<dyn ActonMessageReply + Send>),
                             Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
                         }
                     })
@@ -223,7 +226,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                         type_name = std::any::type_name::<M>(),
                         "Result handler called with incompatible message type (downcast failed)"
                     );
-                    Box::pin(async { Ok(()) })
+                    Box::pin(async { Ok(Box::new(()) as Box<dyn ActonMessageReply + Send>) })
                 }
             },
         );

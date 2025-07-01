@@ -20,7 +20,7 @@
 //! implementation details to improve code readability and maintainability. It also
 //! defines public type aliases for specific uses of [`AgentHandle`].
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
@@ -32,6 +32,7 @@ use tokio::sync::mpsc::Sender;
 use crate::actor::{ManagedAgent, Started};
 use crate::common::AgentHandle;
 use crate::message::Envelope;
+use crate::traits::ActonMessageReply;
 
 /// Crate-internal: Map storing message handlers (`TypeId` -> `ReactorItem`).
 pub(crate) type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntity>>;
@@ -85,8 +86,12 @@ pub(crate) type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'sta
 /// New: Box for Future-based handlers returning Result.
 pub(crate) type FutureBoxResult = Pin<
     Box<
-        dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
-            + Send
+        dyn Future<
+                Output = Result<
+                    Box<dyn ActonMessageReply + Send>,
+                    Box<dyn std::error::Error + Send + Sync>,
+                >,
+            > + Send
             + Sync
             + 'static,
     >,
