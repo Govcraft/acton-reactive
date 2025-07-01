@@ -69,9 +69,6 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     ///
     /// Returns a mutable reference to `self` to allow for method chaining during configuration.
     #[instrument(skip(self, message_processor), level = "debug")]
-    #[deprecated(
-        note = "act_on for handlers returning () will be deprecated in the next version. Use act_on_result for Result-returning handlers."
-    )]
     pub fn act_on<M>(
         &mut self,
         message_processor: impl for<'a> Fn(&'a mut ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> FutureBox
@@ -170,17 +167,20 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         self
     }
     /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
-    pub fn act_on_result<M, E, Fut>(
+    pub fn act_on_fallible<M, E>(
         &mut self,
-        message_processor: impl for<'a> Fn(&'a mut ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> Fut
-            + Send
+        message_processor: impl for<'a> Fn(
+                &'a mut ManagedAgent<Started, State>,
+                &'a mut MessageContext<M>,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<(), E>> + Send + Sync + 'static>,
+            > + Send
             + Sync
             + 'static,
     ) -> &mut Self
     where
         M: ActonMessage + Clone + Send + Sync + 'static,
         E: std::error::Error + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<(), E>> + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<M>();
         trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding Result-returning message handler");

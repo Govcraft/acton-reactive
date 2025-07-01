@@ -41,19 +41,15 @@ pub(crate) type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntit
 #[allow(dead_code)] // Allow dead_code for potential future variants like SignalReactor
 pub(crate) enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     // SignalReactor(Box<SignalHandler<ActorEntity>>),
-    /// A handler that processes a message and returns a future (legacy style, will be deprecated).
+    /// A handler for an infallible operation that processes a message and returns a future.
     FutureReactor(Box<FutureHandler<ActorEntity>>),
-    /// A handler that processes a message and returns a Result future. Experimental, will become the main style.
+    /// A handler for a fallible operation that processes a message and returns a `Result` future.
     FutureReactorResult(Box<FutureHandlerResult<ActorEntity>>),
 }
 
 /// Crate-internal: Type alias for the function signature of a message handler
 /// that returns a future.
-/// Legacy handler type: async closure returning () (will be deprecated in the next version).
-/// Diagnostic: This handler signature will be deprecated in the next version. Please migrate to Result-based handlers when available.
-#[deprecated(
-    note = "Legacy handler: returning () will be deprecated in the next version. Please migrate to Result-based handlers."
-)]
+/// An infallible handler that returns `()`.
 pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a mut ManagedAgent<Started, ManagedEntity>, // Takes mutable agent in Started state
         &'b mut Envelope, // Takes mutable envelope containing the message
@@ -62,7 +58,7 @@ pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
     + Sync
     + 'static;
 
-/// New handler type: async closure returning Result<(), Box<dyn std::error::Error + Send + Sync>>
+/// A fallible handler that returns a `Result`.
 pub(crate) type FutureHandlerResult<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a mut ManagedAgent<Started, ManagedEntity>,
         &'b mut Envelope,
