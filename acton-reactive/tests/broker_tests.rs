@@ -113,6 +113,8 @@ async fn test_broker() -> anyhow::Result<()> {
         broker_ref.broadcast(Pong).await; // Should be received by Comedian and Counter
     }
 
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
     // Shut down the runtime, stopping all agents and running `after_stop` handlers.
     runtime.shutdown_all().await?;
 
@@ -191,6 +193,8 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
     // Initiate the sequence by broadcasting Ping using the main runtime broker handle.
     // This will trigger the Comedian's Ping handler, which will then broadcast Pong.
     broker_handle.broadcast(Ping).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Shut down the runtime.
     runtime.shutdown_all().await?;
