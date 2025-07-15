@@ -39,6 +39,7 @@ pub use agent_broker::AgentBroker;
 pub use agent_handle::AgentHandle;
 pub use agent_reply::AgentReply;
 pub use agent_runtime::AgentRuntime;
+pub use config::ActonConfig;
 
 // --- Crate-Internal Re-exports ---
 pub(crate) use types::*; // Re-export all types from the internal `types` module
@@ -61,5 +62,7 @@ mod agent_broker;
 mod agent_runtime;
 /// Defines the `AgentReply` utility.
 mod agent_reply;
+/// Defines the configuration system for the Acton framework.
+mod config;
 
 // pub use crate::pool::LoadBalanceStrategy; // This seems unused currently

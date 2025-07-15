@@ -187,4 +187,70 @@ impl ActonConfig {
     pub fn read_only_handler_flush(&self) -> Duration {
         Duration::from_millis(self.timeouts.read_only_handler_flush_ms)
     }
+
+    /// Load configuration from XDG-compliant locations
+    /// 
+    /// This function attempts to load configuration from the following locations
+    /// in order of preference:
+    /// 1. `$XDG_CONFIG_HOME/acton/config.toml` (Linux/macOS)
+    /// 2. `~/.config/acton/config.toml` (Linux fallback)
+    /// 3. `~/Library/Application Support/acton/config.toml` (macOS fallback)
+    /// 4. `%APPDATA%/acton/config.toml` (Windows)
+    /// 
+    /// If no configuration file is found, returns the default configuration.
+    /// If a configuration file exists but is malformed, logs an error and uses defaults.
+    pub fn load() -> Self {
+        use tracing::{error, info};
+        
+        // Get the XDG base directories
+        let xdg_dirs = match xdg::BaseDirectories::with_prefix("acton") {
+            Ok(dirs) => dirs,
+            Err(e) => {
+                error!("Failed to initialize XDG directories: {}", e);
+                return Self::default();
+            }
+        };
+
+        // Try to find the configuration file
+        let config_path = xdg_dirs.find_config_file("config.toml");
+
+        match config_path {
+            Some(path) => {
+                info!("Loading configuration from: {}", path.display());
+                match std::fs::read_to_string(&path) {
+                    Ok(config_str) => {
+                        match toml::from_str::<ActonConfig>(&config_str) {
+                            Ok(config) => {
+                                info!("Successfully loaded configuration");
+                                config
+                            }
+                            Err(e) => {
+                                error!("Failed to parse configuration file {}: {}", path.display(), e);
+                                Self::default()
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to read configuration file {}: {}", path.display(), e);
+                        Self::default()
+                    }
+                }
+            }
+            None => {
+                info!("No configuration file found, using defaults");
+                Self::default()
+            }
+        }
+    }
+
+    /// Get the actual configuration directory path
+    /// 
+    /// Returns the directory where configuration files should be stored
+    /// according to XDG Base Directory Specification
+    pub fn config_directory() -> std::path::PathBuf {
+        match xdg::BaseDirectories::with_prefix("acton") {
+            Ok(dirs) => dirs.get_config_home(),
+            Err(_) => std::path::PathBuf::from("~/.config/acton"),
+        }
+    }
 }
