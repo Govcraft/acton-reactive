@@ -28,3 +28,4 @@ zerocopy = "0.8.24"
 dashmap = "6.1.0"
 ansi_term = "0.12.1"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tempfile = "3.10.0"

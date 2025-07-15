@@ -139,9 +139,54 @@ While the example above covers the basics, Acton Reactive supports more patterns
 *   **Publish/Subscribe (Broadcasting):** Agents can subscribe to specific message types using `agent_handle.subscribe::<MyMessageType>().await`. Anyone (often the central `AgentBroker` obtained via `app.broker()` or `agent.broker()`) can then `broadcast(MyMessageType)` to notify all subscribers. This is great for system-wide events.
 *   **Supervision (Parent/Child Agents):** Agents can create and manage child agents using `agent_handle.supervise(child_builder).await`. Stopping the parent will automatically stop its children.
 
+## Configuration
+
+Acton Reactive supports configuration via TOML files using the XDG Base Directory Specification:
+
+- **Linux**: `~/.config/acton/config.toml`
+- **macOS**: `~/Library/Application Support/acton/config.toml`
+- **Windows**: `%APPDATA%\acton\config.toml`
+
+### Quick Configuration Setup
+
+1. **Copy example configuration**:
+   ```bash
+   cp examples/config.toml ~/.config/acton/config.toml
+   ```
+
+2. **Customize settings**:
+   ```toml
+   [timeouts]
+   agent_shutdown_timeout_ms = 5000
+   system_shutdown_timeout_ms = 15000
+
+   [limits]
+   agent_inbox_capacity = 512
+   concurrent_handlers_high_water_mark = 50
+
+   [tracing]
+   debug_level = "info"
+   ```
+
+3. **Verify configuration**:
+   ```bash
+   cargo run --example configuration
+   ```
+
+### Configuration Categories
+
+- **Timeouts**: Agent and system shutdown timeouts
+- **Limits**: Buffer sizes and capacity limits
+- **Defaults**: Default agent names and identifiers
+- **Tracing**: Logging levels and configuration
+- **Paths**: Custom directory locations
+- **Behavior**: Feature toggles and settings
+
+See `docs/CONFIGURATION.md` for the complete configuration guide.
+
 ## Explore More Examples
 
-For more detailed examples demonstrating patterns like broadcasting, replies, and agent lifecycles, check out the `acton-reactive/examples/` directory in this repository.
+For more detailed examples demonstrating patterns like broadcasting, replies, agent lifecycles, and configuration usage, check out the `acton-reactive/examples/` directory in this repository.
 
 ## Contributing
 
