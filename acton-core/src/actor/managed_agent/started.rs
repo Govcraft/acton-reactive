@@ -16,9 +16,10 @@
 
 use std::any::type_name_of_val;
 use std::fmt::Debug;
+use std::time::{Duration, Instant};
 
 use futures::future::join_all;
-// use futures::stream::StreamExt;  // Not currently used
+use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::{instrument, trace}; // Removed unused error import
 
 use crate::actor::ManagedAgent;
@@ -90,9 +91,9 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     // and do not require public documentation.
     #[instrument(skip(mutable_reactors, read_only_reactors, self))]
     pub(crate) async fn wake(
-        &mut self, 
+        &mut self,
         mutable_reactors: ReactorMap<Agent>,
-        read_only_reactors: ReactorMap<Agent>
+        read_only_reactors: ReactorMap<Agent>,
     ) {
         (self.after_start)(self).await;
         // Assert that cancellation_token always exists; it must never be missing.
@@ -105,13 +106,32 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
         let mut _terminate_signal_received = false;
 
+        // Concurrent execution buffer for read-only handlers
+        let mut read_only_futures = FuturesUnordered::new();
+        let high_water_mark = 100; // Maximum concurrent read-only handlers
+        let max_wait_duration = Duration::from_millis(10); // Maximum wait time before flush
+        let mut last_flush_time = Instant::now();
+
         loop {
             tokio::select! {
                 // React immediately to cancellation
                 _ = &mut cancel => {
                     trace!("Forceful cancellation triggered for agent: {}", self.id());
+                    // Flush any remaining read-only futures before breaking
+                    if !read_only_futures.is_empty() {
+                        trace!("Flushing {} remaining read-only futures on cancellation", read_only_futures.len());
+                        while let Some(_) = read_only_futures.next().await {}
+                    }
                     break; // Immediate break on forceful cancellation.
                 }
+
+                // Check if we should flush read-only futures due to time limit
+                _ = tokio::time::sleep_until((last_flush_time + max_wait_duration).into()), if !read_only_futures.is_empty() => {
+                    trace!("Flushing {} read-only futures due to time limit", read_only_futures.len());
+                    while let Some(_) = read_only_futures.next().await {}
+                    last_flush_time = Instant::now();
+                }
+
                 incoming_opt = self.inbox.recv() => {
                     let Some(incoming_envelope) = incoming_opt else { break; };
                     let type_id;
@@ -145,6 +165,13 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
                     // Dispatch to registered handler or handle system signals
                     if let Some(reactor) = mutable_reactors.get(&type_id) {
+                        // Flush any pending read-only futures before processing mutable handlers
+                        if !read_only_futures.is_empty() {
+                            trace!("Flushing {} read-only futures before mutable handler", read_only_futures.len());
+                            while let Some(_) = read_only_futures.next().await {}
+                            last_flush_time = Instant::now();
+                        }
+
                         match reactor.value() {
                             ReactorItem::FutureReactor(fut) => {
                                 // Legacy handler: await, always Ok
@@ -182,16 +209,23 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
                         match reactor.value() {
                             ReactorItem::FutureReactorReadOnly(fut) => {
-                                // Concurrent read-only handler: spawn and run concurrently
+                                // Concurrent read-only handler: add to buffer
                                 let fut = fut(self, &mut envelope);
-                                tokio::spawn(async move {
+                                read_only_futures.push(tokio::spawn(async move {
                                     fut.await;
-                                });
+                                }));
+
+                                // Check if we've hit the high water mark
+                                if read_only_futures.len() >= high_water_mark {
+                                    trace!("Flushing {} read-only futures due to high water mark", read_only_futures.len());
+                                    while let Some(_) = read_only_futures.next().await {}
+                                    last_flush_time = Instant::now();
+                                }
                             }
                             ReactorItem::FutureReactorReadOnlyResult(fut) => {
-                                // Concurrent read-only handler with error handling: spawn and run concurrently
+                                // Concurrent read-only handler with error handling: add to buffer
                                 let fut = fut(self, &mut envelope);
-                                tokio::spawn(async move {
+                                read_only_futures.push(tokio::spawn(async move {
                                     if let Err((err, _error_type_id)) = fut.await {
                                         // Note: Error handling for read-only handlers is not supported
                                         // as we don't have access to the agent for error handlers
@@ -200,7 +234,14 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                             err
                                         );
                                     }
-                                });
+                                }));
+
+                                // Check if we've hit the high water mark
+                                if read_only_futures.len() >= high_water_mark {
+                                    trace!("Flushing {} read-only Result futures due to high water mark", read_only_futures.len());
+                                    while let Some(_) = read_only_futures.next().await {}
+                                    last_flush_time = Instant::now();
+                                }
                             }
                             _ => {
                                 // This should not happen - mutable handlers should be in mutable_reactors
@@ -210,6 +251,12 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                     } else if let Some(SystemSignal::Terminate) =
                         envelope.message.as_any().downcast_ref::<SystemSignal>()
                     {
+                        // Flush any remaining read-only futures before processing terminate
+                        if !read_only_futures.is_empty() {
+                            trace!("Flushing {} read-only futures before terminate", read_only_futures.len());
+                            while let Some(_) = read_only_futures.next().await {}
+                        }
+
                         trace!("Terminate signal received for agent: {}. Closing inbox.", self.id());
                         _terminate_signal_received = true; // Set flag
                         (self.before_stop)(self).await; // Execute before_stop hook
@@ -223,8 +270,6 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         );
                         // Optionally log or handle unknown message types
                     }
-
-
                 }
             }
         }
@@ -233,6 +278,16 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
             "Message loop finished for agent: {}. Initiating final termination.",
             self.id()
         );
+
+        // Flush any remaining read-only futures before final termination
+        if !read_only_futures.is_empty() {
+            trace!(
+                "Flushing {} remaining read-only futures before final termination",
+                read_only_futures.len()
+            );
+            while let Some(_) = read_only_futures.next().await {}
+        }
+
         self.terminate().await; // Stop children and other cleanup.
         (self.after_stop)(self).await;
         trace!("Agent {} stopped.", self.id());
