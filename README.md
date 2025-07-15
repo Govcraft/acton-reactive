@@ -18,9 +18,44 @@ Before diving into code, let's understand the main building blocks:
 
 1.  **Agent:** The fundamental unit. It's a Rust struct (that implements `Default` and `Debug`) which holds some internal state (its `model`) and reacts to incoming messages. Think of it as an independent worker or service.
 2.  **Message:** A simple Rust struct (that implements `Debug` and `Clone`) used for communication. Agents send messages to other agents (or themselves) to trigger actions or share information. The `#[acton_message]` macro helps derive the required traits easily.
-3.  **Handler (`act_on`):** A piece of code you define for an agent that specifies *how* it should react when it receives a particular type of message. Handlers can modify the agent's internal state (`model`) and send messages. They return an `AgentReply`.
+3.  **Handler:** A piece of code you define for an agent that specifies *how* it should react when it receives a particular type of message. There are two types:
+    *   **`mutate_on`**: For operations that need to modify the agent's internal state (`&mut agent.model`). These run sequentially to ensure state consistency.
+    *   **`act_on`**: For read-only operations that only need to inspect the agent's state (`&agent.model`). These run concurrently for better performance.
+    Both types return an `AgentReply`.
 4.  **Handle (`AgentHandle`):** An inexpensive, cloneable reference to an agent. You use an agent's handle to send messages *to* it from outside, or from other agents.
 5.  **Runtime (`ActonApp` / `AgentRuntime`):** The Acton system environment. You launch it using `ActonApp::launch()`. It manages the agents, their communication channels, and the central message broker.
+
+## Version 5.0 API Changes
+
+**Acton Reactive v5.0 introduces breaking changes** to better support concurrent operations while maintaining state safety:
+
+- **`act_on` is now for read-only concurrent handlers** - operates on `&agent.model` (immutable)
+- **`mutate_on` is now for mutable sequential handlers** - operates on `&mut agent.model` (mutable)
+
+### Migration Guide from v4.x
+
+**Before (v4.x):**
+```rust
+builder.act_on::<MyMessage>(|agent, _| {
+    agent.model.value += 1;  // mutation
+    AgentReply::immediate()
+});
+```
+
+**After (v5.0):**
+```rust
+// For mutations
+builder.mutate_on::<MyMessage>(|agent, _| {
+    agent.model.value += 1;  // mutation
+    AgentReply::immediate()
+});
+
+// For read-only operations
+builder.act_on::<QueryMessage>(|agent, _| {
+    let value = agent.model.value;  // read-only
+    AgentReply::immediate()
+});
+```
 
 ## Getting Started: A Basic Example
 
@@ -69,9 +104,10 @@ Let's build a simple counter agent.
         let mut counter_builder = app.new_agent::<CounterAgent>().await;
         println!("Created agent builder for: {}", counter_builder.id());
 
-        // 6. Define Message Handlers using `act_on`
+        // 6. Define Message Handlers
+        // For state mutations, use mutate_on (sequential execution)
         counter_builder
-            .act_on::<IncrementMsg>(|agent, _context| {
+            .mutate_on::<IncrementMsg>(|agent, _context| {
                 // This code runs when the agent receives an IncrementMsg.
                 // We can safely mutate the agent's internal state (`model`).
                 agent.model.count += 1;
@@ -79,8 +115,10 @@ Let's build a simple counter agent.
                 // No async work needed here, return immediately.
                 AgentReply::immediate()
             })
+            // For read-only operations, use act_on (concurrent execution)
             .act_on::<PrintMsg>(|agent, _context| {
                 // This code runs when the agent receives a PrintMsg.
+                // This is a read-only operation - we only read the state
                 println!("Agent {}: Current count is {}", agent.id(), agent.model.count);
                 // We can also perform async operations within a handler.
                 AgentReply::from_async(async move {
