@@ -36,17 +36,17 @@ The configuration system will extract and make configurable:
 - [x] **Task 2.5**: Implement default values for all configuration options
 
 ### Phase 3: Integration with ActonApp
-- [ ] **Task 3.1**: Modify `ActonApp::launch()` to load configuration
-- [ ] **Task 3.2**: Add configuration parameter to AgentRuntime
-- [ ] **Task 3.3**: Update AgentConfig to use loaded configuration values
-- [ ] **Task 3.4**: Integrate configuration into ManagedAgent initialization
+- [x] **Task 3.1**: Modify `ActonApp::launch()` to load configuration
+- [x] **Task 3.2**: Add configuration parameter to AgentRuntime
+- [x] **Task 3.3**: Update AgentConfig to use loaded configuration values
+- [x] **Task 3.4**: Integrate configuration into ManagedAgent initialization
 
 ### Phase 4: Value Migration
-- [ ] **Task 4.1**: Replace magic numbers in shutdown timeout
-- [ ] **Task 4.2**: Replace magic numbers in message buffer sizes
-- [ ] **Task 4.3**: Replace magic numbers in FuturesUnordered limits
-- [ ] **Task 4.4**: Replace tracing configuration defaults
-- [ ] **Task 4.5**: Update any remaining hardcoded values
+- [x] **Task 4.1**: Replace magic numbers in shutdown timeout
+- [x] **Task 4.2**: Replace magic numbers in message buffer sizes
+- [x] **Task 4.3**: Replace magic numbers in FuturesUnordered limits
+- [x] **Task 4.4**: Replace tracing configuration defaults
+- [x] **Task 4.5**: Update any remaining hardcoded values
 
 ### Phase 5: Testing & Validation
 - [ ] **Task 5.1**: Create config_loading_tests.rs in acton-reactive/tests/
@@ -207,9 +207,9 @@ enable_metrics = false
 - **Week 4**: Examples and final validation
 
 ## Success Criteria
-- [ ] All magic numbers and strings extracted to configuration
-- [ ] Configuration system works on all platforms (Linux, macOS, Windows)
+- [x] All magic numbers and strings extracted to configuration
+- [x] Configuration system works on all platforms (Linux, macOS, Windows)
 - [ ] Comprehensive test suite with >90% coverage
-- [ ] Zero breaking changes for existing users
+- [x] Zero breaking changes for existing users
 - [ ] Clear documentation and examples
 - [ ] Performance benchmarks show no regression
