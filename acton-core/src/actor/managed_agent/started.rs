@@ -165,6 +165,14 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                     }
                                 }
                             }
+                            ReactorItem::FutureReactorReadOnly(_fut) => {
+                                // TODO: Implement concurrent read-only handler dispatch
+                                tracing::warn!("Read-only handler not yet implemented");
+                            }
+                            ReactorItem::FutureReactorReadOnlyResult(_fut) => {
+                                // TODO: Implement concurrent read-only handler dispatch with error handling
+                                tracing::warn!("Read-only fallible handler not yet implemented");
+                            }
                         }
                     } else if let Some(SystemSignal::Terminate) =
                         envelope.message.as_any().downcast_ref::<SystemSignal>()

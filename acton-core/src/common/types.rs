@@ -46,6 +46,10 @@ pub(crate) enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     FutureReactor(Box<FutureHandler<ActorEntity>>),
     /// A handler for a fallible operation that processes a message and returns a `Result` future.
     FutureReactorResult(Box<FutureHandlerResult<ActorEntity>>),
+    /// A handler for an infallible read-only operation that processes a message and returns a future.
+    FutureReactorReadOnly(Box<FutureHandlerReadOnly<ActorEntity>>),
+    /// A handler for a fallible read-only operation that processes a message and returns a `Result` future.
+    FutureReactorReadOnlyResult(Box<FutureHandlerReadOnlyResult<ActorEntity>>),
 }
 
 /// Crate-internal: Type alias for the function signature of a message handler
@@ -68,6 +72,24 @@ pub(crate) type FutureHandlerResult<ManagedEntity> = dyn for<'a, 'b> Fn(
     + Sync
     + 'static;
 
+/// A read-only handler that processes a message immutably and returns a future.
+pub(crate) type FutureHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(
+        &'a ManagedAgent<Started, ManagedEntity>,  // Read-only reference
+        &'b mut Envelope,
+    ) -> FutureBoxReadOnly
+    + Send
+    + Sync
+    + 'static;
+
+/// A fallible read-only handler that processes a message immutably and returns a `Result` future.
+pub(crate) type FutureHandlerReadOnlyResult<ManagedEntity> = dyn for<'a, 'b> Fn(
+        &'a ManagedAgent<Started, ManagedEntity>,  // Read-only reference
+        &'b mut Envelope,
+    ) -> FutureBoxReadOnlyResult
+    + Send
+    + Sync
+    + 'static;
+
 /// New: Handler for error types.
 pub(crate) type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a mut ManagedAgent<Started, ManagedEntity>,
@@ -83,8 +105,25 @@ pub(crate) type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
 /// This is the required return type for asynchronous message handlers (`act_on`).
 pub(crate) type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
+/// New: Box for read-only future-based handlers returning ().
+pub(crate) type FutureBoxReadOnly = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+
 /// New: Box for Future-based handlers returning Result.
 pub(crate) type FutureBoxResult = Pin<
+    Box<
+        dyn Future<
+                Output = Result<
+                    Box<dyn ActonMessageReply + Send>,
+                    (Box<dyn std::error::Error + Send + Sync>, TypeId),
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    >,
+>;
+
+/// New: Box for read-only Future-based handlers returning Result.
+pub(crate) type FutureBoxReadOnlyResult = Pin<
     Box<
         dyn Future<
                 Output = Result<
