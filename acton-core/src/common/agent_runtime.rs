@@ -21,11 +21,12 @@ use std::pin::Pin;
 use acton_ern::Ern;
 use futures::future::join_all;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, trace}; // Added error import
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
 use crate::common::acton_inner::ActonInner;
-use crate::common::{ActonApp, AgentBroker, AgentHandle, BrokerRef};
+use crate::common::{ActonApp, AgentBroker, AgentHandle, BrokerRef, ActonConfig};
 use crate::traits::AgentHandleInterface;
 
 /// Represents the initialized and active Acton agent system runtime.
@@ -232,7 +233,6 @@ impl AgentRuntime {
     /// An `anyhow::Result<()>` indicating whether the shutdown process completed successfully.
     /// Errors during the stopping of individual agents or the broker will be propagated.
     pub async fn shutdown_all(&mut self) -> anyhow::Result<()> {
-        use std::env;
         use std::time::Duration;
         use tokio::time::timeout as tokio_timeout;
 
@@ -252,10 +252,7 @@ impl AgentRuntime {
             })
             .collect();
 
-        let timeout_ms: u64 = env::var("ACTON_SYSTEM_SHUTDOWN_TIMEOUT_MS")
-            .ok()
-            .and_then(|val| val.parse().ok())
-            .unwrap_or(30_000);
+        let timeout_ms = self.0.config.system_shutdown_timeout().as_millis() as u64;
 
         trace!("Waiting for all agents to finish gracefully...");
         if tokio_timeout(Duration::from_millis(timeout_ms), join_all(stop_futures))
@@ -332,13 +329,14 @@ impl AgentRuntime {
 ///
 /// This implementation defines the system bootstrap process triggered by [`ActonApp::launch()`].
 /// It performs the following steps:
-/// 1. Spawns a background Tokio task dedicated to initializing the [`AgentBroker`].
-/// 2. Uses a `oneshot` channel to receive the `AgentHandle` of the initialized broker
+/// 1. Loads configuration from XDG-compliant locations using [`ActonConfig::load()`].
+/// 2. Spawns a background Tokio task dedicated to initializing the [`AgentBroker`].
+/// 3. Uses a `oneshot` channel to receive the `AgentHandle` of the initialized broker
 ///    back from the background task.
-/// 3. **Blocks the current thread** using `tokio::task::block_in_place` while waiting
+/// 4. **Blocks the current thread** using `tokio::task::block_in_place` while waiting
 ///    for the broker initialization to complete. This ensures that `ActonApp::launch()`
 ///    does not return until the core system components (like the broker) are ready.
-/// 4. Constructs the `AgentRuntime` using the received broker handle.
+/// 5. Constructs the `AgentRuntime` using the received broker handle and loaded configuration.
 ///
 /// **Warning**: The use of `block_in_place` means this conversion should typically
 /// only happen once at the very start of the application within the main thread
@@ -348,16 +346,30 @@ impl AgentRuntime {
 impl From<ActonApp> for AgentRuntime {
     fn from(_acton: ActonApp) -> Self {
         trace!("Starting Acton system initialization (From<ActonApp>)");
+        
+        // Load configuration from XDG-compliant locations
+        let config = ActonConfig::load();
+        trace!("Configuration loaded: {:?}", config);
+        
         let (sender, receiver) = oneshot::channel();
-        // We do this so the broker gets access to the cancellation token.
-        let mut runtime = AgentRuntime(ActonInner::default());
-        // Spawn broker initialization in a separate task.
+        
+        // Create runtime with loaded configuration
+        let mut runtime = AgentRuntime(ActonInner {
+            broker: Default::default(),
+            roots: Default::default(),
+            cancellation_token: CancellationToken::new(),
+            config,
+        });
+        
+        // Spawn broker initialization in a separate task
         let runtime_clone = runtime.clone();
+        
         // Assert that the cancellation_token is present in the clone before broker initialization
         assert!(
             !runtime_clone.0.cancellation_token.is_cancelled(),
             "ActonInner cancellation_token must be present and active before Broker initialization"
         );
+        
         tokio::spawn(async move {
             trace!("Broker initialization task started.");
             let broker = AgentBroker::initialize(runtime_clone).await;
@@ -366,7 +378,7 @@ impl From<ActonApp> for AgentRuntime {
         });
 
         trace!("Blocking current thread to wait for broker initialization...");
-        // Block until the broker handle is received.
+        // Block until the broker handle is received
         let broker = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(async { receiver.await.expect("Broker initialization failed") })
@@ -374,7 +386,7 @@ impl From<ActonApp> for AgentRuntime {
         trace!("Broker handle received, constructing AgentRuntime.");
         runtime.0.broker = broker;
 
-        // Create the runtime with the initialized broker.
+        // Create the runtime with the initialized broker and configuration
         runtime
     }
 }

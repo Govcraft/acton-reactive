@@ -15,6 +15,7 @@
  */
 
 use crate::common::AgentRuntime;
+use crate::common::ActonConfig;
 
 /// Represents the entry point for initializing the Acton agent system.
 ///
@@ -35,8 +36,9 @@ impl ActonApp {
     /// and creating the core runtime environment.
     ///
     /// The process involves:
-    /// 1. Creating a default `ActonApp` instance.
-    /// 2. Converting this instance into an [`AgentRuntime`] via the `From<ActonApp>` trait.
+    /// 1. Loading configuration from XDG-compliant locations using [`ActonConfig::load()`].
+    /// 2. Creating a default `ActonApp` instance.
+    /// 3. Converting this instance into an [`AgentRuntime`] via the `From<ActonApp>` trait.
     ///    This conversion triggers the actual initialization logic (e.g., broker setup)
     ///    defined within the `From` implementation for `AgentRuntime`.
     ///

@@ -18,13 +18,14 @@ use acton_ern::Ern;
 use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::{AgentHandle, BrokerRef};
+use crate::common::{AgentHandle, BrokerRef, ActonConfig};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActonInner {
     pub(crate) broker: BrokerRef,
     pub(crate) roots: DashMap<Ern, AgentHandle>,
     pub(crate) cancellation_token: CancellationToken,
+    pub(crate) config: ActonConfig,
 }
 
 impl Default for ActonInner {
@@ -33,6 +34,7 @@ impl Default for ActonInner {
             broker: Default::default(),
             roots: Default::default(),
             cancellation_token: CancellationToken::new(),
+            config: ActonConfig::default(),
         }
     }
 }
