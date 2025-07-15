@@ -21,6 +21,9 @@ dyn-clone = "1.0.17"
 derive-new = "0.7.0"
 acton-ern = "1.0.0"
 tracing-appender = "0.2.3"
+xdg = "2.5"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
 
 [dev-dependencies]
 dashmap = "6.1.0"
