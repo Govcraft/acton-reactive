@@ -93,8 +93,10 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
     pub(crate) before_stop: AsyncLifecycleHandler<Model>,
     /// Asynchronous hook executed after the agent stops its message loop.
     pub(crate) after_stop: AsyncLifecycleHandler<Model>,
-    /// Map storing registered message handlers (`TypeId` -> handler function).
+    /// Map storing registered mutable message handlers (`TypeId` -> handler function).
     pub(crate) message_handlers: ReactorMap<Model>,
+    /// Map storing registered read-only message handlers (`TypeId` -> handler function).
+    pub(crate) read_only_handlers: ReactorMap<Model>,
     /// Map storing registered error handlers (`TypeId` -> error handler closure, wrapped in Arc for clone safety).
     pub(crate) error_handler_map: std::collections::HashMap<
         (std::any::TypeId, std::any::TypeId),

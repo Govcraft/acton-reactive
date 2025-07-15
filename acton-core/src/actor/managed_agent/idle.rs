@@ -531,6 +531,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
             after_stop: value.after_stop,
             broker: value.broker,
             message_handlers: value.message_handlers,
+            read_only_handlers: value.read_only_handlers,
             error_handler_map: value.error_handler_map, // transfer error handlers
             cancellation_token: value.cancellation_token,
             _actor_state: Default::default(),
@@ -564,6 +565,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, Sta
             tracker: Default::default(),
             cancellation_token: Default::default(),
             message_handlers: Default::default(),
+            read_only_handlers: Default::default(),
             _actor_state: Default::default(),
         }
     }
