@@ -718,7 +718,9 @@ impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
 
 impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, State> {
     fn default() -> Self {
-        let (outbox, inbox) = channel(255); // Default channel size
+        use crate::common::config::CONFIG;
+        let capacity = CONFIG.limits.agent_inbox_capacity;
+        let (outbox, inbox) = channel(capacity);
         let id: Ern = Default::default();
         let mut handle: crate::common::AgentHandle = Default::default();
         handle.id = id.clone();

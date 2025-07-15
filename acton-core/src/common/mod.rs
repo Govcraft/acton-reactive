@@ -63,6 +63,6 @@ mod agent_runtime;
 /// Defines the `AgentReply` utility.
 mod agent_reply;
 /// Defines the configuration system for the Acton framework.
-mod config;
+pub mod config;
 
 // pub use crate::pool::LoadBalanceStrategy; // This seems unused currently

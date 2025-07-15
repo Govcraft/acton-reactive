@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use lazy_static::lazy_static;
 
 /// Configuration for the Acton Reactive framework
 /// 
@@ -253,4 +254,9 @@ impl ActonConfig {
             Err(_) => std::path::PathBuf::from("~/.config/acton"),
         }
     }
+}
+
+lazy_static! {
+    /// Global configuration instance loaded from XDG-compliant locations
+    pub static ref CONFIG: ActonConfig = ActonConfig::load();
 }

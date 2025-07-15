@@ -15,7 +15,6 @@
  */
 
 use crate::common::AgentRuntime;
-use crate::common::ActonConfig;
 
 /// Represents the entry point for initializing the Acton agent system.
 ///

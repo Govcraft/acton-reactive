@@ -24,6 +24,7 @@ use tracing::{instrument, trace}; // Removed unused error import
 
 use crate::actor::ManagedAgent;
 use crate::common::{Envelope, OutboundEnvelope, ReactorItem, ReactorMap};
+use crate::common::config::CONFIG;
 use crate::message::{BrokerRequestEnvelope, MessageAddress, SystemSignal};
 use crate::traits::AgentHandleInterface;
 
@@ -106,10 +107,11 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
         let mut _terminate_signal_received = false;
 
+        use crate::common::config::CONFIG;
         // Concurrent execution buffer for read-only handlers
         let mut read_only_futures = FuturesUnordered::new();
-        let high_water_mark = 100; // Maximum concurrent read-only handlers
-        let max_wait_duration = Duration::from_millis(10); // Maximum wait time before flush
+        let high_water_mark = CONFIG.limits.concurrent_handlers_high_water_mark;
+        let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush_ms);
         let mut last_flush_time = Instant::now();
 
         loop {
@@ -297,14 +299,10 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     async fn terminate(&mut self) {
         trace!("Terminating children for agent: {}", self.id());
         // Stop all child agents concurrently.
-        use std::env;
         use std::time::Duration;
         use tokio::time::timeout as tokio_timeout;
 
-        let timeout_ms: u64 = env::var("ACTON_AGENT_SHUTDOWN_TIMEOUT_MS")
-            .ok()
-            .and_then(|val| val.parse().ok())
-            .unwrap_or(10_000);
+        let timeout_ms = CONFIG.timeouts.agent_shutdown_timeout_ms as u64;
 
         let stop_futures: Vec<_> = self
             .handle

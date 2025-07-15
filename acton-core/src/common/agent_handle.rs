@@ -75,7 +75,10 @@ impl Default for AgentHandle {
     /// and no parent, broker, or children. It's primarily used as a starting point
     /// before being properly configured when a `ManagedAgent` is created.
     fn default() -> Self {
-        let (outbox, _) = mpsc::channel(1); // Create a dummy channel
+        use crate::common::config::CONFIG;
+        
+        let dummy_channel_size = CONFIG.limits.dummy_channel_size;
+        let (outbox, _) = mpsc::channel(dummy_channel_size); // Create a dummy channel
         AgentHandle {
             id: Ern::default(),
             outbox,
