@@ -52,7 +52,7 @@ impl PriceService {
         let mut price_service_builder = runtime.new_agent_with_config::<PriceService>(config).await;
 
         // Configure the agent's message handler for `ItemScanned` messages.
-        price_service_builder.act_on::<ItemScanned>(|agent, envelope| {
+        price_service_builder.mutate_on::<ItemScanned>(|agent, envelope| {
             // Clone the item from the incoming message envelope.
             let item = envelope.message().0.clone();
             // Clone the agent's state (PriceService is a unit struct, but this pattern is common).

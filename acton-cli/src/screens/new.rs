@@ -49,7 +49,7 @@ impl NewScreen {
             let _ = stdout.flush();
             AgentReply::immediate()
         })
-            .act_on::<MenuMoveDown>(|agent, _context| {
+            .mutate_on::<MenuMoveDown>(|agent, _context) {
                 trace!(" MenuMoveDown");
                 let len = agent.model.menu.len();
                 if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
@@ -60,7 +60,7 @@ impl NewScreen {
                 agent.model.Paint();
                 AgentReply::immediate()
             })
-            .act_on::<MenuMoveUp>(|agent, _context| {
+            .mutate_on::<MenuMoveUp>(|agent, _context) {
                 trace!(" MenuMoveUp");
                 let len = agent.model.menu.len();
                 if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {

@@ -49,7 +49,7 @@ impl HomeScreen {
             let _ = stdout.flush();
             AgentReply::immediate()
         })
-            .act_on::<MenuMoveDown>(|agent, _context| {
+            .mutate_on::<MenuMoveDown>(|agent, _context| {
                 trace!(" MenuMoveDown");
                 let len = agent.model.menu.len();
                 if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
@@ -60,7 +60,7 @@ impl HomeScreen {
                 agent.model.paint();
                 AgentReply::immediate()
             })
-            .act_on::<MenuMoveUp>(|agent, _context| {
+            .mutate_on::<MenuMoveUp>(|agent, _context| {
                 trace!(" MenuMoveUp");
                 let len = agent.model.menu.len();
                 if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
@@ -71,7 +71,7 @@ impl HomeScreen {
                 agent.model.paint();
                 AgentReply::immediate()
             })
-            .act_on::<MenuSelect>(|agent, context| {
+            .mutate_on::<MenuSelect>(|agent, context| {
                 //use debug to print the selected menu item label
                 debug!(" MenuSelect: {:?}", agent.model.menu.iter().find(|item| item.selected).unwrap().label);
                 AgentReply::immediate()

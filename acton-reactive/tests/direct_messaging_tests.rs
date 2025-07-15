@@ -104,7 +104,7 @@ impl PriceService {
         // Configure the agent's behavior.
         price_service_builder
             // Handler for `Pong` messages (sent by ShoppingCart).
-            .act_on::<Pong>(|_agent, envelope| {
+            .mutate_on::<Pong>(|_agent, envelope| {
                 trace!("Received Pong");
                 // Get an envelope pre-addressed to reply to the sender of the incoming `Pong` message.
                 let reply_envelope = envelope.reply_envelope();
@@ -137,7 +137,7 @@ impl ShoppingCart {
         // Configure agent behavior
         shopping_cart_builder
             // Handler for `Ping` messages (sent by the `trigger` method).
-            .act_on::<Ping>(|agent, envelope| {
+            .mutate_on::<Ping>(|agent, envelope| {
                 // Get a reference to the PriceService handle stored in the agent's state.
                 let price_service_handle_ref = &agent.model.price_service_handle;
                 // Create a new envelope specifically addressed to the PriceService agent.
@@ -152,7 +152,7 @@ impl ShoppingCart {
                 })
             })
             // Handler for `PongResponse` messages (replies from PriceService).
-            .act_on::<PongResponse>(|_agent, envelope| {
+            .mutate_on::<PongResponse>(|_agent, envelope| {
                 // Extract the price from the message content.
                 let price = envelope.message().0;
                 // Assert that the received price is correct.

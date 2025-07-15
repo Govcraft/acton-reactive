@@ -41,7 +41,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
     // Result-based handler for Ping
     agent_builder
-        .act_on_fallible::<Ping, (), TestErr>(|_agent, _msg_ctx| Box::pin(async { Err(TestErr) }))
+        .mutate_on_fallible::<Ping, (), TestErr>(|_agent, _msg_ctx| Box::pin(async { Err(TestErr) }))
         .on_error::<Ping, TestErr>(|agent, _env, _err| {
             agent.model.errored = Some(true);
             AgentReply::immediate()
@@ -49,7 +49,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
     // Result-based handler for Tally triggers TestErr2
     agent_builder
-        .act_on_fallible::<Tally, (), TestErr2>(|_agent, _msg_ctx| {
+        .mutate_on_fallible::<Tally, (), TestErr2>(|_agent, _msg_ctx| {
             println!("Ping handler for Tally fired!");
             Box::pin(async { Err(TestErr2) })
         })
@@ -93,7 +93,7 @@ async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
 
     // A fallible handler that returns a value on success
     agent_builder
-        .act_on_fallible::<Increment, usize, TestErr>(|agent, _msg_ctx| {
+        .mutate_on_fallible::<Increment, usize, TestErr>(|agent, _msg_ctx| {
             agent.model.count += 1;
             let current_count = agent.model.count;
             Box::pin(async move { Ok(current_count) })

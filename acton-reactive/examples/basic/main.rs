@@ -51,12 +51,12 @@ async fn main() {
     //    It returns a builder (`ManagedAgent` in the `Idle` state) which we use to configure the agent.
     let mut agent_builder = runtime.new_agent::<BasicAgentState>().await;
 
-    // 3. Configure the agent's behavior by defining message handlers using `act_on`.
+    // 3. Configure the agent's behavior by defining message handlers using `mutate_on`.
     agent_builder
         // Define a handler for `PingMsg`.
         // The closure receives the `ManagedAgent` (giving access to `model` and `handle`)
         // and the incoming message `envelope`.
-        .act_on::<PingMsg>(|agent, envelope| {
+        .mutate_on::<PingMsg>(|agent, envelope| {
             println!("Pinged. You can mutate me!");
             // Access and modify the agent's internal state (`model`).
             agent.model.some_state += 1;
@@ -72,7 +72,7 @@ async fn main() {
             })
         })
         // Define a handler for `PongMsg`.
-        .act_on::<PongMsg>(|agent, _envelope| {
+        .mutate_on::<PongMsg>(|agent, _envelope| {
             println!("I got ponged!");
             agent.model.some_state += 1;
 
@@ -87,7 +87,7 @@ async fn main() {
             })
         })
         // Define a handler for `BuhByeMsg`.
-        .act_on::<BuhByeMsg>(|_agent, _envelope| {
+        .mutate_on::<BuhByeMsg>(|_agent, _envelope| {
             println!("Thanks for all the fish! Buh Bye!");
             // If a handler doesn't need to perform async work or reply,
             // `AgentReply::immediate()` signifies immediate completion.

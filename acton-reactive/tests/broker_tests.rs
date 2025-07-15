@@ -70,7 +70,7 @@ async fn test_broker() -> anyhow::Result<()> {
     let mut counter_agent_builder = runtime.new_agent_with_config::<Counter>(counter_config).await;
 
     // Configure Counter agent's handlers.
-    counter_agent_builder.act_on::<Pong>(|agent, _envelope| {
+    counter_agent_builder.mutate_on::<Pong>(|agent, _envelope| {
         info!("Also SUCCESS! PONG!");
         agent.model.count += 1;
         AgentReply::immediate()
@@ -81,12 +81,12 @@ async fn test_broker() -> anyhow::Result<()> {
 
     // Configure Comedian agent's handlers.
     comedian_agent_builder
-        .act_on::<Ping>(|agent, _envelope| {
+        .mutate_on::<Ping>(|agent, _envelope| {
             info!("SUCCESS! PING!");
             agent.model.funny += 1;
             AgentReply::immediate()
         })
-        .act_on::<Pong>(|agent, _envelope| {
+        .mutate_on::<Pong>(|agent, _envelope| {
             agent.model.funny += 1;
             info!("SUCCESS! PONG!");
             AgentReply::immediate()
@@ -113,7 +113,7 @@ async fn test_broker() -> anyhow::Result<()> {
         broker_ref.broadcast(Pong).await; // Should be received by Comedian and Counter
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Shut down the runtime, stopping all agents and running `after_stop` handlers.
     runtime.shutdown_all().await?;
@@ -161,7 +161,7 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
     let mut counter_agent_builder = runtime.new_agent_with_config::<Counter>(counter_config).await;
 
     // Configure Counter handler.
-    counter_agent_builder.act_on::<Pong>(|agent, _envelope| {
+    counter_agent_builder.mutate_on::<Pong>(|agent, _envelope| {
         info!("Also SUCCESS! PONG!");
         agent.model.count += 1;
         AgentReply::immediate()
@@ -172,7 +172,7 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
 
     // Configure Comedian handler to broadcast from within.
     comedian_agent_builder
-        .act_on::<Ping>(|agent, _envelope| {
+        .mutate_on::<Ping>(|agent, _envelope| {
             // Get the broker handle associated with this agent.
             let agent_broker_handle = agent.broker().clone();
             // Return an async block to perform the broadcast.

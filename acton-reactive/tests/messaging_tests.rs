@@ -55,7 +55,7 @@ async fn test_messaging_behavior() -> anyhow::Result<()> {
     // Configure the agent's behavior.
     pool_item_agent_builder
         // Handler for `Ping` messages.
-        .act_on::<Ping>(|agent, _envelope| {
+        .mutate_on::<Ping>(|agent, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in sync handler");
             // Mutate the agent's internal state.
@@ -102,7 +102,7 @@ async fn test_basic_messenger() -> anyhow::Result<()> {
     // Configure the agent's behavior.
     messenger_agent_builder
         // Handler for `Ping` messages.
-        .act_on::<Ping>(|_agent, _envelope| {
+        .mutate_on::<Ping>(|_agent, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in Messenger handler");
             AgentReply::immediate()
@@ -146,7 +146,7 @@ async fn test_async_messaging_behavior() -> anyhow::Result<()> {
     pool_item_agent_builder
         // Handler for `Ping` messages. Although the test name suggests async,
         // this handler currently returns `AgentReply::immediate()`.
-        .act_on::<Ping>(|agent, _envelope| {
+        .mutate_on::<Ping>(|agent, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in async handler");
             agent.model.receive_count += 1;

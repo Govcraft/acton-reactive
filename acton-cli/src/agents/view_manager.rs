@@ -16,21 +16,21 @@ impl ViewManager {
         let mut agent = runtime.new_agent::<ViewManager>().await;
         let mut runtime = agent.runtime().clone();
         agent
-            .act_on::<MenuMoveUp>(|agent, context| {
+            .mutate_on::<MenuMoveUp>(|agent, context| {
                 let view = agent.model.active.clone();
                 let msg = context.message().clone();
                 AgentReply::from_async(async move {
                     view.send(msg).await;
                 })
             })
-            .act_on::<MenuMoveDown>(|agent, context| {
+            .mutate_on::<MenuMoveDown>(|agent, context| {
                 let view = agent.model.active.clone();
                 let msg = context.message().clone();
                 AgentReply::from_async(async move {
                     view.send(msg).await;
                 })
             })
-            .act_on::<MenuSelect>(|agent, context| {
+            .mutate_on::<MenuSelect>(|agent, context| {
                 let view = agent.model.active.clone();
                 let msg = context.message().clone();
                 AgentReply::from_async(async move {

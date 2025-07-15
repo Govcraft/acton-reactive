@@ -96,7 +96,7 @@ async fn main() {
     // 3. Configure the DataCollector agent.
     data_collector_builder
         // Handler for `NewData` messages.
-        .act_on::<NewData>(|agent, envelope| {
+        .mutate_on::<NewData>(|agent, envelope| {
             // Add the received data point to internal state.
             agent.model.data_points.push(envelope.message().0);
 
@@ -116,7 +116,7 @@ async fn main() {
     // 4. Configure the Aggregator agent.
     aggregator_builder
         // Handler for `NewData` messages.
-        .act_on::<NewData>(|agent, envelope| {
+        .mutate_on::<NewData>(|agent, envelope| {
             // Add the received data to the running sum.
             agent.model.sum += envelope.message().0;
 
@@ -144,7 +144,7 @@ async fn main() {
     // 5. Configure the Printer agent.
     printer_builder
         // Handler for `StatusUpdate` messages (broadcast by other agents).
-        .act_on::<StatusUpdate>(|agent, envelope| {
+        .mutate_on::<StatusUpdate>(|agent, envelope| {
             // Use crossterm to print formatted/colored output based on the message variant.
             match &envelope.message() {
                 StatusUpdate::Ready(who, what) => {

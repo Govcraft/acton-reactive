@@ -56,7 +56,7 @@ async fn main() {
             AgentReply::immediate()
         })
         // Handler for `AddItem` messages.
-        .act_on::<AddItem>(|agent, envelope| {
+        .mutate_on::<AddItem>(|agent, envelope| {
             let item = &envelope.message().0;
             println!("Adding item: {item}");
             // Mutate the agent's internal state.
@@ -64,7 +64,7 @@ async fn main() {
             AgentReply::immediate()
         })
         // Handler for `GetItems` messages.
-        .act_on::<GetItems>(|agent, _| {
+        .mutate_on::<GetItems>(|agent, _| {
             println!("Fetching items... please wait!");
             // Clone the items list to move it into the async block.
             let items = agent.model.items.clone();

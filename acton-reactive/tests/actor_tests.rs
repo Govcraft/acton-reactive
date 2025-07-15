@@ -66,12 +66,12 @@ async fn test_async_reactor() -> anyhow::Result<()> {
         .new_agent_with_config::<Comedian>(agent_config)
         .await;
 
-    // Configure the agent's behavior by defining message handlers using `act_on`.
+    // Configure the agent's behavior by defining message handlers using `mutate_on`.
     comedian_agent_builder
         // Define a handler for messages of type `FunnyJoke`.
         // The closure receives the `ManagedAgent` (giving access to `model` and `handle`)
         // and the incoming message `envelope`.
-        .act_on::<FunnyJoke>(|agent, _envelope| {
+        .mutate_on::<FunnyJoke>(|agent, _envelope| {
             // Mutate the agent's internal state (`model`).
             agent.model.jokes_told += 1;
             // Clone the agent's handle. Handles are cheap to clone and allow interaction
@@ -86,7 +86,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
             })
         })
         // Define a handler for `AudienceReactionMsg` messages.
-        .act_on::<AudienceReactionMsg>(|agent, envelope| {
+        .mutate_on::<AudienceReactionMsg>(|agent, envelope| {
             trace!("Received Audience Reaction");
             // Access the message content from the envelope.
             match envelope.message() {
@@ -97,7 +97,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
             AgentReply::immediate()
         })
         // Define a handler for `Ping` messages (sent from the FunnyJoke handler).
-        .act_on::<Ping>(|_agent, _envelope| {
+        .mutate_on::<Ping>(|_agent, _envelope| {
             trace!("PING");
             AgentReply::immediate()
         })
@@ -163,7 +163,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
     let mut counter_agent_builder = runtime.new_agent::<Counter>().await;
     counter_agent_builder
         // Handler for `Tally` messages.
-        .act_on::<Tally>(|agent, _envelope| {
+        .mutate_on::<Tally>(|agent, _envelope| {
             info!("on tally");
             // Increment the internal counter.
             agent.model.count += 1;
@@ -201,7 +201,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
         });
 
     // Start the messenger agent.
-    let messenger_handle = messenger_agent_builder.start().await;
+    let _messenger_handle = messenger_agent_builder.start().await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     // Stop both agents.
@@ -260,7 +260,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
     // Configure the child agent's behavior.
     child_agent_builder
         // Handler for `Ping` messages.
-        .act_on::<Ping>(|agent, envelope| {
+        .mutate_on::<Ping>(|agent, envelope| {
             match envelope.message() {
                 Ping => {
                     // Increment the child's internal counter.
@@ -419,7 +419,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     // Configure agent behavior.
     comedian_agent_builder
         // Handler for `FunnyJoke` messages.
-        .act_on::<FunnyJoke>(|agent, envelope| {
+        .mutate_on::<FunnyJoke>(|agent, envelope| {
             // Mutate state: increment jokes_told count.
             agent.model.jokes_told += 1;
             // Create a new envelope targeted back at this agent's address.
@@ -444,7 +444,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
             })
         })
         // Handler for `AudienceReactionMsg` (sent from the FunnyJoke handler above).
-        .act_on::<AudienceReactionMsg>(|agent, envelope| {
+        .mutate_on::<AudienceReactionMsg>(|agent, envelope| {
             // Mutate state based on the reaction message content.
             match envelope.message() {
                 AudienceReactionMsg::Chuckle => agent.model.funny += 1,
@@ -516,7 +516,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     let mut parent_agent_builder = runtime.new_agent::<Comedian>().await;
 
     // Configure the parent's message handler for `FunnyJokeFor`.
-    parent_agent_builder.act_on::<FunnyJokeFor>(|agent, envelope| {
+    parent_agent_builder.mutate_on::<FunnyJokeFor>(|agent, envelope| {
         // Extract the child ID from the incoming message.
         if let FunnyJokeFor::ChickenCrossesRoad(child_id) = envelope.message().clone() {
             info!("Got a funny joke for {}", &child_id);
@@ -565,7 +565,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     );
 
     // Configure the child's message handler for `Ping`.
-    child_agent_builder.act_on::<Ping>(|agent, _envelope| {
+    child_agent_builder.mutate_on::<Ping>(|agent, _envelope| {
         info!("Child {} received Ping from parent agent", agent.id());
         AgentReply::immediate()
     });

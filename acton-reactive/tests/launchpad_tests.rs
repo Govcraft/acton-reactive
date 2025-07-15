@@ -96,7 +96,7 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
                         // This async block is the setup function for the child agent.
                         Box::pin(async move {
                             // Configure child's Pong handler.
-                            child_builder.act_on::<Pong>(|_agent, _envelope| {
+                            child_builder.mutate_on::<Pong>(|_agent, _envelope| {
                                 info!("CHILD SUCCESS! PONG!");
                                 AgentReply::immediate()
                             });
@@ -113,12 +113,12 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
                 
                 // Configure parent's handlers.
                 parent_builder
-                    .act_on::<Ping>(|_agent, _envelope| {
+                    .mutate_on::<Ping>(|_agent, _envelope| {
                         info!("SUCCESS! PING!");
                         AgentReply::immediate()
                     })
                     // Pong handler includes an async delay.
-                    .act_on::<Pong>(|_agent, _envelope| AgentReply::from_async(wait_and_respond()));
+                    .mutate_on::<Pong>(|_agent, _envelope| AgentReply::from_async(wait_and_respond()));
 
                 // Subscribe parent to messages using its builder handle.
                 let parent_builder_handle = &parent_builder.handle().clone();
@@ -181,11 +181,11 @@ async fn test_launchpad() -> anyhow::Result<()> {
             // Setup closure for Comedian.
             Box::pin(async move {
                 agent_builder
-                    .act_on::<Ping>(|_agent, _envelope| {
+                    .mutate_on::<Ping>(|_agent, _envelope| {
                         info!("SUCCESS! PING!");
                         AgentReply::immediate()
                     })
-                    .act_on::<Pong>(|_agent, _envelope| {
+                    .mutate_on::<Pong>(|_agent, _envelope| {
                         Box::pin(async move {
                             info!("SUCCESS! PONG!");
                         })
@@ -203,7 +203,7 @@ async fn test_launchpad() -> anyhow::Result<()> {
         .spawn_agent::<Counter>(|mut agent_builder| {
             // Setup closure for Counter.
             Box::pin(async move {
-                agent_builder.act_on::<Pong>(|_agent, _envelope| {
+                agent_builder.mutate_on::<Pong>(|_agent, _envelope| {
                     Box::pin(async move {
                         info!("SUCCESS! PONG!");
                     })

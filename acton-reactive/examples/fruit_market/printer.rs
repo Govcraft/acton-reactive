@@ -206,7 +206,7 @@ impl Printer {
         // Configure message handlers.
         printer_builder
             // Handler for `PriceRequest`: Adds a loader entry for the item if not present.
-            .act_on::<PriceRequest>(|agent, context| {
+            .mutate_on::<PriceRequest>(|agent, context| {
                 let item = context.message().0.clone();
                 trace!("PriceRequest: {}", item.name());
 
@@ -245,7 +245,7 @@ impl Printer {
                 }
             })
             // Handler for `PriceResponse`: Updates or inserts the item with its price.
-            .act_on::<PriceResponse>(|agent, context| {
+            .mutate_on::<PriceResponse>(|agent, context| {
                 let new_item = context.message().item.clone();
                 trace!("PriceResponse: {}", new_item.name());
 
@@ -293,7 +293,7 @@ impl Printer {
                 })
             })
             // Handler for `ToggleHelp`: Flips the show_help flag and repaints.
-            .act_on::<ToggleHelp>(|agent, _context| {
+            .mutate_on::<ToggleHelp>(|agent, _context| {
                 agent.model.show_help = !agent.model.show_help;
                 // Trigger repaint
                 let self_handle = agent.handle().clone();
@@ -302,7 +302,7 @@ impl Printer {
                 })
             })
             // Handler for `PrinterMessage::Repaint`: Performs the actual repaint.
-            .act_on::<PrinterMessage>(|agent, _context| {
+            .mutate_on::<PrinterMessage>(|agent, _context| {
                 // Perform the repaint logic. This requires mutable access to stdout.
                 // Since handlers only get immutable access to the agent state (model),
                 // we cannot directly call `Self::repaint` which needs `&mut agent.model.out`.
