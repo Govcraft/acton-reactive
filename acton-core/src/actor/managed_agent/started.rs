@@ -18,6 +18,7 @@ use std::any::type_name_of_val;
 use std::fmt::Debug;
 
 use futures::future::join_all;
+// use futures::stream::StreamExt;  // Not currently used
 use tracing::{instrument, trace}; // Removed unused error import
 
 use crate::actor::ManagedAgent;
@@ -87,8 +88,12 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
     // wake() and terminate() are internal implementation details (`pub(crate)` or private)
     // and do not require public documentation.
-    #[instrument(skip(reactors, self))]
-    pub(crate) async fn wake(&mut self, reactors: ReactorMap<Agent>) {
+    #[instrument(skip(mutable_reactors, read_only_reactors, self))]
+    pub(crate) async fn wake(
+        &mut self, 
+        mutable_reactors: ReactorMap<Agent>,
+        read_only_reactors: ReactorMap<Agent>
+    ) {
         (self.after_start)(self).await;
         // Assert that cancellation_token always exists; it must never be missing.
         assert!(
@@ -139,7 +144,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                     }
 
                     // Dispatch to registered handler or handle system signals
-                    if let Some(reactor) = reactors.get(&type_id) {
+                    if let Some(reactor) = mutable_reactors.get(&type_id) {
                         match reactor.value() {
                             ReactorItem::FutureReactor(fut) => {
                                 // Legacy handler: await, always Ok
@@ -165,13 +170,41 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                     }
                                 }
                             }
-                            ReactorItem::FutureReactorReadOnly(_fut) => {
-                                // TODO: Implement concurrent read-only handler dispatch
-                                tracing::warn!("Read-only handler not yet implemented");
+                            ReactorItem::FutureReactorReadOnly(_) => {
+                                // This should not happen - read-only handlers should be in read_only_reactors
+                                tracing::warn!("Found read-only handler in mutable_reactors map");
                             }
-                            ReactorItem::FutureReactorReadOnlyResult(_fut) => {
-                                // TODO: Implement concurrent read-only handler dispatch with error handling
-                                tracing::warn!("Read-only fallible handler not yet implemented");
+                            ReactorItem::FutureReactorReadOnlyResult(_) => {
+                                // This should not happen - read-only handlers should be in read_only_reactors
+                                tracing::warn!("Found read-only Result handler in mutable_reactors map");
+                            }
+                        }
+                    } else if let Some(reactor) = read_only_reactors.get(&type_id) {
+                        match reactor.value() {
+                            ReactorItem::FutureReactorReadOnly(fut) => {
+                                // Concurrent read-only handler: spawn and run concurrently
+                                let fut = fut(self, &mut envelope);
+                                tokio::spawn(async move {
+                                    fut.await;
+                                });
+                            }
+                            ReactorItem::FutureReactorReadOnlyResult(fut) => {
+                                // Concurrent read-only handler with error handling: spawn and run concurrently
+                                let fut = fut(self, &mut envelope);
+                                tokio::spawn(async move {
+                                    if let Err((err, _error_type_id)) = fut.await {
+                                        // Note: Error handling for read-only handlers is not supported
+                                        // as we don't have access to the agent for error handlers
+                                        tracing::error!(
+                                            "Unhandled error from read-only message handler: {:?}",
+                                            err
+                                        );
+                                    }
+                                });
+                            }
+                            _ => {
+                                // This should not happen - mutable handlers should be in mutable_reactors
+                                tracing::warn!("Found mutable handler in read_only_reactors map");
                             }
                         }
                     } else if let Some(SystemSignal::Terminate) =

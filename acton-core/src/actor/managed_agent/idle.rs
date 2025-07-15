@@ -631,6 +631,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         // Take ownership of handlers before converting state.
         let message_handlers = mem::take(&mut self.message_handlers);
+        let read_only_handlers = mem::take(&mut self.read_only_handlers);
         let actor_ref = self.handle.clone(); // Clone handle before consuming self.
 
         // Convert the agent to the Started state.
@@ -644,7 +645,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         trace!("Spawning main task (wake) for agent: {}", actor.id());
         // Spawn the main message processing loop.
-        actor_ref.tracker().spawn(actor.wake(message_handlers));
+        actor_ref.tracker().spawn(actor.wake(message_handlers, read_only_handlers));
         // Close the tracker to indicate the main task is launched.
         actor_ref.tracker().close();
 
