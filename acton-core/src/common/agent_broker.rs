@@ -104,7 +104,7 @@ impl AgentBroker {
 
         // Configure the broker agent's message handlers.
         broker_agent
-            .act_on::<BrokerRequest>(|agent, event| {
+            .mutate_on::<BrokerRequest>(|agent, event| {
                 // Handler for broadcast requests.
                 trace!(message_type = ?event.message.message_type_id, "Broker received BrokerRequest");
                 let subscribers = agent.model.subscribers.clone(); // Clone Arc<DashMap>

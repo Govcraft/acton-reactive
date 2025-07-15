@@ -36,7 +36,7 @@ use crate::traits::AgentHandleInterface;
 /// Type-state marker for a [`ManagedAgent`] that has been configured but not yet started.
 ///
 /// When a `ManagedAgent` is in the `Idle` state, it can be configured with message handlers
-/// (via [`ManagedAgent::act_on`]) and lifecycle hooks (e.g., [`ManagedAgent::before_start`],
+/// (via [`ManagedAgent::mutate_on`]) and lifecycle hooks (e.g., [`ManagedAgent::before_start`],
 /// [`ManagedAgent::after_stop`]). Once configuration is complete, the agent can be
 /// transitioned to the [`Started`](super::started::Started) state by calling [`ManagedAgent::start`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
@@ -69,7 +69,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     ///
     /// Returns a mutable reference to `self` to allow for method chaining during configuration.
     #[instrument(skip(self, message_processor), level = "debug")]
-    pub fn act_on<M>(
+    pub fn mutate_on<M>(
         &mut self,
         message_processor: impl for<'a> Fn(&'a mut ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> FutureBox
             + Send
@@ -80,7 +80,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         M: ActonMessage + Clone + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<M>();
-        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding legacy message handler (will be deprecated)");
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding mutable message handler");
         let handler_box = Box::new(
             move |actor: &mut ManagedAgent<Started, State>, envelope: &mut Envelope| -> FutureBox {
                 if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
@@ -192,8 +192,184 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             .insert((message_type_id, error_type_id), handler_box);
         self
     }
-    /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
+
+    /// Registers an asynchronous read-only message handler for a specific message type `M`.
+    ///
+    /// This method is called during the agent's configuration phase (while in the `Idle` state).
+    /// It associates a specific message type `M` with a closure (`message_processor`) that
+    /// will be executed when the agent receives a message of that type after it has started.
+    ///
+    /// Unlike `mutate_on`, handlers registered with `act_on` operate on an immutable reference
+    /// to the agent (`&ManagedAgent`) and can be executed concurrently with other read-only handlers.
+    /// Message ordering is not guaranteed for read-only handlers.
+    ///
+    /// # Type Parameters
+    ///
+    /// *   `M`: The concrete message type this handler will process. Must implement
+    ///     [`ActonMessage`], `Clone`, `Send`, `Sync`, and be `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// *   `message_processor`: An asynchronous closure that takes the agent (`&ManagedAgent<Started, State>`)
+    ///     and the message context (`&mut MessageContext<M>`) and returns a `Future`
+    ///     (specifically, a [`FutureBox`]). This closure contains the logic for handling messages of type `M`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a mutable reference to `self` to allow for method chaining during configuration.
+    #[instrument(skip(self, message_processor), level = "debug")]
+    pub fn act_on<M>(
+        &mut self,
+        message_processor: impl for<'a> Fn(&'a ManagedAgent<Started, State>, &'a mut MessageContext<M>) -> FutureBox
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self
+    where
+        M: ActonMessage + Clone + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<M>();
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding read-only message handler");
+        let handler_box = Box::new(
+            move |actor: &ManagedAgent<Started, State>, envelope: &mut Envelope| -> FutureBox {
+                if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
+                    trace!(
+                        "Downcast successful for message type: {}",
+                        std::any::type_name::<M>()
+                    );
+                    let mut msg_context = {
+                        let origin_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.reply_to.clone(),
+                            envelope.recipient.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        let reply_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.recipient.clone(),
+                            envelope.reply_to.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        MessageContext {
+                            message: concrete_msg.clone(),
+                            timestamp: envelope.timestamp,
+                            origin_envelope,
+                            reply_envelope,
+                        }
+                    };
+                    message_processor(actor, &mut msg_context)
+                } else {
+                    error!(
+                        type_name = std::any::type_name::<M>(),
+                        "Read-only message handler called with incompatible message type (downcast failed)"
+                    );
+                    Box::pin(async {})
+                }
+            },
+        );
+        self.read_only_handlers
+            .insert(type_id, ReactorItem::FutureReactorReadOnly(handler_box));
+        self
+    }
+    /// Registers an asynchronous read-only message handler for a specific message type `M` that returns a Result.
+    ///
+    /// This method is called during the agent's configuration phase (while in the `Idle` state).
+    /// It associates a specific message type `M` with a closure (`message_processor`) that
+    /// will be executed when the agent receives a message of that type after it has started.
+    ///
+    /// Unlike `mutate_on_fallible`, handlers registered with `act_on_fallible` operate on an immutable reference
+    /// to the agent (`&ManagedAgent`) and can be executed concurrently with other read-only handlers.
+    /// Message ordering is not guaranteed for read-only handlers.
+    ///
+    /// # Type Parameters
+    ///
+    /// *   `M`: The concrete message type this handler will process. Must implement
+    ///     [`ActonMessage`], `Clone`, `Send`, `Sync`, and be `'static`.
+    /// *   `T`: The success type returned by the handler. Must implement [`ActonMessageReply`] and be `'static`.
+    /// *   `E`: The error type returned by the handler. Must implement [`std::error::Error`] and be `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// *   `message_processor`: An asynchronous closure that takes the agent (`&ManagedAgent<Started, State>`)
+    ///     and the message context (`&mut MessageContext<M>`) and returns a `Future`
+    ///     (specifically, a [`FutureBoxResult`]). This closure contains the logic for handling messages of type `M`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a mutable reference to `self` to allow for method chaining during configuration.
+    #[instrument(skip(self, message_processor), level = "debug")]
     pub fn act_on_fallible<M, T, E>(
+        &mut self,
+        message_processor: impl for<'a> Fn(
+                &'a ManagedAgent<Started, State>,
+                &'a mut MessageContext<M>,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<T, E>> + Send + Sync + 'static>,
+            > + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self
+    where
+        M: ActonMessage + Clone + Send + Sync + 'static,
+        T: ActonMessageReply + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<M>();
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding read-only Result-returning message handler");
+        let handler_box = Box::new(
+            move |actor: &ManagedAgent<Started, State>,
+                  envelope: &mut Envelope|
+                  -> crate::common::FutureBoxResult {
+                if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
+                    trace!(
+                        "Downcast successful for message type: {}",
+                        std::any::type_name::<M>()
+                    );
+                    let mut msg_context = {
+                        let origin_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.reply_to.clone(),
+                            envelope.recipient.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        let reply_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.recipient.clone(),
+                            envelope.reply_to.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        MessageContext {
+                            message: concrete_msg.clone(),
+                            timestamp: envelope.timestamp,
+                            origin_envelope,
+                            reply_envelope,
+                        }
+                    };
+                    let fut = message_processor(actor, &mut msg_context);
+                    Box::pin(async move {
+                        match fut.await {
+                            Ok(val) => Ok(Box::new(val) as Box<dyn ActonMessageReply + Send>),
+                            Err(e) => {
+                                let error_type_id = TypeId::of::<E>();
+                                Err((
+                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>,
+                                    error_type_id,
+                                ))
+                            }
+                        }
+                    })
+                } else {
+                    error!(
+                        type_name = std::any::type_name::<M>(),
+                        "Read-only Result handler called with incompatible message type (downcast failed)"
+                    );
+                    Box::pin(async { Ok(Box::new(()) as Box<dyn ActonMessageReply + Send>) })
+                }
+            },
+        );
+        self.read_only_handlers
+            .insert(type_id, ReactorItem::FutureReactorReadOnlyResult(handler_box));
+        self
+    }
+
+    /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
+    pub fn mutate_on_fallible<M, T, E>(
         &mut self,
         message_processor: impl for<'a> Fn(
                 &'a mut ManagedAgent<Started, State>,
@@ -361,7 +537,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     /// The child inherits the parent's broker reference.
     ///
     /// The returned agent is in the `Idle` state and still needs to be configured
-    /// (e.g., with `act_on`, lifecycle hooks) and then started using its `start` method.
+    /// (e.g., with `mutate_on`, lifecycle hooks) and then started using its `start` method.
     /// The parent agent typically calls `handle.supervise(child_handle)` after the child
     /// is started to register it formally.
     ///
@@ -482,7 +658,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 /// Attempts to downcast an `ActonMessage` trait object to a concrete type `T`.
 ///
 /// This utility function is used internally by the message dispatch mechanism
-/// (specifically within the closure generated by `act_on`) to safely convert
+/// (specifically within the closure generated by `mutate_on`) to safely convert
 /// a type-erased message (`&dyn ActonMessage`) back into its original concrete type (`&T`).
 ///
 /// # Type Parameters
