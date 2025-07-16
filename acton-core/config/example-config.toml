@@ -1,0 +1,81 @@
+# Acton Reactive Configuration File
+# This file demonstrates all available configuration options
+# Copy this file to your XDG config directory: ~/.config/acton/config.toml
+
+[timeouts]
+# Timeout for agent shutdown in milliseconds
+agent_shutdown_timeout_ms = 10000
+
+# Timeout for system-wide shutdown in milliseconds  
+system_shutdown_timeout_ms = 30000
+
+# Maximum wait before flushing read-only handlers in milliseconds
+read_only_handler_flush_ms = 10
+
+[limits]
+# Maximum concurrent read-only handlers before forced flush
+concurrent_handlers_high_water_mark = 100
+
+# Default MPSC channel size for agent message inbox
+agent_inbox_capacity = 255
+
+# Dummy channel size for closed/default MessageAddress/AgentHandle
+dummy_channel_size = 1
+
+[defaults]
+# Default agent name when none provided
+default_agent_name = "agent"
+
+# Default root Ern identifier for agents
+default_root_ern = "default"
+
+[tracing]
+# Debug tracing level
+debug_level = "debug"
+
+# Trace tracing level
+trace_level = "trace"
+
+# Info tracing level
+info_level = "info"
+
+[paths]
+# Log directory location
+log_directory = "~/.local/share/acton/logs"
+
+# Cache directory location
+cache_directory = "~/.cache/acton"
+
+# Data directory location
+data_directory = "~/.local/share/acton"
+
+# Configuration directory location
+config_directory = "~/.config/acton"
+
+[behavior]
+# Enable tracing output
+enable_tracing = true
+
+# Enable metrics collection
+enable_metrics = false
+
+# Example customizations for different use cases:
+# 
+# For production systems:
+# [timeouts]
+# agent_shutdown_timeout_ms = 5000
+# system_shutdown_timeout_ms = 15000
+# 
+# [limits]
+# agent_inbox_capacity = 512
+# concurrent_handlers_high_water_mark = 50
+# 
+# [tracing]
+# debug_level = "info"
+# trace_level = "warn"
+# info_level = "info"
+#
+# For development:
+# [behavior]
+# enable_tracing = true
+# enable_metrics = true

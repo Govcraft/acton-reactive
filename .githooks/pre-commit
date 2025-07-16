@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# Run cargo check
+echo "Running cargo build..."
+if ! cargo build --quiet; then
+    echo "cargo build failed. Commit aborted."
+    exit 1
+fi
+
+# Run cargo test
+echo "Running cargo test..."
+if ! cargo test --quiet; then
+    echo "Tests failed. Commit aborted."
+    exit 1
+fi
+
+# If both succeed, allow the commit
+echo "All checks passed. Proceeding with commit."
+exit 0
