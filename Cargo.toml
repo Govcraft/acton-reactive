@@ -1,0 +1,4 @@
+[workspace]
+resolver = "2"
+
+members = ["acton-core", "acton-macro", "acton-test", "acton-reactive"]

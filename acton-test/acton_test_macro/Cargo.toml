@@ -1,0 +1,17 @@
+[package]
+name = "acton_test_macro"
+version = "5.0.0"
+edition = "2021"
+description = "Testing utilities for Acton agents, providing tools to help in the testing and validation of agent behavior."
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/Govcraft/acton-reactive"
+repository = "https://github.com/Govcraft/acton-reactive/acton_test"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0.79", features = ["full"] }
+quote = "1.0"
+tracing = "0.1.40"
+parking_lot = "0.12.3"
