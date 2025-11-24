@@ -9,22 +9,30 @@ description = "Acton Reactive is the main crate of the Acton framework, designed
 
 [dependencies]
 acton-macro.workspace = true
-acton-core.workspace = true
-rand.workspace = true
+dashmap.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-anyhow.workspace = true
-async-trait.workspace = true
-tokio.workspace = true
 futures.workspace = true
+static_assertions.workspace = true
+dyn-clone.workspace = true
+derive-new.workspace = true
+acton-ern.workspace = true
 tracing-appender.workspace = true
+xdg.workspace = true
+serde.workspace = true
+toml.workspace = true
+lazy_static.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 acton_test.workspace = true
 crossterm.workspace = true
 mti.workspace = true
 zerocopy.workspace = true
-dashmap.workspace = true
 ansi_term.workspace = true
 tempfile.workspace = true
 

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = ["acton-core", "acton-macro", "acton-test", "acton-reactive", "acton-cli", "acton_test_macro"]
+members = ["acton-macro", "acton-test", "acton-reactive", "acton-cli", "acton_test_macro"]
 
 # Shared package metadata
 [workspace.package]
@@ -14,7 +14,6 @@ repository = "https://github.com/Govcraft/acton-reactive"
 # Centralized dependencies
 [workspace.dependencies]
 # Internal crates
-acton-core = { path = "acton-core", version = "5.0.0" }
 acton-macro = { path = "acton-macro", version = "5.0.0" }
 acton-reactive = { path = "acton-reactive", version = "5.0.0" }
 acton_test = { path = "acton-test", version = "5.0.0" }

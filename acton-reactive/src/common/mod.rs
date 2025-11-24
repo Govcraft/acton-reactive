@@ -1,9 +1,9 @@
 //! Provides common types, utilities, and core runtime components for the Acton framework.
 //!
 //! This module serves as an aggregation point for fundamental building blocks shared across
-//! the `acton-core` crate and potentially exposed to users via the prelude. It includes
-//! components related to system initialization, runtime management, agent interaction,
-//! message brokering, and internal type definitions.
+//! the crate and exposed to users via the prelude. It includes components related to system
+//! initialization, runtime management, agent interaction, message brokering, and internal
+//! type definitions.
 //!
 //! # Key Re-exported Components:
 //!

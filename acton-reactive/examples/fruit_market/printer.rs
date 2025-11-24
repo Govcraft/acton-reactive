@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use mti::prelude::MagicTypeId;
 use tracing::*;
 
-use acton_core::prelude::*;
+use acton_reactive::prelude::*;
 // Note: #[acton_message] is not used for ToggleHelp, relying on derive + blanket impl.
 
 // Import message types and data structures used by this agent.

@@ -18,7 +18,7 @@ use rand::prelude::*;
 
 use tracing::trace;
 
-use acton_core::prelude::*;
+use acton_reactive::prelude::*;
 
 // Import necessary components from other modules within the example.
 use crate::{price_service::PriceService, CartItem, ItemScanned};

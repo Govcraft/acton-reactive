@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-//! Defines common internal type aliases and supporting structures used within `acton-core`.
+//! Defines common internal type aliases and supporting structures used within `acton-reactive`.
 //!
 //! This module centralizes type definitions for futures, handlers, channels, and other
 //! implementation details to improve code readability and maintainability. It also

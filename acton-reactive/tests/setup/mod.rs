@@ -49,23 +49,23 @@ pub fn initialize_tracing() {
 
         let filter = EnvFilter::new("trace")
             .add_directive(
-                "acton_core::actor::managed_agent::started[wake]=trace"
+                "acton_reactive::actor::managed_agent::started[wake]=trace"
                     .parse()
                     .unwrap(),
             )
             .add_directive(
-                "acton_core::actor::managed_agent::started=trace"
+                "acton_reactive::actor::managed_agent::started=trace"
                     .parse()
                     .unwrap(),
             )
-            .add_directive("acton_core::common::actor_ref=trace".parse().unwrap())
+            .add_directive("acton_reactive::common::actor_ref=trace".parse().unwrap())
             .add_directive(
-                "acton_core::message::outbound_envelope=trace"
+                "acton_reactive::message::outbound_envelope=trace"
                     .parse()
                     .unwrap(),
             )
             .add_directive(
-                "acton_core::message::message_envelope=trace"
+                "acton_reactive::message::message_envelope=trace"
                     .parse()
                     .unwrap(),
             )

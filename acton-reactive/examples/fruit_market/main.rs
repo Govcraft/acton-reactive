@@ -202,11 +202,11 @@ pub fn initialize_tracing() {
             .add_directive("fruit_market=debug".parse().unwrap()) // Log debug for this example
             .add_directive("fruit_market::printer=debug".parse().unwrap())
             // Silence potentially noisy core components unless needed for debugging.
-            .add_directive("acton_core::common::agent_handle=off".parse().unwrap())
-            .add_directive("acton_core::common::agent_broker=off".parse().unwrap())
-            .add_directive("acton_core::actor::managed_agent::idle[start]=off".parse().unwrap())
-            .add_directive("acton_core::actor::managed_agent::started[wake]=off".parse().unwrap())
-            .add_directive("acton_core::traits::actor[send_message]=off".parse().unwrap())
+            .add_directive("acton_reactive::common::agent_handle=off".parse().unwrap())
+            .add_directive("acton_reactive::common::agent_broker=off".parse().unwrap())
+            .add_directive("acton_reactive::actor::managed_agent::idle[start]=off".parse().unwrap())
+            .add_directive("acton_reactive::actor::managed_agent::started[wake]=off".parse().unwrap())
+            .add_directive("acton_reactive::traits::actor[send_message]=off".parse().unwrap())
             // Silence test modules if running the example directly.
             .add_directive("supervisor_tests=off".parse().unwrap())
             .add_directive("broker_tests=off".parse().unwrap())
