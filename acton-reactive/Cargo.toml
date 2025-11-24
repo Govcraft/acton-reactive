@@ -1,31 +1,32 @@
 [package]
 name = "acton-reactive"
-version = "5.0.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "Acton Reactive is the main crate of the Acton framework, designed for building reactive, event-driven, and asynchronous systems. It provides intuitive abstractions to make working with distributed agents seamless and efficient."
-license = "Apache-2.0 OR MIT"
-homepage = "https://github.com/Govcraft/acton-reactive"
-repository = "https://github.com/Govcraft/acton-reactive"
 
 [dependencies]
-acton-macro = { path = "../acton-macro", version = "5.0.0" }
-acton-core = { path = "../acton-core", version = "5" }
-rand = "0.9.1"
-tracing = "0.1.40"
-tracing-subscriber = "0.3.18"
-anyhow = "1.0.82"
-async-trait = "0.1.8"
-tokio = "1.37.0"
-futures = "0.3.30"
-tracing-appender = "0.2.3"
+acton-macro.workspace = true
+acton-core.workspace = true
+rand.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tracing-appender.workspace = true
 
 [dev-dependencies]
-acton_test = { path = "../acton-test", version = "5.0.0" }
-crossterm = { version = "0.28.1", features = ["event-stream"] }  # or the latest version available
-mti = "1.0.0"
-tracing-appender = "0.2.3"
-zerocopy = "0.8.24"
-dashmap = "6.1.0"
-ansi_term = "0.12.1"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-tempfile = "3.10.0"
+acton_test.workspace = true
+crossterm.workspace = true
+mti.workspace = true
+zerocopy.workspace = true
+dashmap.workspace = true
+ansi_term.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

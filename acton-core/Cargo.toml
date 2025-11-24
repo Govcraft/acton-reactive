@@ -1,34 +1,32 @@
 [package]
 name = "acton-core"
-version = "5.0.0"
-edition = "2021"
-license = "Apache-2.0 OR MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "Acton Core provides the core functionality and abstractions used by the Acton Reactive crate. It includes the essential building blocks for creating reactive and distributed systems."
-homepage = "https://github.com/Govcraft/acton-reactive"
-repository = "https://github.com/Govcraft/acton-reactive"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-dashmap = "6.1.0"
-tokio = { version = "1.37.0", features = ["full"] }
-async-trait = "0.1.80"
-anyhow = "1.0.82"
-tokio-util = { version = "0.7.10", features = ["rt"] }
-tracing = "0.1.40"
-futures = "0.3.30"
-static_assertions = "1.1.0"
-dyn-clone = "1.0.17"
-derive-new = "0.7.0"
-acton-ern = "1.0.0"
-tracing-appender = "0.2.3"
-xdg = "2.5"
-serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
-lazy_static = "1.4"
+dashmap.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+futures.workspace = true
+static_assertions.workspace = true
+dyn-clone.workspace = true
+derive-new.workspace = true
+acton-ern.workspace = true
+tracing-appender.workspace = true
+xdg.workspace = true
+serde.workspace = true
+toml.workspace = true
+lazy_static.workspace = true
 
 [dev-dependencies]
-dashmap = "6.1.0"
-tokio = { version = "1.37.0", features = ["full"] }
-acton_test = { path = "../acton-test" }
-tokio-util = { version = "0.7.10", features = ["rt"] }
-acton-ern = "1.0.0"
+acton_test.workspace = true
+
+[lints]
+workspace = true
