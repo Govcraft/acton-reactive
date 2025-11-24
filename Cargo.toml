@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = ["acton-core", "acton-macro", "acton-test", "acton-reactive"]
+members = ["acton-core", "acton-macro", "acton-test", "acton-reactive", "acton-cli", "acton_test_macro"]
 
 # Shared package metadata
 [workspace.package]
@@ -16,8 +16,9 @@ repository = "https://github.com/Govcraft/acton-reactive"
 # Internal crates
 acton-core = { path = "acton-core", version = "5.0.0" }
 acton-macro = { path = "acton-macro", version = "5.0.0" }
+acton-reactive = { path = "acton-reactive", version = "5.0.0" }
 acton_test = { path = "acton-test", version = "5.0.0" }
-acton_test_macro = { path = "acton-test/acton_test_macro", version = "5.0.0" }
+acton_test_macro = { path = "acton_test_macro", version = "5.0.0" }
 
 # Async runtime
 tokio = { version = "1.37.0", features = ["full"] }
@@ -60,6 +61,11 @@ mti = "1.0.0"
 zerocopy = "0.8.24"
 ansi_term = "0.12.1"
 tempfile = "3.10.0"
+
+# CLI dependencies
+miette = { version = "7.2.0", features = ["fancy"] }
+thiserror = "1.0.64"
+handlebars = "6.1.0"
 
 # Shared lints
 [workspace.lints.rust]

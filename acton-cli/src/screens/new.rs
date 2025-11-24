@@ -49,7 +49,7 @@ impl NewScreen {
             let _ = stdout.flush();
             AgentReply::immediate()
         })
-            .mutate_on::<MenuMoveDown>(|agent, _context) {
+            .mutate_on::<MenuMoveDown>(|agent, _context| {
                 trace!(" MenuMoveDown");
                 let len = agent.model.menu.len();
                 if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
@@ -57,10 +57,10 @@ impl NewScreen {
                     let next_index = (current_index + 1) % len;
                     agent.model.menu[next_index].selected = true;
                 }
-                agent.model.Paint();
+                agent.model.paint();
                 AgentReply::immediate()
             })
-            .mutate_on::<MenuMoveUp>(|agent, _context) {
+            .mutate_on::<MenuMoveUp>(|agent, _context| {
                 trace!(" MenuMoveUp");
                 let len = agent.model.menu.len();
                 if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
@@ -68,11 +68,11 @@ impl NewScreen {
                     let prev_index = if current_index == 0 { len - 1 } else { current_index - 1 };
                     agent.model.menu.iter_mut().rev().nth(len - prev_index - 1).unwrap().selected = true;
                 }
-                agent.model.Paint();
+                agent.model.paint();
                 AgentReply::immediate()
             })
             .after_start(|agent| {
-                agent.model.Paint();
+                agent.model.paint();
                 AgentReply::immediate()
             });
         agent.model.menu.push(MenuItem { label: "Name".to_string(), action: "create_project".to_string(), selected: true });
