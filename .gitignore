@@ -19,3 +19,11 @@ Cargo.lock
 logs/
 .aider.*
 .direnv/
+
+# Ignore potentially sensitive file types by default
+# To explicitly allow a specific file, use: !filename.ext
+*.sh
+*.txt
+*.old
+*.log
+*.env
