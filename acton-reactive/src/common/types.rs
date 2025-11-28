@@ -38,18 +38,18 @@ use crate::traits::ActonMessageReply;
 pub type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntity>>;
 
 /// Crate-internal: Enum wrapping different kinds of message/event handlers.
-/// Currently only supports `FutureReactor`.
+/// All variants are future-based reactors with different mutability and fallibility characteristics.
 #[allow(dead_code)] // Allow dead_code for potential future variants like SignalReactor
 pub enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     // SignalReactor(Box<SignalHandler<ActorEntity>>),
     /// A handler for an infallible operation that processes a message and returns a future.
-    FutureReactor(Box<FutureHandler<ActorEntity>>),
+    Mutable(Box<FutureHandler<ActorEntity>>),
     /// A handler for a fallible operation that processes a message and returns a `Result` future.
-    FutureReactorResult(Box<FutureHandlerResult<ActorEntity>>),
+    MutableFallible(Box<FutureHandlerResult<ActorEntity>>),
     /// A handler for an infallible read-only operation that processes a message and returns a future.
-    FutureReactorReadOnly(Box<FutureHandlerReadOnly<ActorEntity>>),
+    ReadOnly(Box<FutureHandlerReadOnly<ActorEntity>>),
     /// A handler for a fallible read-only operation that processes a message and returns a `Result` future.
-    FutureReactorReadOnlyResult(Box<FutureHandlerReadOnlyResult<ActorEntity>>),
+    ReadOnlyFallible(Box<FutureHandlerReadOnlyResult<ActorEntity>>),
 }
 
 /// Crate-internal: Type alias for the function signature of a message handler

@@ -175,11 +175,11 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         }
 
                         match reactor.value() {
-                            ReactorItem::FutureReactor(fut) => {
+                            ReactorItem::Mutable(fut) => {
                                 // Legacy handler: await, always Ok
                                 fut(self, &mut envelope).await;
                             }
-                            ReactorItem::FutureReactorResult(fut) => {
+                            ReactorItem::MutableFallible(fut) => {
                                 // New Result-based handler: await and trigger error handler on Err
                                 let result = fut(self, &mut envelope).await;
                                 if let Err((err, error_type_id)) = result {
@@ -199,18 +199,18 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                     }
                                 }
                             }
-                            ReactorItem::FutureReactorReadOnly(_) => {
+                            ReactorItem::ReadOnly(_) => {
                                 // This should not happen - read-only handlers should be in read_only_reactors
                                 tracing::warn!("Found read-only handler in mutable_reactors map");
                             }
-                            ReactorItem::FutureReactorReadOnlyResult(_) => {
+                            ReactorItem::ReadOnlyFallible(_) => {
                                 // This should not happen - read-only handlers should be in read_only_reactors
                                 tracing::warn!("Found read-only Result handler in mutable_reactors map");
                             }
                         }
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
                         match reactor.value() {
-                            ReactorItem::FutureReactorReadOnly(fut) => {
+                            ReactorItem::ReadOnly(fut) => {
                                 // Concurrent read-only handler: add to buffer
                                 let fut = fut(self, &mut envelope);
                                 read_only_futures.push(tokio::spawn(async move {
@@ -224,7 +224,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                     last_flush_time = Instant::now();
                                 }
                             }
-                            ReactorItem::FutureReactorReadOnlyResult(fut) => {
+                            ReactorItem::ReadOnlyFallible(fut) => {
                                 // Concurrent read-only handler with error handling: add to buffer
                                 let fut = fut(self, &mut envelope);
                                 read_only_futures.push(tokio::spawn(async move {

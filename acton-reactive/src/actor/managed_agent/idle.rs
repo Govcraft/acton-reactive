@@ -117,7 +117,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             },
         );
         self.message_handlers
-            .insert(type_id, ReactorItem::FutureReactor(handler_box));
+            .insert(type_id, ReactorItem::Mutable(handler_box));
         self
     }
 
@@ -266,7 +266,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             },
         );
         self.read_only_handlers
-            .insert(type_id, ReactorItem::FutureReactorReadOnly(handler_box));
+            .insert(type_id, ReactorItem::ReadOnly(handler_box));
         self
     }
     /// Registers an asynchronous read-only message handler for a specific message type `M` that returns a Result.
@@ -369,7 +369,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             },
         );
         self.read_only_handlers
-            .insert(type_id, ReactorItem::FutureReactorReadOnlyResult(handler_box));
+            .insert(type_id, ReactorItem::ReadOnlyFallible(handler_box));
         self
     }
 
@@ -447,7 +447,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             },
         );
         self.message_handlers
-            .insert(type_id, ReactorItem::FutureReactorResult(handler_box));
+            .insert(type_id, ReactorItem::MutableFallible(handler_box));
         self
     }
 
