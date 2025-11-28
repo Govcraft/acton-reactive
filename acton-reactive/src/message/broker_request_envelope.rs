@@ -17,7 +17,7 @@
 use std::fmt::Debug; // Import Debug explicitly
 use std::sync::Arc;
 
-use tracing::{trace, Callsite};
+use tracing::trace;
 
 use crate::message::BrokerRequest;
 use crate::traits::ActonMessage;

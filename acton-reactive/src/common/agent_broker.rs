@@ -22,7 +22,7 @@ use std::sync::Arc;
 use acton_ern::Ern;
 use dashmap::DashMap;
 use futures::future::join_all;
-use tracing::{instrument, trace, Callsite};
+use tracing::{instrument, trace};
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
 use crate::common::{AgentHandle, AgentRuntime, BrokerRef};

@@ -122,7 +122,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                     // Flush any remaining read-only futures before breaking
                     if !read_only_futures.is_empty() {
                         trace!("Flushing {} remaining read-only futures on cancellation", read_only_futures.len());
-                        while let Some(_) = read_only_futures.next().await {}
+                        while read_only_futures.next().await.is_some() {}
                     }
                     break; // Immediate break on forceful cancellation.
                 }
@@ -130,7 +130,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                 // Check if we should flush read-only futures due to time limit
                 () = tokio::time::sleep_until((last_flush_time + max_wait_duration).into()), if !read_only_futures.is_empty() => {
                     trace!("Flushing {} read-only futures due to time limit", read_only_futures.len());
-                    while let Some(_) = read_only_futures.next().await {}
+                    while read_only_futures.next().await.is_some() {}
                     last_flush_time = Instant::now();
                 }
 
@@ -170,7 +170,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         // Flush any pending read-only futures before processing mutable handlers
                         if !read_only_futures.is_empty() {
                             trace!("Flushing {} read-only futures before mutable handler", read_only_futures.len());
-                            while let Some(_) = read_only_futures.next().await {}
+                            while read_only_futures.next().await.is_some() {}
                             last_flush_time = Instant::now();
                         }
 
@@ -220,7 +220,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                 // Check if we've hit the high water mark
                                 if read_only_futures.len() >= high_water_mark {
                                     trace!("Flushing {} read-only futures due to high water mark", read_only_futures.len());
-                                    while let Some(_) = read_only_futures.next().await {}
+                                    while read_only_futures.next().await.is_some() {}
                                     last_flush_time = Instant::now();
                                 }
                             }
@@ -241,7 +241,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                 // Check if we've hit the high water mark
                                 if read_only_futures.len() >= high_water_mark {
                                     trace!("Flushing {} read-only Result futures due to high water mark", read_only_futures.len());
-                                    while let Some(_) = read_only_futures.next().await {}
+                                    while read_only_futures.next().await.is_some() {}
                                     last_flush_time = Instant::now();
                                 }
                             }
@@ -255,7 +255,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         // Flush any remaining read-only futures before processing terminate
                         if !read_only_futures.is_empty() {
                             trace!("Flushing {} read-only futures before terminate", read_only_futures.len());
-                            while let Some(_) = read_only_futures.next().await {}
+                            while read_only_futures.next().await.is_some() {}
                         }
 
                         trace!("Terminate signal received for agent: {}. Closing inbox.", self.id());
@@ -286,7 +286,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                 "Flushing {} remaining read-only futures before final termination",
                 read_only_futures.len()
             );
-            while let Some(_) = read_only_futures.next().await {}
+            while read_only_futures.next().await.is_some() {}
         }
 
         self.terminate().await; // Stop children and other cleanup.

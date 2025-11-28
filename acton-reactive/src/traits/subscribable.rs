@@ -18,7 +18,7 @@ use std::any::TypeId;
 use std::future::Future;
 
 use async_trait::async_trait;
-use tracing::{instrument, trace, error, warn, Callsite};
+use tracing::{error, instrument, trace, warn};
 
 use crate::message::{SubscribeBroker, UnsubscribeBroker};
 use crate::traits::{ActonMessage, AgentHandleInterface};
