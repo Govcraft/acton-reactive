@@ -193,7 +193,7 @@ impl Printer {
     /// Creates, configures, subscribes, and starts the Printer agent.
     pub async fn power_on(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
         // Create the agent builder with a specific name.
-        let mut printer_builder = runtime.new_agent_with_name::<Self>("printer".to_string()).await;
+        let mut printer_builder = runtime.new_agent_with_name::<Self>("printer".to_string());
 
         // Configure message handlers.
         printer_builder

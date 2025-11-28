@@ -34,7 +34,7 @@ async fn main() {
     let mut runtime = ActonApp::launch();
 
     // Create an agent with custom name to demonstrate configuration
-    let mut agent_builder = runtime.new_agent::<ConfigAgent>().await;
+    let mut agent_builder = runtime.new_agent::<ConfigAgent>();
 
     // Set initial state
     agent_builder.model.custom_value = "configured_value".to_string();

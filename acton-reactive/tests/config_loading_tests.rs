@@ -15,7 +15,7 @@ async fn test_default_configuration_loading() -> Result<(), anyhow::Error> {
     let mut app = ActonApp::launch();
 
     // Verify the app started successfully by creating an agent
-    let agent_builder = app.new_agent::<TestAgent>().await;
+    let agent_builder = app.new_agent::<TestAgent>();
     let _handle = agent_builder.start().await;
 
     // Clean up
@@ -54,7 +54,7 @@ async fn test_custom_configuration_override() -> anyhow::Result<()> {
     let mut app = ActonApp::launch();
 
     // Create a test agent to verify the custom config is used
-    let agent_builder = app.new_agent::<TestAgent>().await;
+    let agent_builder = app.new_agent::<TestAgent>();
     let _handle = agent_builder.start().await;
 
     // Clean up
@@ -82,7 +82,7 @@ async fn test_xdg_directory_resolution() -> Result<(), anyhow::Error> {
 
     // Launch and verify it uses the config
     let mut app = ActonApp::launch();
-    let agent_builder = app.new_agent::<TestAgent>().await;
+    let agent_builder = app.new_agent::<TestAgent>();
     let _handle = agent_builder.start().await;
 
     temp_dir.close().unwrap();
@@ -110,7 +110,7 @@ async fn test_malformed_config_handling() -> Result<(), anyhow::Error> {
 
     // Should still launch successfully with defaults
     let mut app = ActonApp::launch();
-    let agent_builder = app.new_agent::<TestAgent>().await;
+    let agent_builder = app.new_agent::<TestAgent>();
     let _handle = agent_builder.start().await;
 
     temp_dir.close().unwrap();
@@ -124,7 +124,7 @@ async fn test_backward_compatibility() -> Result<(), anyhow::Error> {
     let mut app = ActonApp::launch();
 
     // Verify basic functionality still works
-    let mut agent_builder = app.new_agent::<CounterAgent>().await;
+    let mut agent_builder = app.new_agent::<CounterAgent>();
     agent_builder.mutate_on::<Increment>(|agent, _| {
         agent.model.count += 1;
         AgentReply::immediate()
@@ -157,7 +157,7 @@ async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
     let mut app = ActonApp::launch();
 
     // Create agent that should use the small inbox capacity
-    let mut agent_builder = app.new_agent::<CounterAgent>().await;
+    let mut agent_builder = app.new_agent::<CounterAgent>();
     agent_builder.mutate_on::<Increment>(|agent, _| {
         agent.model.count += 1;
         AgentReply::immediate()
@@ -193,10 +193,10 @@ async fn test_consistent_config_across_agents() -> Result<(), anyhow::Error> {
     let mut app = ActonApp::launch();
 
     // Create multiple agents
-    let builder1 = app.new_agent::<CounterAgent>().await;
+    let builder1 = app.new_agent::<CounterAgent>();
     let _handle1 = builder1.start().await;
 
-    let builder2 = app.new_agent::<CounterAgent>().await;
+    let builder2 = app.new_agent::<CounterAgent>();
     let _handle2 = builder2.start().await;
 
     // Both should work with same configuration

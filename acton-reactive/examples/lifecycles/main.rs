@@ -41,7 +41,7 @@ async fn main() {
     let mut runtime = ActonApp::launch();
 
     // 2. Create the agent builder for ItemTracker state.
-    let mut tracker_agent_builder = runtime.new_agent::<ItemTracker>().await;
+    let mut tracker_agent_builder = runtime.new_agent::<ItemTracker>();
 
     // 3. Configure lifecycle hooks and message handlers.
     tracker_agent_builder

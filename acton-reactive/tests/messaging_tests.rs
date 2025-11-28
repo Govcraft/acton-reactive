@@ -50,7 +50,7 @@ async fn test_messaging_behavior() -> anyhow::Result<()> {
     // Launch the runtime environment.
     let mut runtime: AgentRuntime = ActonApp::launch();
     // Create an agent builder for PoolItem state.
-    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>().await;
+    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>();
 
     // Configure the agent's behavior.
     pool_item_agent_builder
@@ -97,7 +97,7 @@ async fn test_basic_messenger() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
     // Create an agent builder for Messenger state (which is likely empty or minimal).
-    let mut messenger_agent_builder = runtime.new_agent::<Messenger>().await;
+    let mut messenger_agent_builder = runtime.new_agent::<Messenger>();
 
     // Configure the agent's behavior.
     messenger_agent_builder
@@ -141,7 +141,7 @@ async fn test_basic_messenger() -> anyhow::Result<()> {
 async fn test_async_messaging_behavior() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
-    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>().await;
+    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>();
 
     pool_item_agent_builder
         // Handler for `Ping` messages. Although the test name suggests async,

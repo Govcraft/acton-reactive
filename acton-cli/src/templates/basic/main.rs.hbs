@@ -16,7 +16,7 @@ tracing_subscriber::fmt()
 let mut app = ActonApp::launch();
 
 // Example agent setup
-let my_agent = app.new_agent::<MyAgent>().await;
+let my_agent = app.new_agent::<MyAgent>();
     my_agent.start().await;
 
     // Shut down Acton system

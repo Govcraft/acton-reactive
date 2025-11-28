@@ -100,7 +100,7 @@ impl PriceService {
     pub(crate) async fn new(runtime: &mut AgentRuntime) -> Self {
         let config = AgentConfig::new(Ern::with_root("price_service").unwrap(), None, None).expect("Failed to create actor config");
         // Create the agent builder.
-        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config).await;
+        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config);
         // Configure the agent's behavior.
         price_service_builder
             // Handler for `Pong` messages (sent by ShoppingCart).
@@ -133,7 +133,7 @@ impl ShoppingCart {
     pub(crate) async fn new(price_service_handle: AgentHandle, runtime: &mut AgentRuntime) -> Self {
         let config = AgentConfig::new(Ern::with_root("shopping_cart").unwrap(), None, None).expect("Failed to create actor config");
         // Create the agent builder.
-        let mut shopping_cart_builder = runtime.new_agent_with_config::<Self>(config).await;
+        let mut shopping_cart_builder = runtime.new_agent_with_config::<Self>(config);
         // Configure agent behavior
         shopping_cart_builder
             // Handler for `Ping` messages (sent by the `trigger` method).

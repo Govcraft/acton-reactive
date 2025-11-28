@@ -58,7 +58,7 @@ async fn test_broker() -> anyhow::Result<()> {
 
     // --- Comedian Agent ---
     // Create the agent builder. No broker needed in config as it gets it automatically.
-    let mut comedian_agent_builder = runtime.new_agent::<Comedian>().await;
+    let mut comedian_agent_builder = runtime.new_agent::<Comedian>();
 
     // --- Counter Agent ---
     // Configure the counter agent, explicitly providing the broker handle.
@@ -67,7 +67,7 @@ async fn test_broker() -> anyhow::Result<()> {
         None,
         Some(broker_handle.clone()), // Provide broker handle for potential direct use (though subscribe uses handle's broker)
     )?;
-    let mut counter_agent_builder = runtime.new_agent_with_config::<Counter>(counter_config).await;
+    let mut counter_agent_builder = runtime.new_agent_with_config::<Counter>(counter_config);
 
     // Configure Counter agent's handlers.
     counter_agent_builder.mutate_on::<Pong>(|agent, _envelope| {
@@ -150,7 +150,7 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
     let broker_handle = runtime.broker();
 
     // --- Comedian Agent ---
-    let mut comedian_agent_builder = runtime.new_agent::<Comedian>().await;
+    let mut comedian_agent_builder = runtime.new_agent::<Comedian>();
 
     // --- Counter Agent ---
     let counter_config = AgentConfig::new(
@@ -158,7 +158,7 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
         None,
         Some(broker_handle.clone()),
     )?;
-    let mut counter_agent_builder = runtime.new_agent_with_config::<Counter>(counter_config).await;
+    let mut counter_agent_builder = runtime.new_agent_with_config::<Counter>(counter_config);
 
     // Configure Counter handler.
     counter_agent_builder.mutate_on::<Pong>(|agent, _envelope| {

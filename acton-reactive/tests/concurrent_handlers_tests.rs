@@ -105,7 +105,7 @@ async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    let mut agent_builder = runtime.new_agent::<ConcurrentTestAgent>().await;
+    let mut agent_builder = runtime.new_agent::<ConcurrentTestAgent>();
 
     // Add read-only handler using act_on for concurrent execution
     agent_builder
@@ -157,7 +157,7 @@ async fn test_concurrent_readonly_state_safety() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    let mut agent_builder = runtime.new_agent::<ConcurrentTestAgent>().await;
+    let mut agent_builder = runtime.new_agent::<ConcurrentTestAgent>();
 
     // Test that read-only handlers can safely access shared state concurrently
     agent_builder
@@ -212,7 +212,7 @@ async fn test_readonly_complex_data_access() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    let mut agent_builder = runtime.new_agent::<DataAgent>().await;
+    let mut agent_builder = runtime.new_agent::<DataAgent>();
 
     // Initialize with some data
     agent_builder.model.data = vec![1, 2, 3, 4, 5];
@@ -276,7 +276,7 @@ async fn test_concurrent_performance() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    let mut agent_builder = runtime.new_agent::<PerformanceAgent>().await;
+    let mut agent_builder = runtime.new_agent::<PerformanceAgent>();
     agent_builder.model.start_time = Some(std::time::Instant::now());
 
     agent_builder
@@ -321,7 +321,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    let mut agent_builder = runtime.new_agent::<ConcurrencyAgent>().await;
+    let mut agent_builder = runtime.new_agent::<ConcurrencyAgent>();
     agent_builder.model.start_time = Some(std::time::Instant::now());
 
     agent_builder
@@ -393,7 +393,7 @@ async fn test_sequential_vs_concurrent_handlers() -> anyhow::Result<()> {
 
     // Test 1: Mutable handlers (sequential) - proven by message ordering
     tracing::info!("Testing mutable handlers (sequential)...");
-    let mut mutable_agent = runtime.new_agent::<SequentialTestAgent>().await;
+    let mut mutable_agent = runtime.new_agent::<SequentialTestAgent>();
     mutable_agent.model.start_time = Some(std::time::Instant::now());
 
     mutable_agent
@@ -439,7 +439,7 @@ async fn test_sequential_vs_concurrent_handlers() -> anyhow::Result<()> {
 
     // Test 2: Read-only handlers (concurrent) - proven by timing
     tracing::info!("Testing read-only handlers (concurrent)...");
-    let mut readonly_agent = runtime.new_agent::<SequentialTestAgent>().await;
+    let mut readonly_agent = runtime.new_agent::<SequentialTestAgent>();
     readonly_agent.model.start_time = Some(std::time::Instant::now());
 
     readonly_agent
@@ -490,7 +490,7 @@ async fn test_mixed_handlers() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    let mut agent_builder = runtime.new_agent::<MixedAgent>().await;
+    let mut agent_builder = runtime.new_agent::<MixedAgent>();
 
     agent_builder
         .act_on::<ReadOnlyOp>(|agent, _envelope| {

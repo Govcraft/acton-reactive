@@ -63,8 +63,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
     // Create an agent builder for the `Comedian` state (`model`).
     // The builder is in an `Idle` state, ready for configuration.
     let mut comedian_agent_builder = runtime
-        .new_agent_with_config::<Comedian>(agent_config)
-        .await;
+        .new_agent_with_config::<Comedian>(agent_config);
 
     // Configure the agent's behavior by defining message handlers using `mutate_on`.
     comedian_agent_builder
@@ -160,7 +159,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
 
     // --- Counter Agent ---
     // Create a builder for the Counter agent.
-    let mut counter_agent_builder = runtime.new_agent::<Counter>().await;
+    let mut counter_agent_builder = runtime.new_agent::<Counter>();
     counter_agent_builder
         // Handler for `Tally` messages.
         .mutate_on::<Tally>(|agent, _envelope| {
@@ -187,7 +186,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
 
     // --- Messenger Agent ---
     // Create a builder for the Messenger agent.
-    let mut messenger_agent_builder = runtime.new_agent::<Messenger>().await;
+    let mut messenger_agent_builder = runtime.new_agent::<Messenger>();
     messenger_agent_builder
         // Handler executed after the agent starts.
         .after_start(|_agent| {
@@ -243,8 +242,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
     )?;
     // Create the parent agent builder. No specific handlers needed for the parent itself in this test.
     let parent_agent_builder = runtime
-        .new_agent_with_config::<PoolItem>(parent_config)
-        .await;
+        .new_agent_with_config::<PoolItem>(parent_config);
 
     // --- Child Agent ---
     let child_config = AgentConfig::new(
@@ -254,8 +252,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
     )?;
     // Create the child agent builder.
     let mut child_agent_builder = runtime
-        .new_agent_with_config::<PoolItem>(child_config)
-        .await;
+        .new_agent_with_config::<PoolItem>(child_config);
 
     // Configure the child agent's behavior.
     child_agent_builder
@@ -345,7 +342,7 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
     let mut runtime: AgentRuntime = ActonApp::launch();
 
     // --- Parent Agent ---
-    let parent_agent_builder = runtime.new_agent::<PoolItem>().await;
+    let parent_agent_builder = runtime.new_agent::<PoolItem>();
     // Start the parent agent.
     let parent_handle = parent_agent_builder.start().await;
 
@@ -356,8 +353,7 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
         None,
     )?;
     let child_agent_builder = runtime
-        .new_agent_with_config::<PoolItem>(child_config)
-        .await;
+        .new_agent_with_config::<PoolItem>(child_config);
     // Get the child's ID before supervision.
     let child_id = child_agent_builder.id().clone();
 
@@ -413,8 +409,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     let agent_config =
         AgentConfig::new(Ern::with_root("test_actor_mutation").unwrap(), None, None)?;
     let mut comedian_agent_builder = runtime
-        .new_agent_with_config::<Comedian>(agent_config)
-        .await;
+        .new_agent_with_config::<Comedian>(agent_config);
 
     // Configure agent behavior.
     comedian_agent_builder
@@ -513,7 +508,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
 
     // --- Parent Agent (Comedian) ---
     // Create the parent agent builder.
-    let mut parent_agent_builder = runtime.new_agent::<Comedian>().await;
+    let mut parent_agent_builder = runtime.new_agent::<Comedian>();
 
     // Configure the parent's message handler for `FunnyJokeFor`.
     parent_agent_builder.mutate_on::<FunnyJokeFor>(|agent, envelope| {
@@ -558,7 +553,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     // --- Child Agent (Counter) ---
     // Configure and create the child agent builder.
     let child_config = AgentConfig::new(Ern::with_root("child").unwrap(), None, None)?;
-    let mut child_agent_builder = runtime.new_agent_with_config::<Counter>(child_config).await;
+    let mut child_agent_builder = runtime.new_agent_with_config::<Counter>(child_config);
     info!(
         "Created child agent builder with id: {}",
         child_agent_builder.id()

@@ -567,20 +567,20 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     /// Returns an error if creating the child's `Ern` fails or if creating the
     /// `AgentConfig` fails (e.g., parsing the parent ID).
     #[instrument(skip(self))]
-    pub async fn create_child(&self, name: String) -> anyhow::Result<Self> {
+    pub fn create_child(&self, name: String) -> anyhow::Result<Self> {
         // Configure the child with parent and broker references.
         let config = AgentConfig::new(
             Ern::with_root(name)?,               // Child's name segment
             Some(self.handle.clone()),           // Parent handle
-            Some(self.runtime.broker()), // Inherited broker handle
+            Some(self.runtime.broker()),         // Inherited broker handle
         )?;
         // Create the Idle agent using the internal constructor.
-        Ok(Self::new(Some(&self.runtime().clone()), Some(config)).await)
+        Ok(Self::new(Some(self.runtime()), Some(&config)))
     }
 
     // Internal constructor - not part of public API documentation
     #[instrument]
-    pub(crate) async fn new(runtime: Option<&AgentRuntime>, config: Option<AgentConfig>) -> Self {
+    pub(crate) fn new(runtime: Option<&AgentRuntime>, config: Option<&AgentConfig>) -> Self {
         let mut managed_actor: Self = Self::default();
 
         if let Some(app) = runtime {

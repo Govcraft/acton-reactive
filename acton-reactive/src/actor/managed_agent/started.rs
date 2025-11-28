@@ -126,7 +126,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         &self,
         reactor: &ReactorItem<Agent>,
         envelope: &mut Envelope,
-        read_only_futures: &mut FuturesUnordered<tokio::task::JoinHandle<()>>,
+        read_only_futures: &FuturesUnordered<tokio::task::JoinHandle<()>>,
     ) {
         match reactor {
             ReactorItem::ReadOnly(fut) => {
@@ -204,7 +204,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         last_flush_time = Instant::now();
                         self.dispatch_mutable_handler(reactor.value(), &mut envelope).await;
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
-                        self.spawn_read_only_handler(reactor.value(), &mut envelope, &mut read_only_futures);
+                        self.spawn_read_only_handler(reactor.value(), &mut envelope, &read_only_futures);
                         if read_only_futures.len() >= high_water_mark {
                             while read_only_futures.next().await.is_some() {}
                             last_flush_time = Instant::now();
@@ -223,58 +223,61 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
         trace!("Message loop finished for agent: {}. Initiating final termination.", self.id());
         while read_only_futures.next().await.is_some() {}
-        self.terminate().await;
+        terminate_children(&self.handle, self.id()).await;
         (self.after_stop)(self).await;
         trace!("Agent {} stopped.", self.id());
     }
+}
 
-    #[instrument(skip(self))]
-    async fn terminate(&mut self) {
-        trace!("Terminating children for agent: {}", self.id());
-        // Stop all child agents concurrently.
-        use std::time::Duration;
-        use tokio::time::timeout as tokio_timeout;
+/// Terminates all child agents of the given handle concurrently.
+///
+/// This is a standalone async function to avoid the `&mut self` / `&self` async borrow
+/// checker constraints that would require `State: Sync`.
+#[instrument(skip(handle))]
+async fn terminate_children(handle: &crate::common::AgentHandle, agent_id: &acton_ern::Ern) {
+    use std::time::Duration;
+    use tokio::time::timeout as tokio_timeout;
 
-        let timeout_ms = CONFIG.timeouts.agent_shutdown;
+    trace!("Terminating children for agent: {}", agent_id);
 
-        let stop_futures: Vec<_> = self
-            .handle
-            .children()
-            .iter()
-            .map(|item| {
-                let child_handle = item.value().clone();
-                async move {
-                    trace!("Sending stop signal to child: {}", child_handle.id());
-                    let stop_res =
-                        tokio_timeout(Duration::from_millis(timeout_ms), child_handle.stop()).await;
-                    match stop_res {
-                        Ok(Ok(())) => {
-                            trace!(
-                                "Stop signal sent to and child {} shut down successfully.",
-                                child_handle.id()
-                            );
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!(
-                                "Stop signal to child {} returned error: {:?}",
-                                child_handle.id(),
-                                e
-                            );
-                        }
-                        Err(_) => {
-                            tracing::error!(
-                                "Shutdown timeout for child {} after {} ms",
-                                child_handle.id(),
-                                timeout_ms
-                            );
-                        }
+    let timeout_ms = CONFIG.timeouts.agent_shutdown;
+
+    let stop_futures: Vec<_> = handle
+        .children()
+        .iter()
+        .map(|item| {
+            let child_handle = item.value().clone();
+            async move {
+                trace!("Sending stop signal to child: {}", child_handle.id());
+                let stop_res =
+                    tokio_timeout(Duration::from_millis(timeout_ms), child_handle.stop()).await;
+                match stop_res {
+                    Ok(Ok(())) => {
+                        trace!(
+                            "Stop signal sent to and child {} shut down successfully.",
+                            child_handle.id()
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(
+                            "Stop signal to child {} returned error: {:?}",
+                            child_handle.id(),
+                            e
+                        );
+                    }
+                    Err(_) => {
+                        tracing::error!(
+                            "Shutdown timeout for child {} after {} ms",
+                            child_handle.id(),
+                            timeout_ms
+                        );
                     }
                 }
-            })
-            .collect();
+            }
+        })
+        .collect();
 
-        join_all(stop_futures).await; // Wait for all stop signals to be sent/processed.
+    join_all(stop_futures).await; // Wait for all stop signals to be sent/processed.
 
-        trace!("All children stopped for agent: {}.", self.id());
-    }
+    trace!("All children stopped for agent: {}.", agent_id);
 }

@@ -45,7 +45,7 @@ async fn test_actor_lifecycle_events() -> anyhow::Result<()> {
     // Launch the runtime environment.
     let mut runtime: AgentRuntime = ActonApp::launch();
     // Create an agent builder for the PoolItem state.
-    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>().await;
+    let mut pool_item_agent_builder = runtime.new_agent::<PoolItem>();
 
     // Configure the lifecycle handlers.
     pool_item_agent_builder

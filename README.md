@@ -101,7 +101,7 @@ Let's build a simple counter agent.
 
         // 5. Create an Agent Builder
         // This prepares an agent but doesn't start its processing loop yet.
-        let mut counter_builder = app.new_agent::<CounterAgent>().await;
+        let mut counter_builder = app.new_agent::<CounterAgent>();
         println!("Created agent builder for: {}", counter_builder.id());
 
         // 6. Define Message Handlers

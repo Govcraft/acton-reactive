@@ -49,7 +49,7 @@ impl PriceService {
         let config =
             AgentConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
         // Create the agent builder using the runtime and configuration.
-        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config).await;
+        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config);
 
         // Configure the agent's message handler for `ItemScanned` messages.
         price_service_builder.mutate_on::<ItemScanned>(|agent, envelope| {

@@ -11,7 +11,7 @@ pub struct ScaffoldAgent;
 
 impl ScaffoldAgent {
     pub async fn create(runtime: &mut AgentRuntime) -> AgentHandle {
-        let mut agent = runtime.new_agent::<Self>().await;
+        let mut agent = runtime.new_agent::<Self>();
         agent.mutate_on::<InitProject<'_>>(|_agent, context| {
             let project_name = context.message().project_name;
             let base_path = Path::new(project_name);

@@ -50,7 +50,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
     let agent_config = AgentConfig::new(Ern::with_root("error_handler_demo").unwrap(), None, None)?;
 
-    let mut agent_builder = runtime.new_agent_with_config::<Counter>(agent_config).await;
+    let mut agent_builder = runtime.new_agent_with_config::<Counter>(agent_config);
 
     // Result-based handler for Ping
     agent_builder
@@ -101,7 +101,7 @@ async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
     let agent_config =
         AgentConfig::new(Ern::with_root("fallible_return_demo").unwrap(), None, None)?;
 
-    let mut agent_builder = runtime.new_agent_with_config::<Counter>(agent_config).await;
+    let mut agent_builder = runtime.new_agent_with_config::<Counter>(agent_config);
 
     // A fallible handler that returns a value on success
     agent_builder

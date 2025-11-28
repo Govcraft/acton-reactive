@@ -70,7 +70,7 @@ impl AgentRuntime {
     /// # Panics
     ///
     /// Panics if creating the root `Ern` from the provided `name` fails or if creating the internal `AgentConfig` fails.
-    pub async fn new_agent_with_name<State>(&mut self, name: String) -> ManagedAgent<Idle, State>
+    pub fn new_agent_with_name<State>(&mut self, name: String) -> ManagedAgent<Idle, State>
     where
         State: Default + Send + Debug + 'static,
     {
@@ -82,7 +82,7 @@ impl AgentRuntime {
         .expect("Failed to create actor config");
 
         let runtime = self.clone();
-        let new_actor = ManagedAgent::new(Some(&runtime), Some(actor_config)).await;
+        let new_actor = ManagedAgent::new(Some(&runtime), Some(&actor_config));
         trace!("Registering new top-level agent: {}", new_actor.id());
         self.0
             .roots
@@ -108,12 +108,12 @@ impl AgentRuntime {
     /// # Panics
     ///
     /// Panics if creating the internal `AgentConfig` fails.
-    pub async fn new_agent<State>(&mut self) -> ManagedAgent<Idle, State>
+    pub fn new_agent<State>(&mut self) -> ManagedAgent<Idle, State>
     where
         State: Default + Send + Debug + 'static,
     {
         // Use a default name if none is provided.
-        self.new_agent_with_name("agent".to_string()).await // Reuse the named version
+        self.new_agent_with_name("agent".to_string()) // Reuse the named version
     }
 
     /// Returns the number of top-level agents currently registered in the runtime.
@@ -146,7 +146,7 @@ impl AgentRuntime {
     /// # Returns
     ///
     /// A [`ManagedAgent<Idle, State>`] instance, ready for configuration and starting.
-    pub async fn new_agent_with_config<State>(
+    pub fn new_agent_with_config<State>(
         &mut self,
         mut config: AgentConfig,
     ) -> ManagedAgent<Idle, State>
@@ -158,7 +158,7 @@ impl AgentRuntime {
         if config.broker.is_none() {
             config.broker = Some(self.0.broker.clone());
         }
-        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(config)).await;
+        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(&config));
         trace!(
             "Created new agent builder with config, id: {}",
             new_agent.id()
@@ -215,7 +215,7 @@ impl AgentRuntime {
             config.broker = Some(self.0.broker.clone());
         }
 
-        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(config)).await;
+        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(&config));
         let agent_id = new_agent.id().clone(); // Get ID before moving
         trace!("Running setup function for agent: {}", agent_id);
         let handle = setup_fn(new_agent).await; // Setup function consumes the agent and returns handle

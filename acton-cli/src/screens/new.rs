@@ -36,7 +36,7 @@ impl Display for MenuItem {
 
 impl NewScreen {
     pub async fn create(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<Self>().await;
+        let mut agent = runtime.new_agent::<Self>();
 
         agent.before_start(|_agent| {
             let mut stdout = stdout();

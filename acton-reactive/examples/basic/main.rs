@@ -49,7 +49,7 @@ async fn main() {
     // 2. Create an agent builder.
     //    `new_agent` takes the *state type* (model) as a generic parameter.
     //    It returns a builder (`ManagedAgent` in the `Idle` state) which we use to configure the agent.
-    let mut agent_builder = runtime.new_agent::<BasicAgentState>().await;
+    let mut agent_builder = runtime.new_agent::<BasicAgentState>();
 
     // 3. Configure the agent's behavior by defining message handlers using `mutate_on`.
     agent_builder

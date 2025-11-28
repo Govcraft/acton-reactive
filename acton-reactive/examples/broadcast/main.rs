@@ -89,9 +89,9 @@ async fn main() {
 
     // 2. Create agent builders.
     //    These agents will communicate indirectly via the broker.
-    let mut data_collector_builder = runtime.new_agent::<DataCollector>().await;
-    let mut aggregator_builder = runtime.new_agent::<Aggregator>().await;
-    let mut printer_builder = runtime.new_agent::<Printer>().await;
+    let mut data_collector_builder = runtime.new_agent::<DataCollector>();
+    let mut aggregator_builder = runtime.new_agent::<Aggregator>();
+    let mut printer_builder = runtime.new_agent::<Printer>();
 
     // 3. Configure the DataCollector agent.
     data_collector_builder
