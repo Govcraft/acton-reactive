@@ -40,15 +40,15 @@ pub struct ActonConfig {
     pub behavior: BehaviorConfig,
 }
 
-/// Timeout-related configuration values
+/// Timeout-related configuration values (all values in milliseconds)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeoutConfig {
     /// Default agent shutdown timeout in milliseconds
-    pub agent_shutdown_timeout_ms: u64,
+    pub agent_shutdown: u64,
     /// Default system-wide shutdown timeout in milliseconds
-    pub system_shutdown_timeout_ms: u64,
-    /// Maximum wait time before flushing read-only handler futures
-    pub read_only_handler_flush_ms: u64,
+    pub system_shutdown: u64,
+    /// Maximum wait time before flushing read-only handler futures (in milliseconds)
+    pub read_only_handler_flush: u64,
 }
 
 /// Limits and capacity configuration
@@ -74,25 +74,25 @@ pub struct DefaultsConfig {
 /// Tracing and logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingConfig {
-    /// Debug tracing level
-    pub debug_level: String,
-    /// Trace tracing level
-    pub trace_level: String,
-    /// Info tracing level
-    pub info_level: String,
+    /// Debug verbosity setting
+    pub debug: String,
+    /// Trace verbosity setting
+    pub trace: String,
+    /// Info verbosity setting
+    pub info: String,
 }
 
 /// Path configuration for various directories
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathsConfig {
-    /// Directory for log files
-    pub log_directory: String,
-    /// Directory for cache files
-    pub cache_directory: String,
-    /// Directory for data files
-    pub data_directory: String,
-    /// Directory for configuration files
-    pub config_directory: String,
+    /// Path to log files directory
+    pub logs: String,
+    /// Path to cache files directory
+    pub cache: String,
+    /// Path to data files directory
+    pub data: String,
+    /// Path to configuration files directory
+    pub config: String,
 }
 
 /// Behavioral configuration switches
@@ -108,9 +108,9 @@ pub struct BehaviorConfig {
 impl Default for TimeoutConfig {
     fn default() -> Self {
         Self {
-            agent_shutdown_timeout_ms: 10_000,
-            system_shutdown_timeout_ms: 30_000,
-            read_only_handler_flush_ms: 10,
+            agent_shutdown: 10_000,
+            system_shutdown: 30_000,
+            read_only_handler_flush: 10,
         }
     }
 }
@@ -137,9 +137,9 @@ impl Default for DefaultsConfig {
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
-            debug_level: "debug".to_string(),
-            trace_level: "trace".to_string(),
-            info_level: "info".to_string(),
+            debug: "debug".to_string(),
+            trace: "trace".to_string(),
+            info: "info".to_string(),
         }
     }
 }
@@ -147,10 +147,10 @@ impl Default for TracingConfig {
 impl Default for PathsConfig {
     fn default() -> Self {
         Self {
-            log_directory: "~/.local/share/acton/logs".to_string(),
-            cache_directory: "~/.cache/acton".to_string(),
-            data_directory: "~/.local/share/acton".to_string(),
-            config_directory: "~/.config/acton".to_string(),
+            logs: "~/.local/share/acton/logs".to_string(),
+            cache: "~/.cache/acton".to_string(),
+            data: "~/.local/share/acton".to_string(),
+            config: "~/.config/acton".to_string(),
         }
     }
 }
@@ -167,7 +167,7 @@ impl Default for BehaviorConfig {
 impl ActonConfig {
     /// Convert system shutdown timeout to Duration
     pub const fn system_shutdown_timeout(&self) -> Duration {
-        Duration::from_millis(self.timeouts.system_shutdown_timeout_ms)
+        Duration::from_millis(self.timeouts.system_shutdown)
     }
 
     /// Load configuration from XDG-compliant locations

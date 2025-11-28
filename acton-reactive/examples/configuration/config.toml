@@ -4,13 +4,13 @@
 
 [timeouts]
 # Timeout for agent shutdown in milliseconds
-agent_shutdown_timeout_ms = 10000
+agent_shutdown = 10000
 
-# Timeout for system-wide shutdown in milliseconds  
-system_shutdown_timeout_ms = 30000
+# Timeout for system-wide shutdown in milliseconds
+system_shutdown = 30000
 
 # Maximum wait before flushing read-only handlers in milliseconds
-read_only_handler_flush_ms = 10
+read_only_handler_flush = 10
 
 [limits]
 # Maximum concurrent read-only handlers before forced flush
@@ -24,33 +24,33 @@ dummy_channel_size = 1
 
 [defaults]
 # Default agent name when none provided
-default_agent_name = "agent"
+agent_name = "agent"
 
 # Default root Ern identifier for agents
-default_root_ern = "default"
+root_ern = "default"
 
 [tracing]
 # Debug tracing level
-debug_level = "debug"
+debug = "debug"
 
 # Trace tracing level
-trace_level = "trace"
+trace = "trace"
 
 # Info tracing level
-info_level = "info"
+info = "info"
 
 [paths]
 # Log directory location
-log_directory = "~/.local/share/acton/logs"
+logs = "~/.local/share/acton/logs"
 
 # Cache directory location
-cache_directory = "~/.cache/acton"
+cache = "~/.cache/acton"
 
 # Data directory location
-data_directory = "~/.local/share/acton"
+data = "~/.local/share/acton"
 
 # Configuration directory location
-config_directory = "~/.config/acton"
+config = "~/.config/acton"
 
 [behavior]
 # Enable tracing output
@@ -60,20 +60,20 @@ enable_tracing = true
 enable_metrics = false
 
 # Example customizations for different use cases:
-# 
+#
 # For production systems:
 # [timeouts]
-# agent_shutdown_timeout_ms = 5000
-# system_shutdown_timeout_ms = 15000
-# 
+# agent_shutdown = 5000
+# system_shutdown = 15000
+#
 # [limits]
 # agent_inbox_capacity = 512
 # concurrent_handlers_high_water_mark = 50
-# 
+#
 # [tracing]
-# debug_level = "info"
-# trace_level = "warn"
-# info_level = "info"
+# debug = "info"
+# trace = "warn"
+# info = "info"
 #
 # For development:
 # [behavior]

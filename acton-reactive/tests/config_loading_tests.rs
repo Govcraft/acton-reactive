@@ -33,8 +33,8 @@ async fn test_custom_configuration_override() -> anyhow::Result<()> {
     // Create a custom config file
     let config_content = r#"
         [timeouts]
-        agent_shutdown_timeout_ms = 5000
-        system_shutdown_timeout_ms = 15000
+        agent_shutdown = 5000
+        system_shutdown = 15000
 
         [limits]
         agent_inbox_capacity = 512
@@ -44,7 +44,7 @@ async fn test_custom_configuration_override() -> anyhow::Result<()> {
         agent_name = "custom_agent"
 
         [tracing]
-        debug_level = "info"
+        debug = "info"
     "#;
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
@@ -72,7 +72,7 @@ async fn test_xdg_directory_resolution() -> Result<(), anyhow::Error> {
     // Create a config file
     let config_content = r"
         [timeouts]
-        agent_shutdown_timeout_ms = 7500
+        agent_shutdown = 7500
     ";
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
@@ -99,7 +99,7 @@ async fn test_malformed_config_handling() -> Result<(), anyhow::Error> {
     // Create a malformed config file
     let malformed_content = r#"
         [timeouts]
-        agent_shutdown_timeout_ms = "not_a_number"
+        agent_shutdown = "not_a_number"
 
         [limits]
         agent_inbox_capacity = -1

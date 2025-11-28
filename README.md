@@ -195,15 +195,15 @@ Acton Reactive supports configuration via TOML files using the XDG Base Director
 2. **Customize settings**:
    ```toml
    [timeouts]
-   agent_shutdown_timeout_ms = 5000
-   system_shutdown_timeout_ms = 15000
+   agent_shutdown = 5000
+   system_shutdown = 15000
 
    [limits]
    agent_inbox_capacity = 512
    concurrent_handlers_high_water_mark = 50
 
    [tracing]
-   debug_level = "info"
+   debug = "info"
    ```
 
 3. **Verify configuration**:

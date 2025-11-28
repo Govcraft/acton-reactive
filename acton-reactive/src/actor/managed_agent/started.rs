@@ -111,7 +111,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         // Concurrent execution buffer for read-only handlers
         let mut read_only_futures = FuturesUnordered::new();
         let high_water_mark = CONFIG.limits.concurrent_handlers_high_water_mark;
-        let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush_ms);
+        let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
         let mut last_flush_time = Instant::now();
 
         loop {
@@ -301,7 +301,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         use std::time::Duration;
         use tokio::time::timeout as tokio_timeout;
 
-        let timeout_ms = CONFIG.timeouts.agent_shutdown_timeout_ms;
+        let timeout_ms = CONFIG.timeouts.agent_shutdown;
 
         let stop_futures: Vec<_> = self
             .handle
