@@ -176,17 +176,9 @@ impl Default for BehaviorConfig {
 }
 
 impl ActonConfig {
-    /// Convert timeout values to Duration
-    pub fn agent_shutdown_timeout(&self) -> Duration {
-        Duration::from_millis(self.timeouts.agent_shutdown_timeout_ms)
-    }
-
+    /// Convert system shutdown timeout to Duration
     pub fn system_shutdown_timeout(&self) -> Duration {
         Duration::from_millis(self.timeouts.system_shutdown_timeout_ms)
-    }
-
-    pub fn read_only_handler_flush(&self) -> Duration {
-        Duration::from_millis(self.timeouts.read_only_handler_flush_ms)
     }
 
     /// Load configuration from XDG-compliant locations
@@ -241,17 +233,6 @@ impl ActonConfig {
                 info!("No configuration file found, using defaults");
                 Self::default()
             }
-        }
-    }
-
-    /// Get the actual configuration directory path
-    /// 
-    /// Returns the directory where configuration files should be stored
-    /// according to XDG Base Directory Specification
-    pub fn config_directory() -> std::path::PathBuf {
-        match xdg::BaseDirectories::with_prefix("acton") {
-            Ok(dirs) => dirs.get_config_home(),
-            Err(_) => std::path::PathBuf::from("~/.config/acton"),
         }
     }
 }
