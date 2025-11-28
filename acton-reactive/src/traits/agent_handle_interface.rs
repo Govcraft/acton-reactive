@@ -97,10 +97,7 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static {
     ///
     /// * `message`: The message payload to send. Must implement [`ActonMessage`].
     #[instrument(skip(self, message), fields(message_type = std::any::type_name_of_val(&message)))]
-    fn send(&self, message: impl ActonMessage) -> impl Future<Output = ()> + Send + Sync + '_
-    where
-        Self: Sync, // Required by the async move block
-    {
+    fn send(&self, message: impl ActonMessage) -> impl Future<Output = ()> + Send + Sync + '_ {
         async move {
             // Creates an envelope targeting self.
             let envelope = self.create_envelope(Some(self.reply_address()));
