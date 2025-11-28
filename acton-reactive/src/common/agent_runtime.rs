@@ -19,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use acton_ern::Ern;
+use dashmap::DashMap;
 use futures::future::join_all;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -355,8 +356,8 @@ impl From<ActonApp> for AgentRuntime {
         
         // Create runtime with loaded configuration
         let mut runtime = AgentRuntime(ActonInner {
-            broker: Default::default(),
-            roots: Default::default(),
+            broker: AgentHandle::default(),
+            roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),
             config,
         });

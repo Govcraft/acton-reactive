@@ -46,7 +46,7 @@ impl ActonApp {
     /// An [`AgentRuntime`] instance representing the successfully launched and operational
     /// Acton system. This runtime can then be used to spawn top-level agents.
     pub fn launch() -> AgentRuntime {
-        let system: ActonApp = Default::default();
+        let system = Self::default();
         // The .into() call triggers the From<ActonApp> for AgentRuntime,
         // which performs the actual system initialization.
         system.into()

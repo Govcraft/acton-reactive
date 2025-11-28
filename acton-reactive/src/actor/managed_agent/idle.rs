@@ -15,15 +15,17 @@
  */
 
 use std::any::TypeId;
-
-use crate::traits::ActonMessageReply;
 use std::fmt::Debug;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::mem;
+use std::sync::atomic::AtomicBool;
 
 use acton_ern::Ern;
+use dashmap::DashMap;
 use tokio::sync::mpsc::channel;
-use tracing::*;
+use tokio_util::task::TaskTracker;
+use tracing::{error, instrument, trace};
 
 use crate::actor::{AgentConfig, ManagedAgent, Started};
 use crate::common::{
@@ -31,7 +33,7 @@ use crate::common::{
 };
 use crate::message::MessageContext;
 use crate::prelude::ActonMessage;
-use crate::traits::AgentHandleInterface;
+use crate::traits::{ActonMessageReply, AgentHandleInterface};
 
 /// Type-state marker for a [`ManagedAgent`] that has been configured but not yet started.
 ///
@@ -721,7 +723,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
             read_only_handlers: value.read_only_handlers,
             error_handler_map: value.error_handler_map, // transfer error handlers
             cancellation_token: value.cancellation_token,
-            _actor_state: Default::default(),
+            _actor_state: PhantomData,
         }
     }
 }
@@ -731,8 +733,8 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, Sta
         use crate::common::config::CONFIG;
         let capacity = CONFIG.limits.agent_inbox_capacity;
         let (outbox, inbox) = channel(capacity);
-        let id: Ern = Default::default();
-        let mut handle: AgentHandle = AgentHandle::default();
+        let id = Ern::default();
+        let mut handle = AgentHandle::default();
         handle.id = id.clone();
         handle.outbox = outbox.clone();
 
@@ -746,16 +748,16 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, Sta
             before_stop: Box::new(|_| default_handler()),
             after_stop: Box::new(|_| default_handler()),
             model: State::default(),
-            broker: Default::default(),
+            broker: AgentHandle::default(),
             error_handler_map: std::collections::HashMap::new(),
-            parent: Default::default(),
-            runtime: Default::default(),
-            halt_signal: Default::default(),
-            tracker: Default::default(),
-            cancellation_token: Default::default(),
-            message_handlers: Default::default(),
-            read_only_handlers: Default::default(),
-            _actor_state: Default::default(),
+            parent: Option::default(),
+            runtime: AgentRuntime::default(),
+            halt_signal: AtomicBool::default(),
+            tracker: TaskTracker::default(),
+            cancellation_token: Option::default(),
+            message_handlers: DashMap::default(),
+            read_only_handlers: DashMap::default(),
+            _actor_state: PhantomData,
         }
     }
 }

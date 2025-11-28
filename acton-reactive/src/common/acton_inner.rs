@@ -31,8 +31,8 @@ pub struct ActonInner {
 impl Default for ActonInner {
     fn default() -> Self {
         Self {
-            broker: Default::default(),
-            roots: Default::default(),
+            broker: AgentHandle::default(),
+            roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),
             config: ActonConfig::default(),
         }
