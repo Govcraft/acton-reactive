@@ -45,11 +45,11 @@ pub use outbound_envelope::OutboundEnvelope;
 pub use signal::SystemSignal;
 
 // --- Crate-Internal Re-exports ---
-pub(crate) use envelope::Envelope;
-pub(crate) use message_context::MessageContext;
-pub(crate) use message_error::MessageError;
-pub(crate) use subscribe_broker::SubscribeBroker;
-pub(crate) use unsubscribe_broker::UnsubscribeBroker;
+pub use envelope::Envelope;
+pub use message_context::MessageContext;
+pub use message_error::MessageError;
+pub use subscribe_broker::SubscribeBroker;
+pub use unsubscribe_broker::UnsubscribeBroker;
 
 // --- Submodules ---
 

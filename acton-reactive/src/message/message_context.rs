@@ -57,17 +57,17 @@ impl<S> MessageContext<S> {
         OutboundEnvelope::new_with_recipient(
             self.reply_envelope.return_address.clone(),
             recipient.clone(),
-            self.origin_envelope().cancellation_token.clone(),
+            self.origin_envelope().cancellation_token,
         )
     }
 
     /// Returns a reference to the message payload
-    pub fn message(&self) -> &S {
+    pub const fn message(&self) -> &S {
         &self.message
     }
 
     /// Returns a reference to the message's timestamp
-    pub fn timestamp(&self) -> &SystemTime {
+    pub const fn timestamp(&self) -> &SystemTime {
         &self.timestamp
     }
 }

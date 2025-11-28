@@ -24,6 +24,7 @@ use lazy_static::lazy_static;
 /// loaded from TOML files in XDG-compliant directories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ActonConfig {
     /// Timeout configuration
     pub timeouts: TimeoutConfig,
@@ -103,18 +104,6 @@ pub struct BehaviorConfig {
     pub enable_metrics: bool,
 }
 
-impl Default for ActonConfig {
-    fn default() -> Self {
-        Self {
-            timeouts: TimeoutConfig::default(),
-            limits: LimitsConfig::default(),
-            defaults: DefaultsConfig::default(),
-            tracing: TracingConfig::default(),
-            paths: PathsConfig::default(),
-            behavior: BehaviorConfig::default(),
-        }
-    }
-}
 
 impl Default for TimeoutConfig {
     fn default() -> Self {
@@ -177,7 +166,7 @@ impl Default for BehaviorConfig {
 
 impl ActonConfig {
     /// Convert system shutdown timeout to Duration
-    pub fn system_shutdown_timeout(&self) -> Duration {
+    pub const fn system_shutdown_timeout(&self) -> Duration {
         Duration::from_millis(self.timeouts.system_shutdown_timeout_ms)
     }
 
@@ -207,32 +196,29 @@ impl ActonConfig {
         // Try to find the configuration file
         let config_path = xdg_dirs.find_config_file("config.toml");
 
-        match config_path {
-            Some(path) => {
-                info!("Loading configuration from: {}", path.display());
-                match std::fs::read_to_string(&path) {
-                    Ok(config_str) => {
-                        match toml::from_str::<ActonConfig>(&config_str) {
-                            Ok(config) => {
-                                info!("Successfully loaded configuration");
-                                config
-                            }
-                            Err(e) => {
-                                error!("Failed to parse configuration file {}: {}", path.display(), e);
-                                Self::default()
-                            }
+        if let Some(path) = config_path {
+            info!("Loading configuration from: {}", path.display());
+            match std::fs::read_to_string(&path) {
+                Ok(config_str) => {
+                    match toml::from_str::<Self>(&config_str) {
+                        Ok(config) => {
+                            info!("Successfully loaded configuration");
+                            config
+                        }
+                        Err(e) => {
+                            error!("Failed to parse configuration file {}: {}", path.display(), e);
+                            Self::default()
                         }
                     }
-                    Err(e) => {
-                        error!("Failed to read configuration file {}: {}", path.display(), e);
-                        Self::default()
-                    }
+                }
+                Err(e) => {
+                    error!("Failed to read configuration file {}: {}", path.display(), e);
+                    Self::default()
                 }
             }
-            None => {
-                info!("No configuration file found, using defaults");
-                Self::default()
-            }
+        } else {
+            info!("No configuration file found, using defaults");
+            Self::default()
         }
     }
 }

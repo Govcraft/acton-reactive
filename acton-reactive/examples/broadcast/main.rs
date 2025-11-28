@@ -25,7 +25,7 @@ use acton_reactive::prelude::*;
 // Import the macro for agent state structs
 use acton_macro::acton_actor;
 
-/// State for the DataCollector agent.
+/// State for the `DataCollector` agent.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 struct DataCollector {

@@ -32,8 +32,8 @@ impl std::fmt::Display for MessageError {
     /// A result indicating whether the formatting was successful.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MessageError::SendFailed(msg) => write!(f, "Failed to send message: {msg}"),
-            MessageError::OtherError(msg) => write!(f, "Error: {msg}"),
+            Self::SendFailed(msg) => write!(f, "Failed to send message: {msg}"),
+            Self::OtherError(msg) => write!(f, "Error: {msg}"),
         }
     }
 }
@@ -43,6 +43,6 @@ impl std::error::Error for MessageError {}
 /// Converts a `SendError` from Tokio's MPSC channel to a `MessageError`.
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for MessageError {
     fn from(_: tokio::sync::mpsc::error::SendError<T>) -> Self {
-        MessageError::SendFailed("Channel closed".into())
+        Self::SendFailed("Channel closed".into())
     }
 }

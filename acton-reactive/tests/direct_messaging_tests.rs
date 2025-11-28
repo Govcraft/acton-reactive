@@ -79,7 +79,7 @@ async fn test_reply() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Response message sent by PriceService back to the requester.
+/// Response message sent by `PriceService` back to the requester.
 #[derive(Default, Debug, Clone)]
 pub struct PongResponse(i8);
 
@@ -95,12 +95,12 @@ pub(crate) struct PriceService {
 }
 
 impl PriceService {
-    /// Creates, configures, and starts a new PriceService agent.
+    /// Creates, configures, and starts a new `PriceService` agent.
     /// Returns a struct containing the handle to the started agent.
     pub(crate) async fn new(runtime: &mut AgentRuntime) -> Self {
         let config = AgentConfig::new(Ern::with_root("price_service").unwrap(), None, None).expect("Failed to create actor config");
         // Create the agent builder.
-        let mut price_service_builder = runtime.new_agent_with_config::<PriceService>(config).await;
+        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config).await;
         // Configure the agent's behavior.
         price_service_builder
             // Handler for `Pong` messages (sent by ShoppingCart).
@@ -121,19 +121,19 @@ impl PriceService {
         // Start the agent and get its handle.
         let agent_handle = price_service_builder.start().await;
         // Return the context struct containing the handle.
-        PriceService {
+        Self {
             agent_handle,
         }
     }
 }
 
 impl ShoppingCart {
-    /// Creates, configures, and starts a new ShoppingCart agent.
-    /// Returns a struct containing the handle to the started agent and the PriceService handle.
+    /// Creates, configures, and starts a new `ShoppingCart` agent.
+    /// Returns a struct containing the handle to the started agent and the `PriceService` handle.
     pub(crate) async fn new(price_service_handle: AgentHandle, runtime: &mut AgentRuntime) -> Self {
         let config = AgentConfig::new(Ern::with_root("shopping_cart").unwrap(), None, None).expect("Failed to create actor config");
         // Create the agent builder.
-        let mut shopping_cart_builder = runtime.new_agent_with_config::<ShoppingCart>(config).await;
+        let mut shopping_cart_builder = runtime.new_agent_with_config::<Self>(config).await;
         // Configure agent behavior
         shopping_cart_builder
             // Handler for `Ping` messages (sent by the `trigger` method).
@@ -168,13 +168,13 @@ impl ShoppingCart {
         let shopping_cart_handle = shopping_cart_builder.start().await;
 
         // Return the context struct containing the handles.
-        ShoppingCart {
+        Self {
             agent_handle: shopping_cart_handle, // Store own handle (see note above)
             price_service_handle,
         }
     }
 
-    /// Sends a `Ping` message to this ShoppingCart agent itself to initiate the
+    /// Sends a `Ping` message to this `ShoppingCart` agent itself to initiate the
     /// price request sequence.
     #[instrument(skip(self), level = "debug")]
     pub(crate) async fn trigger(&self) {

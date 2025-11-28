@@ -95,7 +95,7 @@ impl OutboundEnvelope {
         cancellation_token: tokio_util::sync::CancellationToken,
     ) -> Self {
         trace!(sender = %return_address.sender, "Creating new OutboundEnvelope");
-        OutboundEnvelope {
+        Self {
             return_address,
             recipient_address: None,
             cancellation_token,
@@ -110,7 +110,7 @@ impl OutboundEnvelope {
 
     /// Returns a reference to the optional recipient's [`MessageAddress`].
     #[inline]
-    pub fn recipient(&self) -> &Option<MessageAddress> {
+    pub const fn recipient(&self) -> &Option<MessageAddress> {
         &self.recipient_address
     }
 
@@ -122,7 +122,7 @@ impl OutboundEnvelope {
         cancellation_token: tokio_util::sync::CancellationToken,
     ) -> Self {
         trace!(sender = %return_address.sender, recipient = %recipient_address.sender, "Creating new OutboundEnvelope with recipient");
-        OutboundEnvelope {
+        Self {
             return_address,
             recipient_address: Some(recipient_address),
             cancellation_token,
@@ -183,11 +183,14 @@ impl OutboundEnvelope {
 
         trace!(sender = %self.return_address.sender, recipient = %target_id, "Attempting to send message");
 
-        if !channel_sender.is_closed() {
+        if channel_sender.is_closed() {
+            // Channel was already closed.
+            error!(sender = %self.return_address.sender, recipient = %target_id, "Recipient channel is closed");
+        } else {
             // Cancellation-aware reservation of a send permit
             let cancellation = self.cancellation_token.clone();
             tokio::select! {
-                _ = cancellation.cancelled() => {
+                () = cancellation.cancelled() => {
                     error!(sender = %self.return_address.sender, recipient = %target_id, "Send aborted: cancellation_token triggered");
                     return;
                 }
@@ -210,9 +213,6 @@ impl OutboundEnvelope {
                     }
                 }
             }
-        } else {
-            // Channel was already closed.
-            error!(sender = %self.return_address.sender, recipient = %target_id, "Recipient channel is closed");
         }
     }
 

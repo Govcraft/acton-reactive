@@ -31,7 +31,7 @@ struct BasicAgentState {
 #[derive(Debug, Clone)]
 struct PingMsg;
 
-/// A reply message sent back by the agent after receiving PingMsg.
+/// A reply message sent back by the agent after receiving `PingMsg`.
 // Note: We rely on the blanket `impl<T> ActonMessage for T` and derive traits manually.
 #[derive(Debug, Clone)]
 struct PongMsg;

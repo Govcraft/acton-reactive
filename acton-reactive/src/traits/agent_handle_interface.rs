@@ -23,7 +23,7 @@ use dashmap::DashMap;
 use tokio_util::task::TaskTracker;
 use tracing::{instrument, trace}; // Removed error, warn as they weren't used in defaults
 
-use crate::common::*; // Keep wildcard import if necessary, or specify types
+use crate::common::{OutboundEnvelope, AgentHandle}; // Keep wildcard import if necessary, or specify types
 use crate::message::{BrokerRequest, MessageAddress}; // BrokerRequest used in send_sync default
 use crate::traits::acton_message::ActonMessage;
 

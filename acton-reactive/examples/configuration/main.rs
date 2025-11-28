@@ -85,7 +85,7 @@ async fn main() {
 
     // Request configuration information
     let config = agent_handle.send(GetConfig).await;
-    println!("Agent configuration: {:?}", config);
+    println!("Agent configuration: {config:?}");
 
     // Graceful shutdown
     runtime.shutdown_all().await.expect("Failed to shut down system");

@@ -50,11 +50,11 @@ impl Envelope {
         recipient: MessageAddress,
     ) -> Self {
         let timestamp = SystemTime::now();
-        Envelope {
+        Self {
             message,
-            recipient,
-            reply_to,
             timestamp,
+            reply_to,
+            recipient,
         }
     }
 }

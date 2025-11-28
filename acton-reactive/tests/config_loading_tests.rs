@@ -70,10 +70,10 @@ async fn test_xdg_directory_resolution() -> Result<(), anyhow::Error> {
     fs::create_dir_all(&config_dir).unwrap();
 
     // Create a config file
-    let config_content = r#"
+    let config_content = r"
         [timeouts]
         agent_shutdown_timeout_ms = 7500
-    "#;
+    ";
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
 
@@ -146,10 +146,10 @@ async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
     fs::create_dir_all(&config_dir).unwrap();
 
     // Create config with very small inbox capacity
-    let config_content = r#"
+    let config_content = r"
         [limits]
         agent_inbox_capacity = 2
-    "#;
+    ";
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());

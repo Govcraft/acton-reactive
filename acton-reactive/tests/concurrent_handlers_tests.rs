@@ -324,8 +324,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
             // Allow some buffer for startup/shutdown overhead
             assert!(
                 total_elapsed < Duration::from_secs(5),
-                "Concurrent execution should complete much faster than sequential. Took: {:?}",
-                total_elapsed
+                "Concurrent execution should complete much faster than sequential. Took: {total_elapsed:?}"
             );
 
             tracing::info!(
@@ -532,7 +531,7 @@ async fn test_mixed_handlers() -> anyhow::Result<()> {
     for i in 0..6 {
         handle.send(ReadOnlyOp).await;
         if i < 4 {
-            handle.send(MutableOp(format!("item_{}", i))).await;
+            handle.send(MutableOp(format!("item_{i}"))).await;
         }
     }
 

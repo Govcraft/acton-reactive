@@ -92,7 +92,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
             match envelope.message() {
                 AudienceReactionMsg::Chuckle => agent.model.funny += 1,
                 AudienceReactionMsg::Groan => agent.model.bombers += 1,
-            };
+            }
             // This handler completes synchronously, so we return `AgentReply::immediate()`.
             AgentReply::immediate()
         })
@@ -266,7 +266,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
                     // Increment the child's internal counter.
                     agent.model.receive_count += 1;
                 }
-            };
+            }
             AgentReply::immediate()
         })
         // Handler executed after the child agent stops.
@@ -433,11 +433,11 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
                     match message {
                         FunnyJoke::ChickenCrossesRoad => {
                             // Send a "Chuckle" reaction back to self.
-                            let _ = self_envelope.send(AudienceReactionMsg::Chuckle).await;
+                            let () = self_envelope.send(AudienceReactionMsg::Chuckle).await;
                         }
                         FunnyJoke::Pun => {
                             // Send a "Groan" reaction back to self.
-                            let _ = self_envelope.send(AudienceReactionMsg::Groan).await;
+                            let () = self_envelope.send(AudienceReactionMsg::Groan).await;
                         }
                     }
                 }
@@ -449,7 +449,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
             match envelope.message() {
                 AudienceReactionMsg::Chuckle => agent.model.funny += 1,
                 AudienceReactionMsg::Groan => agent.model.bombers += 1,
-            };
+            }
             AgentReply::immediate()
         })
         // Handler executed after the agent stops.
@@ -541,7 +541,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
             if let Some(child_handle) = agent.handle().find_child(&child_id) {
                 trace!("Pinging child {}", &child_id);
                 // Clone the handle for use in the async block.
-                let child_handle = child_handle.clone();
+                let child_handle = child_handle;
                 // Return an async block to send the `Ping` message to the child.
                 AgentReply::from_async(async move { child_handle.send(Ping).await })
             } else {

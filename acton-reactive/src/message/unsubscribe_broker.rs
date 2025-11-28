@@ -22,7 +22,7 @@ use std::fmt::Debug;
 // use crate::common::ActorRef;
 
 #[derive(Debug, Clone)]
-pub(crate) struct UnsubscribeBroker {
+pub struct UnsubscribeBroker {
     // ern: Ern<UnixTime>,
     // message_type_id: TypeId,
     // subscriber_ref: ActorRef,

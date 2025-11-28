@@ -79,7 +79,7 @@ impl Default for AgentHandle {
         
         let dummy_channel_size = CONFIG.limits.dummy_channel_size;
         let (outbox, _) = mpsc::channel(dummy_channel_size); // Create a dummy channel
-        AgentHandle {
+        Self {
             id: Ern::default(),
             outbox,
             tracker: TaskTracker::new(),
@@ -145,7 +145,7 @@ impl AgentHandle {
         // Add 'static bound
         &self,
         child: ManagedAgent<Idle, State>,
-    ) -> anyhow::Result<AgentHandle> {
+    ) -> anyhow::Result<Self> {
         let child_id = child.id().clone(); // Get ID before consuming child
         trace!("Supervising child agent with id: {}", child_id);
         let handle = child.start().await; // Start the child agent
@@ -243,7 +243,7 @@ impl AgentHandleInterface for AgentHandle {
     /// * `Some(AgentHandle)`: If a direct child with the matching `Ern` is found.
     /// * `None`: If no direct child with the specified `Ern` exists.
     #[instrument(skip(self))]
-    fn find_child(&self, ern: &Ern) -> Option<AgentHandle> {
+    fn find_child(&self, ern: &Ern) -> Option<Self> {
         trace!("Searching for child with ERN: {}", ern);
         // Access the DashMap using the ERN's string representation as the key.
         self.children.get(&ern.to_string()).map(

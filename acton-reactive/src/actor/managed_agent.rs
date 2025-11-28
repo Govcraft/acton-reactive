@@ -113,7 +113,7 @@ pub struct ManagedAgent<AgentState, Model: Default + Send + Debug + 'static> {
 impl<AgentState, Model: Default + Send + Debug + 'static> ManagedAgent<AgentState, Model> {
     /// Returns a reference to the agent's unique identifier (`Ern`).
     #[inline]
-    pub fn id(&self) -> &Ern {
+    pub const fn id(&self) -> &Ern {
         &self.id
     }
 
@@ -128,7 +128,7 @@ impl<AgentState, Model: Default + Send + Debug + 'static> ManagedAgent<AgentStat
     /// The handle is the primary means for external interaction with the agent
     /// once it has started.
     #[inline]
-    pub fn handle(&self) -> &AgentHandle {
+    pub const fn handle(&self) -> &AgentHandle {
         &self.handle
     }
 
@@ -136,19 +136,19 @@ impl<AgentState, Model: Default + Send + Debug + 'static> ManagedAgent<AgentStat
     ///
     /// Returns `None` if this is a top-level agent.
     #[inline]
-    pub fn parent(&self) -> &Option<ParentRef> {
+    pub const fn parent(&self) -> &Option<ParentRef> {
         &self.parent
     }
 
     /// Returns a reference to the system message broker's handle ([`BrokerRef`]).
     #[inline]
-    pub fn broker(&self) -> &BrokerRef {
+    pub const fn broker(&self) -> &BrokerRef {
         &self.broker
     }
 
     /// Returns a reference to the [`AgentRuntime`] this agent belongs to.
     #[inline]
-    pub fn runtime(&self) -> &AgentRuntime {
+    pub const fn runtime(&self) -> &AgentRuntime {
         &self.runtime
     }
 }

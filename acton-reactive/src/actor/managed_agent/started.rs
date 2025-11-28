@@ -102,7 +102,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
             self.cancellation_token.is_some(),
             "ManagedAgent in Started state must always have a cancellation_token"
         );
-        let cancel_token = self.cancellation_token.as_ref().cloned().unwrap();
+        let cancel_token = self.cancellation_token.clone().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
 
         let mut _terminate_signal_received = false;
@@ -117,7 +117,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         loop {
             tokio::select! {
                 // React immediately to cancellation
-                _ = &mut cancel => {
+                () = &mut cancel => {
                     trace!("Forceful cancellation triggered for agent: {}", self.id());
                     // Flush any remaining read-only futures before breaking
                     if !read_only_futures.is_empty() {
@@ -128,7 +128,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                 }
 
                 // Check if we should flush read-only futures due to time limit
-                _ = tokio::time::sleep_until((last_flush_time + max_wait_duration).into()), if !read_only_futures.is_empty() => {
+                () = tokio::time::sleep_until((last_flush_time + max_wait_duration).into()), if !read_only_futures.is_empty() => {
                     trace!("Flushing {} read-only futures due to time limit", read_only_futures.len());
                     while let Some(_) = read_only_futures.next().await {}
                     last_flush_time = Instant::now();
@@ -250,8 +250,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                                 tracing::warn!("Found mutable handler in read_only_reactors map");
                             }
                         }
-                    } else if let Some(SystemSignal::Terminate) =
-                        envelope.message.as_any().downcast_ref::<SystemSignal>()
+                    } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate))
                     {
                         // Flush any remaining read-only futures before processing terminate
                         if !read_only_futures.is_empty() {

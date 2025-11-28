@@ -22,7 +22,7 @@ use std::sync::Arc;
 use acton_ern::Ern;
 use dashmap::DashMap;
 use futures::future::join_all;
-use tracing::*;
+use tracing::{instrument, trace, Callsite};
 
 use crate::actor::{AgentConfig, Idle, ManagedAgent};
 use crate::common::{AgentHandle, AgentRuntime, BrokerRef};
@@ -99,7 +99,7 @@ impl AgentBroker {
         );
 
         // Create the ManagedAgent for the broker. The model state *is* the AgentBroker itself.
-        let mut broker_agent: ManagedAgent<Idle, AgentBroker> =
+        let mut broker_agent: ManagedAgent<Idle, Self> =
             ManagedAgent::new(&Some(runtime), Some(actor_config)).await;
 
         // Configure the broker agent's message handlers.
@@ -112,7 +112,7 @@ impl AgentBroker {
 
                 Box::pin(async move {
                     // Call the static broadcast method.
-                    AgentBroker::broadcast(subscribers, message_to_broadcast).await;
+                    Self::broadcast(subscribers, message_to_broadcast).await;
                 })
             })
             .act_on::<SubscribeBroker>(|agent, event| {
@@ -120,7 +120,7 @@ impl AgentBroker {
                 let subscription_msg = event.message.clone();
                 let type_id = subscription_msg.message_type_id;
                 let subscriber_handle = subscription_msg.subscriber_context.clone();
-                let subscriber_id = subscription_msg.subscriber_id.clone();
+                let subscriber_id = subscription_msg.subscriber_id;
                 trace!(subscriber = %subscriber_id, message_type = ?type_id, "Broker received SubscribeBroker");
 
                 let subscribers_map = agent.model.subscribers.clone(); // Clone Arc<DashMap>
@@ -175,7 +175,7 @@ impl AgentBroker {
                     trace!(subscriber = %handle.id(), message_type = ?message_type_id, "Sending broadcast");
                     // Send the envelope to the subscriber's handle.
                     // Ignore potential send errors (e.g., closed channel).
-                    let _ = handle.send(envelope_to_send).await;
+                    let () = handle.send(envelope_to_send).await;
                 }
             });
 

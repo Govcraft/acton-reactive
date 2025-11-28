@@ -68,18 +68,18 @@ impl AgentConfig {
         id: Ern,
         parent: Option<ParentRef>,
         broker: Option<BrokerRef>,
-    ) -> anyhow::Result<AgentConfig> {
+    ) -> anyhow::Result<Self> {
         if let Some(parent_ref) = parent { // Use a different variable name to avoid shadowing
             // Get the parent ERN
             let parent_id = ErnParser::new(parent_ref.id().to_string()).parse()?;
             let child_id = parent_id + id;
-            Ok(AgentConfig {
+            Ok(Self {
                 id: child_id,
                 broker,
                 parent: Some(parent_ref),
             })
         } else {
-            Ok(AgentConfig {
+            Ok(Self {
                 id,
                 broker,
                 parent, // parent is None here
@@ -107,7 +107,7 @@ impl AgentConfig {
     /// (e.g., if the name is invalid according to `Ern` rules).
     pub fn new_with_name(
         name: impl Into<String>,
-    ) -> anyhow::Result<AgentConfig> {
+    ) -> anyhow::Result<Self> {
         Self::new(Ern::with_root(name.into())?, None, None)
     }
 
@@ -120,13 +120,13 @@ impl AgentConfig {
 
     /// Returns a reference to the optional broker handle.
     #[inline]
-    pub(crate) fn get_broker(&self) -> &Option<BrokerRef> {
+    pub(crate) const fn get_broker(&self) -> &Option<BrokerRef> {
         &self.broker
     }
 
     /// Returns a reference to the optional parent handle.
     #[inline]
-    pub(crate) fn parent(&self) -> &Option<ParentRef> {
+    pub(crate) const fn parent(&self) -> &Option<ParentRef> {
         &self.parent
     }
 }

@@ -22,7 +22,7 @@ use acton_ern::{Ern};
 use crate::common::AgentHandle;
 
 #[derive(Debug, Clone)]
-pub(crate) struct SubscribeBroker {
+pub struct SubscribeBroker {
     pub(crate) subscriber_id: Ern,
     pub(crate) message_type_id: TypeId,
     pub(crate) subscriber_context: AgentHandle,

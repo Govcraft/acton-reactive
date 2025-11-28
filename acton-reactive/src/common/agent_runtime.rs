@@ -268,18 +268,14 @@ impl AgentRuntime {
 
         trace!("Stopping the system broker...");
         // Stop the broker agent, using same system shutdown timeout.
-        match tokio_timeout(Duration::from_millis(timeout_ms), self.0.broker.stop()).await {
-            Ok(res) => res?,
-            Err(_) => {
-                error!(
-                    "Timeout waiting for broker to shut down after {} ms",
-                    timeout_ms
-                );
-                return Err(anyhow::anyhow!(
-                    "Timeout while waiting for system broker to shut down after {} ms",
-                    timeout_ms
-                ));
-            }
+        if let Ok(res) = tokio_timeout(Duration::from_millis(timeout_ms), self.0.broker.stop()).await { res? } else {
+            error!(
+                "Timeout waiting for broker to shut down after {} ms",
+                timeout_ms
+            );
+            return Err(anyhow::anyhow!(
+                "Timeout while waiting for system broker to shut down after {timeout_ms} ms"
+            ));
         }
         trace!("System shutdown complete.");
         Ok(())
@@ -355,7 +351,7 @@ impl From<ActonApp> for AgentRuntime {
         let (sender, receiver) = oneshot::channel();
         
         // Create runtime with loaded configuration
-        let mut runtime = AgentRuntime(ActonInner {
+        let mut runtime = Self(ActonInner {
             broker: AgentHandle::default(),
             roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),

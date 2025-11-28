@@ -567,21 +567,21 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
     /// Returns an error if creating the child's `Ern` fails or if creating the
     /// `AgentConfig` fails (e.g., parsing the parent ID).
     #[instrument(skip(self))]
-    pub async fn create_child(&self, name: String) -> anyhow::Result<ManagedAgent<Idle, State>> {
+    pub async fn create_child(&self, name: String) -> anyhow::Result<Self> {
         // Configure the child with parent and broker references.
         let config = AgentConfig::new(
             Ern::with_root(name)?,               // Child's name segment
             Some(self.handle.clone()),           // Parent handle
-            Some(self.runtime.broker().clone()), // Inherited broker handle
+            Some(self.runtime.broker()), // Inherited broker handle
         )?;
         // Create the Idle agent using the internal constructor.
-        Ok(ManagedAgent::new(&Some(self.runtime().clone()), Some(config)).await)
+        Ok(Self::new(&Some(self.runtime().clone()), Some(config)).await)
     }
 
     // Internal constructor - not part of public API documentation
     #[instrument]
     pub(crate) async fn new(runtime: &Option<AgentRuntime>, config: Option<AgentConfig>) -> Self {
-        let mut managed_actor: ManagedAgent<Idle, State> = ManagedAgent::default();
+        let mut managed_actor: Self = Self::default();
 
         if let Some(app) = runtime {
             managed_actor.broker = app.0.broker.clone();
@@ -705,7 +705,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedAgent<Idle, State>>
             "Cannot transition to ManagedAgent<Started, State> without a cancellation_token"
         );
         // Move all fields from Idle state to Started state.
-        ManagedAgent::<Started, State> {
+        Self {
             handle: value.handle,
             parent: value.parent,
             halt_signal: value.halt_signal,
@@ -736,9 +736,9 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, Sta
         let id = Ern::default();
         let mut handle = AgentHandle::default();
         handle.id = id.clone();
-        handle.outbox = outbox.clone();
+        handle.outbox = outbox;
 
-        ManagedAgent::<Idle, State> {
+        Self {
             handle,
             id,
             inbox,
