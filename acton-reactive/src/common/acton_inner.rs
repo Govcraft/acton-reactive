@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::common::{AgentHandle, BrokerRef, ActonConfig};
 
 #[derive(Debug, Clone)]
-pub(crate) struct ActonInner {
+pub struct ActonInner {
     pub(crate) broker: BrokerRef,
     pub(crate) roots: DashMap<Ern, AgentHandle>,
     pub(crate) cancellation_token: CancellationToken,

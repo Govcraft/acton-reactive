@@ -42,7 +42,7 @@ pub use agent_runtime::AgentRuntime;
 pub use config::ActonConfig;
 
 // --- Crate-Internal Re-exports ---
-pub(crate) use types::*; // Re-export all types from the internal `types` module
+pub use types::*; // Re-export all types from the internal `types` module
 pub(crate) use crate::message::{Envelope, MessageError, OutboundEnvelope}; // Used by common components
 
 // --- Submodules ---

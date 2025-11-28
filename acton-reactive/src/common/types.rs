@@ -35,12 +35,12 @@ use crate::message::Envelope;
 use crate::traits::ActonMessageReply;
 
 /// Crate-internal: Map storing message handlers (`TypeId` -> `ReactorItem`).
-pub(crate) type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntity>>;
+pub type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntity>>;
 
 /// Crate-internal: Enum wrapping different kinds of message/event handlers.
 /// Currently only supports `FutureReactor`.
 #[allow(dead_code)] // Allow dead_code for potential future variants like SignalReactor
-pub(crate) enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
+pub enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     // SignalReactor(Box<SignalHandler<ActorEntity>>),
     /// A handler for an infallible operation that processes a message and returns a future.
     FutureReactor(Box<FutureHandler<ActorEntity>>),
@@ -55,7 +55,7 @@ pub(crate) enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
 /// Crate-internal: Type alias for the function signature of a message handler
 /// that returns a future.
 /// An infallible handler that returns `()`.
-pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
+pub type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a mut ManagedAgent<Started, ManagedEntity>, // Takes mutable agent in Started state
         &'b mut Envelope, // Takes mutable envelope containing the message
     ) -> FutureBox // Returns a pinned, boxed future
@@ -64,7 +64,7 @@ pub(crate) type FutureHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
     + 'static;
 
 /// A fallible handler that returns a `Result`.
-pub(crate) type FutureHandlerResult<ManagedEntity> = dyn for<'a, 'b> Fn(
+pub type FutureHandlerResult<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a mut ManagedAgent<Started, ManagedEntity>,
         &'b mut Envelope,
     ) -> FutureBoxResult
@@ -73,7 +73,7 @@ pub(crate) type FutureHandlerResult<ManagedEntity> = dyn for<'a, 'b> Fn(
     + 'static;
 
 /// A read-only handler that processes a message immutably and returns a future.
-pub(crate) type FutureHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(
+pub type FutureHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a ManagedAgent<Started, ManagedEntity>,  // Read-only reference
         &'b mut Envelope,
     ) -> FutureBoxReadOnly
@@ -82,7 +82,7 @@ pub(crate) type FutureHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(
     + 'static;
 
 /// A fallible read-only handler that processes a message immutably and returns a `Result` future.
-pub(crate) type FutureHandlerReadOnlyResult<ManagedEntity> = dyn for<'a, 'b> Fn(
+pub type FutureHandlerReadOnlyResult<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a ManagedAgent<Started, ManagedEntity>,  // Read-only reference
         &'b mut Envelope,
     ) -> FutureBoxReadOnlyResult
@@ -91,7 +91,7 @@ pub(crate) type FutureHandlerReadOnlyResult<ManagedEntity> = dyn for<'a, 'b> Fn(
     + 'static;
 
 /// New: Handler for error types.
-pub(crate) type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
+pub type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'a mut ManagedAgent<Started, ManagedEntity>,
         &'b mut Envelope,
         &(dyn std::error::Error + 'static),
@@ -103,13 +103,13 @@ pub(crate) type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
 /// Crate-internal: Type alias for a pinned, boxed, dynamically dispatched future
 /// with `Output = ()` that is `Send`, `Sync`, and `'static`.
 /// This is the required return type for asynchronous message handlers (`act_on`).
-pub(crate) type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+pub type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
 /// New: Box for read-only future-based handlers returning ().
-pub(crate) type FutureBoxReadOnly = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+pub type FutureBoxReadOnly = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
 /// New: Box for Future-based handlers returning Result.
-pub(crate) type FutureBoxResult = Pin<
+pub type FutureBoxResult = Pin<
     Box<
         dyn Future<
                 Output = Result<
@@ -123,7 +123,7 @@ pub(crate) type FutureBoxResult = Pin<
 >;
 
 /// New: Box for read-only Future-based handlers returning Result.
-pub(crate) type FutureBoxReadOnlyResult = Pin<
+pub type FutureBoxReadOnlyResult = Pin<
     Box<
         dyn Future<
                 Output = Result<
@@ -137,13 +137,13 @@ pub(crate) type FutureBoxReadOnlyResult = Pin<
 >;
 
 /// Crate-internal: Type alias for the sender part of an agent's MPSC channel.
-pub(crate) type AgentSender = Sender<Envelope>;
+pub type AgentSender = Sender<Envelope>;
 
 /// Crate-internal: Type alias for the atomic boolean used as a halt signal for agents.
-pub(crate) type HaltSignal = AtomicBool;
+pub type HaltSignal = AtomicBool;
 
 /// Crate-internal: Type alias for the function signature of an asynchronous lifecycle hook.
-pub(crate) type AsyncLifecycleHandler<ManagedEntity> =
+pub type AsyncLifecycleHandler<ManagedEntity> =
     Box<dyn Fn(&ManagedAgent<Started, ManagedEntity>) -> FutureBox + Send + Sync + 'static>;
 
 // --- Public Type Aliases ---
