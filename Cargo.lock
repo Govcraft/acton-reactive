@@ -55,7 +55,6 @@ dependencies = [
  "derive-new",
  "dyn-clone",
  "futures",
- "lazy_static",
  "mti",
  "rand",
  "serde",

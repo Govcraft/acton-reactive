@@ -15,8 +15,8 @@
  */
 
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
-use lazy_static::lazy_static;
 
 /// Configuration for the Acton Reactive framework
 /// 
@@ -226,7 +226,5 @@ impl ActonConfig {
     }
 }
 
-lazy_static! {
-    /// Global configuration instance loaded from XDG-compliant locations
-    pub static ref CONFIG: ActonConfig = ActonConfig::load();
-}
+/// Global configuration instance loaded from XDG-compliant locations
+pub static CONFIG: LazyLock<ActonConfig> = LazyLock::new(ActonConfig::load);

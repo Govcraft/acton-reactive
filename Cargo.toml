@@ -51,7 +51,6 @@ static_assertions = "1.1.0"
 dyn-clone = "1.0.17"
 derive-new = "0.7.0"
 xdg = "2.5"
-lazy_static = "1.4"
 rand = "0.9.1"
 
 # Dev/test dependencies

@@ -25,7 +25,6 @@ tracing-appender.workspace = true
 xdg.workspace = true
 serde.workspace = true
 toml.workspace = true
-lazy_static.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
