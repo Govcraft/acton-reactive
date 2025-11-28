@@ -12,8 +12,8 @@ pub struct ViewManager {
 }
 
 impl ViewManager {
-    pub async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<Self>().await;
+    pub async fn create(app_runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
+        let mut agent = app_runtime.new_agent::<Self>().await;
         let mut runtime = agent.runtime().clone();
         agent
             .mutate_on::<MenuMoveUp>(|agent, context| {
@@ -37,10 +37,10 @@ impl ViewManager {
                     view.send(msg).await;
                 })
             });
-        let home_screen = HomeScreen::new(&mut runtime).await?;
+        let home_screen = HomeScreen::create(&mut runtime).await?;
         agent.model.screens.insert(home_screen.id(), home_screen);
 
-        let new_screen = NewScreen::new(&mut runtime).await?;
+        let new_screen = NewScreen::create(&mut runtime).await?;
         agent.model.screens.insert(new_screen.id(), new_screen);
 
         // agent.model.active = agent.model.screens[0].clone();

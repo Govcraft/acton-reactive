@@ -23,9 +23,9 @@ use crossterm::{
     queue,
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use tokio::sync::oneshot;
-use tracing::*;
+use tracing::{info, error, subscriber};
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, FmtSubscriber};
@@ -39,20 +39,14 @@ mod screens;
 mod agents;
 mod messages;
 
-const FAILED_TO_ENABLE_RAW_MODE: &str = "Failed to enable raw mode";
 const FAILED_TO_DISABLE_RAW_MODE: &str = "Failed to disable raw mode";
 const SHUTDOWN_MESSAGE: &str = "Shutting down...\n";
-const ERROR_READING_EVENT: &str = "Error reading event: {:?}";
 const LOG_DIRECTORY: &str = "logs";
 const LOG_FILENAME: &str = "tracing.log";
+const PROJECT_NAME: &str = "test_project";
 
 const TAGLINE: &str = "Rapidly scaffold and update Acton Reactive Framework applications";
 const TITLE: &str = "Acton Console";
-
-#[derive(Clone, Debug)]
-enum PrinterMessage {
-    Repaint,
-}
 
 struct RawModeGuard;
 
@@ -76,12 +70,10 @@ async fn main() -> Result<()> {
     execute!(stdout, cursor::Hide, Clear(ClearType::All), cursor::MoveTo(PADLEFT, PADTOP))?;
 
     let mut app = ActonApp::launch();
-    let view_manager = ViewManager::new(&mut app).await?;
-    let scaffold_agent = ScaffoldAgent::new(&mut app).await;
+    let view_manager = ViewManager::create(&mut app).await?;
+    let scaffold_agent = ScaffoldAgent::create(&mut app).await;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    static PROJECT_NAME: &str = "test_project";
-    // let shutdown_tx_clone = shutdown_tx.clone();
 
     // Shutdown signal handler
     tokio::spawn(async move {
@@ -111,10 +103,6 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('k') => {
                         view_manager.send(MenuMoveUp).await;
-                    }
-                    KeyCode::Char('s') => {
-                        info!("'s' pressed. Starting project scaffold...");
-                        scaffold_agent.send(InitProject { project_name: PROJECT_NAME }).await;
                     }
                     _ => {}
                 },

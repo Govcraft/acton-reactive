@@ -5,7 +5,7 @@ use acton_reactive::prelude::*;
 use ansi_term::Color::RGB;
 use ansi_term::Style;
 use crossterm::{cursor, queue};
-use tracing::*;
+use tracing::trace;
 
 use crate::{PADLEFT, PADTOP, TITLE};
 use crate::messages::{MenuMoveDown, MenuMoveUp};
@@ -13,13 +13,11 @@ use crate::messages::{MenuMoveDown, MenuMoveUp};
 #[acton_actor]
 pub struct NewScreen {
     menu: Vec<MenuItem>,
-    is_visible: bool,
 }
 
 #[derive(Clone)]
 struct MenuItem {
     label: String,
-    action: String,
     selected: bool,
 }
 
@@ -37,7 +35,7 @@ impl Display for MenuItem {
 }
 
 impl NewScreen {
-    pub async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
+    pub async fn create(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
         let mut agent = runtime.new_agent::<Self>().await;
 
         agent.before_start(|_agent| {
@@ -75,8 +73,8 @@ impl NewScreen {
                 agent.model.paint();
                 AgentReply::immediate()
             });
-        agent.model.menu.push(MenuItem { label: "Name".to_string(), action: "create_project".to_string(), selected: true });
-        agent.model.menu.push(MenuItem { label: "Location".to_string(), action: "open_project".to_string(), selected: false });
+        agent.model.menu.push(MenuItem { label: "Name".to_string(), selected: true });
+        agent.model.menu.push(MenuItem { label: "Location".to_string(), selected: false });
 
         Ok(agent.start().await)
     }
@@ -86,7 +84,8 @@ impl NewScreen {
         queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 3)).unwrap();
         // use crossterm to output the list of menuitems
         for (i, item) in self.menu.iter().enumerate() {
-            queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 3 + i as u16)).unwrap();
+            let row = u16::try_from(i).unwrap_or(u16::MAX);
+            queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 3 + row)).unwrap();
             let _ = stdout.write(item.to_string().as_ref());
         }
         let _ = stdout.flush();

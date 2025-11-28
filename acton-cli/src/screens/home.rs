@@ -5,7 +5,7 @@ use acton_reactive::prelude::*;
 use ansi_term::Color::RGB;
 use ansi_term::Style;
 use crossterm::{cursor, queue};
-use tracing::*;
+use tracing::{trace, debug};
 
 use crate::{PADLEFT, PADTOP, TAGLINE, TITLE};
 use crate::messages::{MenuMoveDown, MenuMoveUp, MenuSelect};
@@ -13,13 +13,11 @@ use crate::messages::{MenuMoveDown, MenuMoveUp, MenuSelect};
 #[acton_actor]
 pub struct HomeScreen {
     menu: Vec<MenuItem>,
-    is_visible: bool,
 }
 
 #[derive(Clone)]
 struct MenuItem {
     label: String,
-    action: String,
     selected: bool,
 }
 
@@ -37,7 +35,7 @@ impl Display for MenuItem {
 }
 
 impl HomeScreen {
-    pub async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
+    pub async fn create(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
         let mut agent = runtime.new_agent::<Self>().await;
 
         agent.before_start(|_agent| {
@@ -71,7 +69,7 @@ impl HomeScreen {
                 agent.model.paint();
                 AgentReply::immediate()
             })
-            .mutate_on::<MenuSelect>(|agent, context| {
+            .mutate_on::<MenuSelect>(|agent, _context| {
                 //use debug to print the selected menu item label
                 debug!(" MenuSelect: {:?}", agent.model.menu.iter().find(|item| item.selected).unwrap().label);
                 AgentReply::immediate()
@@ -80,8 +78,8 @@ impl HomeScreen {
                 agent.model.paint();
                 AgentReply::immediate()
             });
-        agent.model.menu.push(MenuItem { label: "Create a new project".to_string(), action: "create_project".to_string(), selected: true });
-        agent.model.menu.push(MenuItem { label: "Update an existing project".to_string(), action: "open_project".to_string(), selected: false });
+        agent.model.menu.push(MenuItem { label: "Create a new project".to_string(), selected: true });
+        agent.model.menu.push(MenuItem { label: "Update an existing project".to_string(), selected: false });
 
         Ok(agent.start().await)
     }
@@ -91,7 +89,8 @@ impl HomeScreen {
         queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 3)).unwrap();
         // use crossterm to output the list of menuitems
         for (i, item) in self.menu.iter().enumerate() {
-            queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 3 + i as u16)).unwrap();
+            let row = u16::try_from(i).unwrap_or(u16::MAX);
+            queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 3 + row)).unwrap();
             let _ = stdout.write(item.to_string().as_ref());
         }
         let _ = stdout.flush();
