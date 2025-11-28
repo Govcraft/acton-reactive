@@ -104,12 +104,14 @@ impl OutboundEnvelope {
 
     /// Returns a clone of the sender's [`MessageAddress`].
     #[inline]
+    #[must_use] 
     pub fn reply_to(&self) -> MessageAddress {
         self.return_address.clone()
     }
 
     /// Returns a reference to the optional recipient's [`MessageAddress`].
     #[inline]
+    #[must_use] 
     pub const fn recipient(&self) -> &Option<MessageAddress> {
         &self.recipient_address
     }

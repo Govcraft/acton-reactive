@@ -40,6 +40,7 @@ impl MessageAddress {
     ///
     /// This provides a simple string representation of the agent's base name.
     #[inline]
+    #[must_use] 
     pub fn name(&self) -> &str {
         self.sender.root.as_str()
     }

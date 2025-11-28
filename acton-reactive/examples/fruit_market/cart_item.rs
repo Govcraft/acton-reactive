@@ -41,7 +41,7 @@ impl CartItem {
         let name = name.into();
         let mut upc = "upc_".to_string();
         upc.push_str(&name.clone());
-        CartItem {
+        Self {
             name,
             quantity,
             upc: upc.create_type_id::<V7>(),
@@ -50,17 +50,17 @@ impl CartItem {
     }
 
     /// Returns the unique identifier (UPC) of the cart item.
-    pub(crate) fn id(&self) -> &MagicTypeId {
+    pub(crate) const fn id(&self) -> &MagicTypeId {
         &self.upc
     }
 
     /// Returns the name of the cart item.
-    pub(crate) fn name(&self) -> &String {
+    pub(crate) const fn name(&self) -> &String {
         &self.name
     }
 
     /// Returns the quantity of the cart item.
-    pub(crate) fn quantity(&self) -> i32 {
+    pub(crate) const fn quantity(&self) -> i32 {
         self.quantity
     }
 
@@ -70,12 +70,12 @@ impl CartItem {
         Price(price)
     }
     /// Returns the cost per unit of the cart item.
-    pub(crate) fn cost(&self) -> &Cost {
+    pub(crate) const fn cost(&self) -> &Cost {
         &self.cost
     }
 
     /// Sets the quantity for this cart item.
-    pub(crate) fn set_quantity(&mut self, quantity: i32) {
+    pub(crate) const fn set_quantity(&mut self, quantity: i32) {
         self.quantity = quantity;
     }
 

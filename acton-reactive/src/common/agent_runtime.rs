@@ -121,6 +121,7 @@ impl AgentRuntime {
     /// This count only includes agents directly created via the `AgentRuntime` and
     /// does not include child agents supervised by other agents.
     #[inline]
+    #[must_use] 
     pub fn agent_count(&self) -> usize {
         self.0.roots.len()
     }
@@ -170,6 +171,7 @@ impl AgentRuntime {
 
     /// Returns a clone of the handle ([`BrokerRef`]) to the system's central message broker.
     #[inline]
+    #[must_use] 
     pub fn broker(&self) -> BrokerRef {
         self.0.broker.clone()
     }

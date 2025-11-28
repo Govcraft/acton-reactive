@@ -113,7 +113,7 @@ enum DisplayItem {
 impl Display for DisplayItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DisplayItem::Item(item) => {
+            Self::Item(item) => {
                 write!(
                     f,
                     "{}({}) @ {} │ {:>5}",
@@ -123,14 +123,14 @@ impl Display for DisplayItem {
                     MoneyFmt(item.price().0) // Use MoneyFmt for total price
                 )
             }
-            DisplayItem::Loader(what) => write!(
+            Self::Loader(what) => write!(
                 f,
                 "{}( ) @ {} │ {:>5}",
                 what,
                 MoneyFmt(0), // Show zero cost/price for loader
                 MoneyFmt(0)
             ),
-            DisplayItem::Startup => write!(f, ""), // Empty display for startup state
+            Self::Startup => write!(f, ""), // Empty display for startup state
         }
     }
 }
@@ -145,7 +145,7 @@ impl From<DisplayItem> for FormattedItem {
         match value {
             DisplayItem::Item(item) => {
                 let name = item.name().clone();
-                FormattedItem(format!(
+                Self(format!(
                     "{}({}) @ {} {} {:>5}",
                     RGB(COLOR_LIGHT_BLUE.0, COLOR_LIGHT_BLUE.1, COLOR_LIGHT_BLUE.2).paint(name),
                     RGB(
@@ -160,14 +160,14 @@ impl From<DisplayItem> for FormattedItem {
                         .paint(MoneyFmt(item.price().0).to_string()) // Format total price
                 ))
             }
-            DisplayItem::Loader(what) => FormattedItem(format!(
+            DisplayItem::Loader(what) => Self(format!(
                 "{}( ) @ {} {} {:>5}",
                 RGB(COLOR_LOADER.0, COLOR_LOADER.1, COLOR_LOADER.2).paint(what),
                 MoneyFmt(0), // Format zero cost
                 RGB(COLOR_DARK_GREY.0, COLOR_DARK_GREY.1, COLOR_DARK_GREY.2).paint("│"),
                 MoneyFmt(0) // Format zero price
             )),
-            DisplayItem::Startup => FormattedItem(String::default()), // Empty for startup
+            DisplayItem::Startup => Self(String::default()), // Empty for startup
         }
     }
 }

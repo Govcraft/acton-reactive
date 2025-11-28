@@ -40,6 +40,7 @@ impl AgentReply {
     /// A `Pin<Box<impl Future<Output=()>>>` that completes immediately. This can often
     /// be coerced or converted into the required [`FutureBox`].
     #[inline]
+    #[must_use] 
     pub fn immediate() -> Pin<Box<impl Future<Output = ()> + Sized>> {
         // Original return type
         Box::pin(async move {})
