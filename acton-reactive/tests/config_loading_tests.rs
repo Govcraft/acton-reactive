@@ -206,9 +206,7 @@ async fn test_consistent_config_across_agents() -> Result<(), anyhow::Error> {
 
 // Test helper structs
 #[derive(Debug, Default)]
-struct TestAgent {
-    value: i32,
-}
+struct TestAgent;
 
 #[derive(Debug, Default)]
 struct CounterAgent {
@@ -217,9 +215,3 @@ struct CounterAgent {
 
 #[acton_message]
 struct Increment;
-
-#[acton_message]
-struct GetValue;
-
-#[acton_message]
-struct SetValue(i32);
