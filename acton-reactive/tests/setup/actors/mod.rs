@@ -16,7 +16,6 @@
 
 // parent_child likely contains multiple related types, might need specific exports later if used directly.
 
-pub mod audience_member;
 pub mod comedian;
 pub mod counter;
 pub mod messenger;

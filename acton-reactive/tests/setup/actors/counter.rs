@@ -30,6 +30,4 @@ pub struct Counter {
     pub errored: Option<bool>,
     /// A flag to check if the `on_error` handler for `TestErr2` was called.
     pub errored2: Option<bool>,
-    /// A flag to check if the `Increment` message was handled.
-    pub incremented: Option<bool>,
 }

@@ -17,14 +17,14 @@ struct TestErr;
 struct TestErr2;
 
 impl std::fmt::Display for TestErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Deliberate test error")
     }
 }
 impl std::error::Error for TestErr {}
 
 impl std::fmt::Display for TestErr2 {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Deliberate second test error")
     }
 }
