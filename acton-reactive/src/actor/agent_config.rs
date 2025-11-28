@@ -120,13 +120,13 @@ impl AgentConfig {
 
     /// Returns a reference to the optional broker handle.
     #[inline]
-    pub(crate) fn get_broker(&self) -> Option<&BrokerRef> {
+    pub(crate) const fn get_broker(&self) -> Option<&BrokerRef> {
         self.broker.as_ref()
     }
 
     /// Returns a reference to the optional parent handle.
     #[inline]
-    pub(crate) fn parent(&self) -> Option<&ParentRef> {
+    pub(crate) const fn parent(&self) -> Option<&ParentRef> {
         self.parent.as_ref()
     }
 }
