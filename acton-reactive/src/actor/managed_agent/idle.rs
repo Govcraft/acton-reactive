@@ -141,7 +141,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                 &'a mut ManagedAgent<Started, State>,
                 &'b mut MessageContext<M>,
                 &'b E,
-            ) -> crate::common::FutureBox
+            ) -> FutureBox
             + Send
             + Sync
             + 'static,
@@ -302,7 +302,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                 &'a ManagedAgent<Started, State>,
                 &'a mut MessageContext<M>,
             ) -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<T, E>> + Send + Sync + 'static>,
+                Box<dyn Future<Output = Result<T, E>> + Send + Sync + 'static>,
             > + Send
             + Sync
             + 'static,
@@ -344,13 +344,15 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                     let fut = message_processor(actor, &mut msg_context);
                     Box::pin(async move {
                         match fut.await {
-                            Ok(val) => Ok(Box::new(val) as Box<dyn ActonMessageReply + Send>),
+                            Ok(val) => {
+                                let boxed: Box<dyn ActonMessageReply + Send> = Box::new(val);
+                                Ok(boxed)
+                            }
                             Err(e) => {
                                 let error_type_id = TypeId::of::<E>();
-                                Err((
-                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>,
-                                    error_type_id,
-                                ))
+                                let boxed_err: Box<dyn std::error::Error + Send + Sync> =
+                                    Box::new(e);
+                                Err((boxed_err, error_type_id))
                             }
                         }
                     })
@@ -359,7 +361,10 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                         type_name = std::any::type_name::<M>(),
                         "Read-only Result handler called with incompatible message type (downcast failed)"
                     );
-                    Box::pin(async { Ok(Box::new(()) as Box<dyn ActonMessageReply + Send>) })
+                    Box::pin(async {
+                        let boxed: Box<dyn ActonMessageReply + Send> = Box::new(());
+                        Ok(boxed)
+                    })
                 }
             },
         );
@@ -375,7 +380,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                 &'a mut ManagedAgent<Started, State>,
                 &'a mut MessageContext<M>,
             ) -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<T, E>> + Send + Sync + 'static>,
+                Box<dyn Future<Output = Result<T, E>> + Send + Sync + 'static>,
             > + Send
             + Sync
             + 'static,
@@ -417,13 +422,15 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                     let fut = message_processor(actor, &mut msg_context);
                     Box::pin(async move {
                         match fut.await {
-                            Ok(val) => Ok(Box::new(val) as Box<dyn ActonMessageReply + Send>),
+                            Ok(val) => {
+                                let boxed: Box<dyn ActonMessageReply + Send> = Box::new(val);
+                                Ok(boxed)
+                            }
                             Err(e) => {
                                 let error_type_id = TypeId::of::<E>();
-                                Err((
-                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>,
-                                    error_type_id,
-                                ))
+                                let boxed_err: Box<dyn std::error::Error + Send + Sync> =
+                                    Box::new(e);
+                                Err((boxed_err, error_type_id))
                             }
                         }
                     })
@@ -432,7 +439,10 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
                         type_name = std::any::type_name::<M>(),
                         "Result handler called with incompatible message type (downcast failed)"
                     );
-                    Box::pin(async { Ok(Box::new(()) as Box<dyn ActonMessageReply + Send>) })
+                    Box::pin(async {
+                        let boxed: Box<dyn ActonMessageReply + Send> = Box::new(());
+                        Ok(boxed)
+                    })
                 }
             },
         );
@@ -459,7 +469,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.after_start = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
+        self.after_start = Box::new(move |agent| Box::pin(f(agent)));
         self
     }
 
@@ -481,7 +491,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.before_start = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
+        self.before_start = Box::new(move |agent| Box::pin(f(agent)));
         self
     }
 
@@ -503,7 +513,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.after_stop = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
+        self.after_stop = Box::new(move |agent| Box::pin(f(agent)));
         self
     }
 
@@ -525,7 +535,7 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
         F: for<'b> Fn(&'b ManagedAgent<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.before_stop = Box::new(move |agent| Box::pin(f(agent)) as FutureBox);
+        self.before_stop = Box::new(move |agent| Box::pin(f(agent)));
         self
     }
 
@@ -722,7 +732,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedAgent<Idle, Sta
         let capacity = CONFIG.limits.agent_inbox_capacity;
         let (outbox, inbox) = channel(capacity);
         let id: Ern = Default::default();
-        let mut handle: crate::common::AgentHandle = Default::default();
+        let mut handle: AgentHandle = AgentHandle::default();
         handle.id = id.clone();
         handle.outbox = outbox.clone();
 

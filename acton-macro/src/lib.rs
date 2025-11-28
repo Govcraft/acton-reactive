@@ -20,7 +20,6 @@
 //! This library provides procedural macros for the Acton actor framework.
 //! It includes macros to derive common traits and boilerplate code for Acton messages.
 
-extern crate proc_macro;
 use proc_macro::TokenStream;
 
 use quote::quote;

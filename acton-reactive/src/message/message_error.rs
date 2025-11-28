@@ -30,7 +30,7 @@ impl std::fmt::Display for MessageError {
     ///
     /// # Returns
     /// A result indicating whether the formatting was successful.
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MessageError::SendFailed(msg) => write!(f, "Failed to send message: {msg}"),
             MessageError::OtherError(msg) => write!(f, "Error: {msg}"),
