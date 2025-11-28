@@ -575,12 +575,12 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             Some(self.runtime.broker()), // Inherited broker handle
         )?;
         // Create the Idle agent using the internal constructor.
-        Ok(Self::new(&Some(self.runtime().clone()), Some(config)).await)
+        Ok(Self::new(Some(&self.runtime().clone()), Some(config)).await)
     }
 
     // Internal constructor - not part of public API documentation
     #[instrument]
-    pub(crate) async fn new(runtime: &Option<AgentRuntime>, config: Option<AgentConfig>) -> Self {
+    pub(crate) async fn new(runtime: Option<&AgentRuntime>, config: Option<AgentConfig>) -> Self {
         let mut managed_actor: Self = Self::default();
 
         if let Some(app) = runtime {
@@ -591,9 +591,9 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
 
         if let Some(config) = &config {
             managed_actor.handle.id = config.id();
-            managed_actor.parent = config.parent().clone();
-            managed_actor.handle.broker = Box::new(config.get_broker().clone());
-            if let Some(broker) = config.get_broker().clone() {
+            managed_actor.parent = config.parent().cloned();
+            managed_actor.handle.broker = Box::new(config.get_broker().cloned());
+            if let Some(broker) = config.get_broker().cloned() {
                 managed_actor.broker = broker;
             }
         }
@@ -610,7 +610,8 @@ impl<State: Default + Send + Debug + 'static> ManagedAgent<Idle, State> {
             runtime.is_some(),
             "AgentRuntime must be provided to ManagedAgent::new"
         );
-        managed_actor.runtime = runtime.clone().unwrap();
+        let runtime = runtime.unwrap().clone();
+        managed_actor.runtime = runtime;
         managed_actor
             .runtime
             .0

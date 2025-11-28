@@ -82,7 +82,7 @@ impl AgentRuntime {
         .expect("Failed to create actor config");
 
         let runtime = self.clone();
-        let new_actor = ManagedAgent::new(&Some(runtime), Some(actor_config)).await;
+        let new_actor = ManagedAgent::new(Some(&runtime), Some(actor_config)).await;
         trace!("Registering new top-level agent: {}", new_actor.id());
         self.0
             .roots
@@ -157,7 +157,7 @@ impl AgentRuntime {
         if config.broker.is_none() {
             config.broker = Some(self.0.broker.clone());
         }
-        let new_agent = ManagedAgent::new(&Some(acton_ready), Some(config)).await;
+        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(config)).await;
         trace!(
             "Created new agent builder with config, id: {}",
             new_agent.id()
@@ -213,7 +213,7 @@ impl AgentRuntime {
             config.broker = Some(self.0.broker.clone());
         }
 
-        let new_agent = ManagedAgent::new(&Some(acton_ready), Some(config)).await;
+        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(config)).await;
         let agent_id = new_agent.id().clone(); // Get ID before moving
         trace!("Running setup function for agent: {}", agent_id);
         let handle = setup_fn(new_agent).await; // Setup function consumes the agent and returns handle

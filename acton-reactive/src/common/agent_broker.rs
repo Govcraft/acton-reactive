@@ -100,7 +100,7 @@ impl AgentBroker {
 
         // Create the ManagedAgent for the broker. The model state *is* the AgentBroker itself.
         let mut broker_agent: ManagedAgent<Idle, Self> =
-            ManagedAgent::new(&Some(runtime), Some(actor_config)).await;
+            ManagedAgent::new(Some(&runtime), Some(actor_config)).await;
 
         // Configure the broker agent's message handlers.
         broker_agent
