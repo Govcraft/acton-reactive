@@ -253,7 +253,13 @@ impl AgentRuntime {
             })
             .collect();
 
-        let timeout_ms = self.0.config.system_shutdown_timeout().as_millis() as u64;
+        let timeout_ms: u64 = self
+            .0
+            .config
+            .system_shutdown_timeout()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         trace!("Waiting for all agents to finish gracefully...");
         if tokio_timeout(Duration::from_millis(timeout_ms), join_all(stop_futures))
