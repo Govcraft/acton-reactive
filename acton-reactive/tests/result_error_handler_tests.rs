@@ -4,12 +4,26 @@
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
-mod setup;
-use crate::setup::{
-    actors::counter::Counter,
-    initialize_tracing,
-    messages::{Increment, Ping, Tally},
-};
+
+// Local test helpers - avoiding shared setup module to prevent dead_code warnings
+// since each test binary compiles setup separately and not all types are used.
+
+/// Counter agent state for testing error handlers
+#[derive(Debug, Default, Clone)]
+struct Counter {
+    pub count: usize,
+    pub errored: Option<bool>,
+    pub errored2: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+struct Ping;
+
+#[derive(Clone, Debug)]
+struct Tally;
+
+#[acton_message]
+struct Increment;
 
 #[derive(Debug, Clone)]
 struct TestErr;
@@ -32,7 +46,6 @@ impl std::error::Error for TestErr2 {}
 
 #[acton_test]
 async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
-    initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
     let agent_config = AgentConfig::new(Ern::with_root("error_handler_demo").unwrap(), None, None)?;
@@ -83,7 +96,6 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
 #[acton_test]
 async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
-    initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
     let agent_config =
