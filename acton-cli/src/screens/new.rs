@@ -7,11 +7,11 @@ use ansi_term::Style;
 use crossterm::{cursor, queue};
 use tracing::*;
 
-use crate::{PADLEFT, PADTOP, TAGLINE, TITLE};
+use crate::{PADLEFT, PADTOP, TITLE};
 use crate::messages::{MenuMoveDown, MenuMoveUp};
 
 #[acton_actor]
-pub(crate) struct NewScreen {
+pub struct NewScreen {
     menu: Vec<MenuItem>,
     is_visible: bool,
 }
@@ -31,14 +31,14 @@ impl Display for MenuItem {
         if self.selected {
             write!(f, "{} {:<2}", selected.paint(">"), format!("{}", selected_text.paint(self.label.clone())))
         } else {
-            write!(f, "{} {:<2}", " ", format!("{}", normal.paint(self.label.clone())))
+            write!(f, "  {:<2}", format!("{}", normal.paint(self.label.clone())))
         }
     }
 }
 
 impl NewScreen {
     pub async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<NewScreen>().await;
+        let mut agent = runtime.new_agent::<Self>().await;
 
         agent.before_start(|_agent| {
             let mut stdout = stdout();

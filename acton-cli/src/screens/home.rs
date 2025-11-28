@@ -11,7 +11,7 @@ use crate::{PADLEFT, PADTOP, TAGLINE, TITLE};
 use crate::messages::{MenuMoveDown, MenuMoveUp, MenuSelect};
 
 #[acton_actor]
-pub(crate) struct HomeScreen {
+pub struct HomeScreen {
     menu: Vec<MenuItem>,
     is_visible: bool,
 }
@@ -31,14 +31,14 @@ impl Display for MenuItem {
         if self.selected {
             write!(f, "{} {:<2}", selected.paint(">"), format!("{}", selected_text.paint(self.label.clone())))
         } else {
-            write!(f, "{} {:<2}", " ", format!("{}", normal.paint(self.label.clone())))
+            write!(f, "  {:<2}", format!("{}", normal.paint(self.label.clone())))
         }
     }
 }
 
 impl HomeScreen {
     pub async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<HomeScreen>().await;
+        let mut agent = runtime.new_agent::<Self>().await;
 
         agent.before_start(|_agent| {
             let mut stdout = stdout();

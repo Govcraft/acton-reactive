@@ -32,7 +32,6 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, FmtSubscriber};
 
 use agents::ScaffoldAgent;
 use messages::{InitProject, MenuMoveDown, MenuMoveUp};
-use screens::HomeScreen;
 use crate::agents::ViewManager;
 use crate::messages::MenuSelect;
 
@@ -130,9 +129,9 @@ async fn main() -> Result<()> {
 
     // Await the shutdown signal
     match shutdown_rx.await {
-        Ok(_) => info!("Shutdown signal received."),
+        Ok(()) => info!("Shutdown signal received."),
         Err(e) => error!("Failed to receive shutdown signal: {:?}", e),
-    };
+    }
 
     // Clean up terminal
     queue!(stdout, cursor::MoveTo(0, 0))?;
@@ -173,7 +172,7 @@ pub fn initialize_tracing() {
             .with_writer(file_appender)
             .finish();
 
-        tracing::subscriber::set_global_default(subscriber)
+        subscriber::set_global_default(subscriber)
             .expect("Setting default subscriber failed");
     });
 }

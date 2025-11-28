@@ -13,7 +13,7 @@ pub struct ViewManager {
 
 impl ViewManager {
     pub async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<ViewManager>().await;
+        let mut agent = runtime.new_agent::<Self>().await;
         let mut runtime = agent.runtime().clone();
         agent
             .mutate_on::<MenuMoveUp>(|agent, context| {
