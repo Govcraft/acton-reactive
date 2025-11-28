@@ -22,13 +22,6 @@ struct ConfigAgent {
 #[derive(Debug, Clone)]
 struct GetConfig;
 
-/// Response containing agent configuration
-#[derive(Debug, Clone)]
-struct ConfigResponse {
-    message_count: usize,
-    custom_value: String,
-    agent_name: String,
-}
 
 #[tokio::main]
 async fn main() {
@@ -48,24 +41,19 @@ async fn main() {
 
     // Configure message handlers
     agent_builder
-        .mutate_on::<GetConfig>(|agent, envelope| {
-            let response = ConfigResponse {
-                message_count: agent.model.message_count,
-                custom_value: agent.model.custom_value.clone(),
-                agent_name: "config_agent".to_string(),
-            };
-
-            let reply_envelope = envelope.reply_envelope();
-            AgentReply::from_async(async move {
-                reply_envelope.send(response).await;
-            })
+        .mutate_on::<GetConfig>(|agent, _envelope| {
+            println!(
+                "Current config: count={}, value={}",
+                agent.model.message_count, agent.model.custom_value
+            );
+            AgentReply::immediate()
         })
         .mutate_on::<Increment>(|agent, _| {
             agent.model.message_count += 1;
             println!("Processed message #{}", agent.model.message_count);
             AgentReply::immediate()
         })
-        .after_start(|agent| {
+        .after_start(|_agent| {
             println!("Agent started with configuration loaded");
             println!("Check ~/.config/acton/config.toml to customize settings");
             AgentReply::immediate()
@@ -84,8 +72,7 @@ async fn main() {
     agent_handle.send(Increment).await;
 
     // Request configuration information
-    let config = agent_handle.send(GetConfig).await;
-    println!("Agent configuration: {config:?}");
+    agent_handle.send(GetConfig).await;
 
     // Graceful shutdown
     runtime.shutdown_all().await.expect("Failed to shut down system");
