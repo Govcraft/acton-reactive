@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = ["acton-macro", "acton-test", "acton-reactive", "acton-cli", "acton-test-macro"]
+members = ["acton-macro", "acton-test", "acton-reactive", "acton-test-macro"]
 
 # Shared package metadata
 [workspace.package]
