@@ -537,18 +537,18 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
                 &child_id
             );
 
-            // If the child handle is found...
-            if let Some(child_handle) = agent.handle().find_child(&child_id) {
-                trace!("Pinging child {}", &child_id);
-                // Clone the handle for use in the async block.
-                let child_handle = child_handle;
-                // Return an async block to send the `Ping` message to the child.
-                AgentReply::from_async(async move { child_handle.send(Ping).await })
-            } else {
-                // This case should not be hit based on the assertion above, but handle defensively.
-                tracing::error!("No child found with ID {}", &child_id);
-                AgentReply::immediate()
-            }
+            // Use the child handle if found, otherwise log an error.
+            // Both branches return the same Box::pin(async {}) type for type unification.
+            let maybe_child = agent.handle().find_child(&child_id);
+            Box::pin(async move {
+                if let Some(child_handle) = maybe_child {
+                    trace!("Pinging child {}", &child_id);
+                    child_handle.send(Ping).await;
+                } else {
+                    // This case should not be hit based on the assertion above, but handle defensively.
+                    tracing::error!("No child found with ID {}", &child_id);
+                }
+            })
         } else {
             // If the message wasn't the expected variant.
             AgentReply::immediate()

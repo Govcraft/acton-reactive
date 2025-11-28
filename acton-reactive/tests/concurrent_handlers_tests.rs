@@ -49,6 +49,57 @@ pub struct ConcurrentMessage;
 #[derive(Debug, Clone)]
 pub struct StatusRequest;
 
+/// Agent for performance testing
+#[derive(Default, Debug, Clone)]
+pub struct PerformanceAgent {
+    pub counter: Arc<AtomicUsize>,
+    pub start_time: Option<std::time::Instant>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerformanceMessage;
+
+/// Agent for concurrent execution verification
+#[derive(Default, Debug, Clone)]
+pub struct ConcurrencyAgent {
+    pub start_time: Option<std::time::Instant>,
+    pub completion_times: Arc<std::sync::Mutex<Vec<std::time::Instant>>>,
+    pub message_count: Arc<AtomicUsize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DelayMessage;
+
+/// Agent for sequential vs concurrent testing
+#[derive(Default, Debug, Clone)]
+pub struct SequentialTestAgent {
+    pub message_count: usize,
+    pub start_time: Option<std::time::Instant>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackSequential;
+
+#[derive(Debug, Clone)]
+pub struct TrackConcurrent;
+
+/// Agent for mixed handler testing
+#[derive(Default, Debug, Clone)]
+pub struct MixedAgent {
+    pub read_only_hits: Arc<AtomicUsize>,
+    pub mutable_hits: usize,
+    pub data: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadOnlyOp;
+
+#[derive(Debug, Clone)]
+pub struct MutableOp(pub String);
+
+#[derive(Debug, Clone)]
+pub struct StatsRequest;
+
 #[acton_test]
 async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
     initialize_tracing();
@@ -173,7 +224,11 @@ async fn test_readonly_complex_data_access() -> anyhow::Result<()> {
             let _count = agent.model.data.len();
 
             // Update atomic counters - safe for concurrent access
-            agent.model.total.fetch_add(sum as usize, Ordering::SeqCst);
+            // sum is always positive in this test context
+            agent
+                .model
+                .total
+                .fetch_add(usize::try_from(sum).unwrap_or(0), Ordering::SeqCst);
             agent.model.read_count.fetch_add(1, Ordering::SeqCst);
 
             Box::pin(async move {
@@ -221,15 +276,6 @@ async fn test_concurrent_performance() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    #[derive(Default, Debug, Clone)]
-    pub struct PerformanceAgent {
-        pub counter: Arc<AtomicUsize>,
-        pub start_time: Option<std::time::Instant>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct PerformanceMessage;
-
     let mut agent_builder = runtime.new_agent::<PerformanceAgent>().await;
     agent_builder.model.start_time = Some(std::time::Instant::now());
 
@@ -275,16 +321,6 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    #[derive(Default, Debug, Clone)]
-    pub struct ConcurrencyAgent {
-        pub start_time: Option<std::time::Instant>,
-        pub completion_times: Arc<std::sync::Mutex<Vec<std::time::Instant>>>,
-        pub message_count: Arc<AtomicUsize>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct DelayMessage;
-
     let mut agent_builder = runtime.new_agent::<ConcurrencyAgent>().await;
     agent_builder.model.start_time = Some(std::time::Instant::now());
 
@@ -305,7 +341,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
         })
         .after_stop(|agent| {
             let start_time = agent.model.start_time.unwrap();
-            let completion_times = agent.model.completion_times.lock().unwrap();
+            let completion_count = agent.model.completion_times.lock().unwrap().len();
             let total_messages = agent.model.message_count.load(Ordering::SeqCst);
 
             let total_elapsed = start_time.elapsed();
@@ -316,7 +352,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
 
             assert_eq!(total_messages, 10, "Should process all 10 messages");
             assert!(
-                completion_times.len() >= 10,
+                completion_count >= 10,
                 "Should have completion times for all messages"
             );
 
@@ -355,22 +391,9 @@ async fn test_sequential_vs_concurrent_handlers() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
 
-    #[derive(Default, Debug, Clone)]
-    pub struct ConcurrentTestAgent {
-        pub message_count: usize,
-        pub start_time: Option<std::time::Instant>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct DelayMessage;
-    #[derive(Debug, Clone)]
-    pub struct TrackSequential;
-    #[derive(Debug, Clone)]
-    pub struct TrackConcurrent;
-
     // Test 1: Mutable handlers (sequential) - proven by message ordering
     tracing::info!("Testing mutable handlers (sequential)...");
-    let mut mutable_agent = runtime.new_agent::<ConcurrentTestAgent>().await;
+    let mut mutable_agent = runtime.new_agent::<SequentialTestAgent>().await;
     mutable_agent.model.start_time = Some(std::time::Instant::now());
 
     mutable_agent
@@ -416,7 +439,7 @@ async fn test_sequential_vs_concurrent_handlers() -> anyhow::Result<()> {
 
     // Test 2: Read-only handlers (concurrent) - proven by timing
     tracing::info!("Testing read-only handlers (concurrent)...");
-    let mut readonly_agent = runtime.new_agent::<ConcurrentTestAgent>().await;
+    let mut readonly_agent = runtime.new_agent::<SequentialTestAgent>().await;
     readonly_agent.model.start_time = Some(std::time::Instant::now());
 
     readonly_agent
@@ -466,20 +489,6 @@ async fn test_sequential_vs_concurrent_handlers() -> anyhow::Result<()> {
 async fn test_mixed_handlers() -> anyhow::Result<()> {
     initialize_tracing();
     let mut runtime: AgentRuntime = ActonApp::launch();
-
-    #[derive(Default, Debug, Clone)]
-    pub struct MixedAgent {
-        pub read_only_hits: Arc<AtomicUsize>,
-        pub mutable_hits: usize,
-        pub data: Vec<String>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct ReadOnlyOp;
-    #[derive(Debug, Clone)]
-    pub struct MutableOp(String);
-    #[derive(Debug, Clone)]
-    pub struct StatsRequest;
 
     let mut agent_builder = runtime.new_agent::<MixedAgent>().await;
 
