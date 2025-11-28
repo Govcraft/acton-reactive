@@ -15,9 +15,9 @@ repository = "https://github.com/Govcraft/acton-reactive"
 [workspace.dependencies]
 # Internal crates
 acton-macro = { path = "acton-macro", version = "5.0.0" }
-acton-reactive = { path = "acton-reactive" }
-acton_test = { path = "acton-test" }
-acton_test_macro = { path = "acton-test-macro" }
+acton-reactive = { path = "acton-reactive", version = "5.0.0" }
+acton_test = { path = "acton-test", version = "5.0.0" }
+acton_test_macro = { path = "acton-test-macro", version = "5.0.0" }
 
 # Async runtime
 tokio = { version = "1.37.0", features = ["full"] }
