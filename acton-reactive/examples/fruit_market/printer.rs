@@ -14,8 +14,7 @@
  * limitations under that License.
  */
 use std::fmt::{self, Debug, Display};
-use std::io::{stdout, Write};
-use std::io::Stdout; // Import Stdout explicitly
+use std::io::{stdout, Stdout, Write};
 
 use ansi_term::Color::RGB;
 use crossterm::{
@@ -25,7 +24,7 @@ use crossterm::{
 };
 use dashmap::DashMap;
 use mti::prelude::MagicTypeId;
-use tracing::*;
+use tracing::{error, trace};
 
 use acton_reactive::prelude::*;
 // Note: #[acton_message] is not used for ToggleHelp, relying on derive + blanket impl.
@@ -44,7 +43,6 @@ const TRANSACTION_RECEIPT: &str = "Transaction Receipt"; // Header title
 const STARTED: &str = "\u{2713}"; // Checkmark symbol
 const HELP_TEXT: &str = "s: scan item, q: quit, ?: toggle help"; // Full help text
 const HELP_TEXT_SHORT: &str = "?: toggle help"; // Short help text
-const MOCK_TAX_RATE: f64 = 0.07; // Example tax rate
 const START_HELP: &str = "Press 's' to scan an item."; // Initial prompt
 const SUBTOTAL_LABEL: &str = "Subtotal";
 const TAX_LABEL: &str = "Tax";
@@ -67,34 +65,28 @@ const COLOR_HELP_TEXT: (u8, u8, u8) = (96, 96, 96);
 // which `Stdout` does not implement. We derive Debug manually.
 #[derive(Debug)] // Only derive Debug
 pub struct Printer {
-    /// Current status message (unused in current rendering logic).
-    status: String,
     /// Flag indicating if all requested item prices have been loaded.
     loaded: bool,
     /// Flag to control whether the full help text is shown.
     show_help: bool,
-    /// Stores the items to be displayed, using a concurrent DashMap for thread-safe access.
-    /// Keyed by item UPC (MagicTypeId), Value is the DisplayItem state.
+    /// Stores the items to be displayed, using a concurrent `DashMap` for thread-safe access.
+    /// Keyed by item UPC (`MagicTypeId`), Value is the `DisplayItem` state.
     items: DashMap<MagicTypeId, DisplayItem>,
-    /// Handle to standard output for printing.
-    out: Stdout,
 }
 
 // Manual Default implementation for Printer state.
 impl Default for Printer {
     fn default() -> Self {
         Self {
-            status: String::new(), // Initialize status
             loaded: true, // Start assuming loaded until a loader is added
             show_help: false, // Start with short help
             items: DashMap::new(), // Initialize empty map
-            out: stdout() // Get stdout handle
         }
     }
 }
 
 
-/// Message to toggle the help display in the Printer UI.
+/// Message to toggle the help display in the `Printer` UI.
 #[derive(Clone, Debug)]
 pub struct ToggleHelp;
 
@@ -120,7 +112,7 @@ impl Display for DisplayItem {
                     item.name(),
                     item.quantity(),
                     MoneyFmt(**item.cost()), // Use MoneyFmt for cost
-                    MoneyFmt(item.price().0) // Use MoneyFmt for total price
+                    MoneyFmt(item.price()) // Use MoneyFmt for total price
                 )
             }
             Self::Loader(what) => write!(
@@ -157,7 +149,7 @@ impl From<DisplayItem> for FormattedItem {
                     MoneyFmt(**item.cost()), // Format cost
                     RGB(COLOR_DARK_GREY.0, COLOR_DARK_GREY.1, COLOR_DARK_GREY.2).paint("│"),
                     RGB(COLOR_GREEN.0, COLOR_GREEN.1, COLOR_GREEN.2)
-                        .paint(MoneyFmt(item.price().0).to_string()) // Format total price
+                        .paint(MoneyFmt(item.price()).to_string()) // Format total price
                 ))
             }
             DisplayItem::Loader(what) => Self(format!(
@@ -201,7 +193,7 @@ impl Printer {
     /// Creates, configures, subscribes, and starts the Printer agent.
     pub async fn power_on(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
         // Create the agent builder with a specific name.
-        let mut printer_builder = runtime.new_agent_with_name::<Printer>("printer".to_string()).await;
+        let mut printer_builder = runtime.new_agent_with_name::<Self>("printer".to_string()).await;
 
         // Configure message handlers.
         printer_builder
@@ -219,8 +211,10 @@ impl Printer {
                     }
                 });
 
-                let mut needs_repaint = false;
-                if !item_exists {
+                if item_exists {
+                    trace!("Item already exists or is loading: {}", item.name());
+                    AgentReply::immediate() // No change, no repaint needed from here
+                } else {
                     // If item doesn't exist, insert a Loader entry.
                     agent
                         .model
@@ -228,20 +222,12 @@ impl Printer {
                         .insert(item.id().clone(), DisplayItem::Loader(item.name().to_string()));
                     // Mark the display as not fully loaded.
                     agent.model.loaded = false;
-                    needs_repaint = true; // Need repaint as UI changed
-                } else {
-                    trace!("Item already exists or is loading: {}", item.name());
-                }
-
-                // Trigger a repaint asynchronously by sending a message to self if needed.
-                if needs_repaint {
+                    // Trigger a repaint asynchronously by sending a message to self.
                     let self_handle = agent.handle().clone();
                     AgentReply::from_async(async move {
                         // Send repaint message instead of calling directly
                         self_handle.send(PrinterMessage::Repaint).await;
                     })
-                } else {
-                    AgentReply::immediate() // No change, no repaint needed from here
                 }
             })
             // Handler for `PriceResponse`: Updates or inserts the item with its price.
@@ -343,7 +329,7 @@ impl Printer {
     /// to achieve safely from within agent message handlers due to borrowing rules.
     /// This example currently triggers repaints via messages, and this function
     /// gets a new stdout handle each time, which might not be ideal.
-    fn repaint(printer: &Printer) -> anyhow::Result<()> {
+    fn repaint(printer: &Self) -> anyhow::Result<()> {
         // It's problematic to get `&mut stdout` here if called from agent context.
         // For the example's sake, we get a new handle, but this isn't ideal.
         let mut stdout = stdout();
@@ -392,7 +378,7 @@ impl Printer {
     }
 
     /// Prints the list of cart items (or loaders).
-    fn print_items(stdout: &mut Stdout, printer: &Printer) -> anyhow::Result<()> {
+    fn print_items(stdout: &mut Stdout, printer: &Self) -> anyhow::Result<()> {
         execute!(stdout, BeginSynchronizedUpdate)?;
 
         let top = PAD_TOP + HEADER_HEIGHT;
@@ -406,7 +392,8 @@ impl Printer {
 
         if printer.items.is_empty() {
             // Display initial help message if cart is empty.
-            let start_col = PAD_LEFT + ((COLS - START_HELP.len() as u16) / 2); // Center prompt
+            let help_len = u16::try_from(START_HELP.len()).unwrap_or(u16::MAX);
+            let start_col = PAD_LEFT + ((COLS - help_len) / 2); // Center prompt
             queue!(stdout, cursor::MoveTo(start_col, top))?;
             queue!(stdout, Print(START_HELP))?;
             execute!(stdout, EndSynchronizedUpdate)?;
@@ -414,23 +401,28 @@ impl Printer {
         }
 
         // Sort items by key (UPC) for consistent display order.
-        let mut sorted_items: Vec<_> = printer.items.iter().collect();
-        sorted_items.sort_by_key(|item| item.key().clone());
+        // Collect into Vec<(key, value)> to avoid holding DashMap iterators across the loop.
+        let mut sorted_items: Vec<_> = printer.items.iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        sorted_items.sort_by_key(|(key, _)| key.clone());
 
         // Iterate and print each item.
-        for (i, item) in sorted_items.iter().enumerate() {
+        for (i, (_key, display_item)) in sorted_items.iter().enumerate() {
             // Convert DisplayItem to FormattedItem for colored output.
-            let formatted: FormattedItem = item.value().clone().into();
+            let formatted: FormattedItem = display_item.clone().into();
             // Estimate display length *without* ANSI codes for alignment
-            let line_item_display_len = match item.value() {
-                 DisplayItem::Item(cart_item) => format!("{}({}) @ {} | {}", cart_item.name(), cart_item.quantity(), MoneyFmt(**cart_item.cost()), MoneyFmt(cart_item.price().0)).len(),
+            let line_item_display_len = match display_item {
+                 DisplayItem::Item(cart_item) => format!("{}({}) @ {} | {}", cart_item.name(), cart_item.quantity(), MoneyFmt(**cart_item.cost()), MoneyFmt(cart_item.price())).len(),
                  DisplayItem::Loader(name) => format!("{}( ) @ {} | {}", name, MoneyFmt(0), MoneyFmt(0)).len(),
                  DisplayItem::Startup => 0,
             };
 
-            let start_col = PAD_LEFT + COLS.saturating_sub(line_item_display_len as u16); // Align right
+            let display_len = u16::try_from(line_item_display_len).unwrap_or(u16::MAX);
+            let start_col = PAD_LEFT + COLS.saturating_sub(display_len); // Align right
 
-            queue!(stdout, cursor::MoveTo(start_col, top + i as u16))?;
+            let row = u16::try_from(i).unwrap_or(u16::MAX);
+            queue!(stdout, cursor::MoveTo(start_col, top + row))?;
             queue!(stdout, Print(formatted.to_string()))?; // Use Print command
         }
 
@@ -439,7 +431,7 @@ impl Printer {
     }
 
     /// Prints the subtotal, tax, and total due section.
-    fn print_totals(stdout: &mut Stdout, printer: &Printer) -> anyhow::Result<()> {
+    fn print_totals(stdout: &mut Stdout, printer: &Self) -> anyhow::Result<()> {
         // Don't print totals if there are no items.
         if printer.items.is_empty() {
             // Clear the totals area if items were removed
@@ -453,7 +445,8 @@ impl Printer {
 
         execute!(stdout, BeginSynchronizedUpdate)?;
 
-        let top = PAD_TOP + HEADER_HEIGHT + printer.items.len() as u16; // Position below items
+        let items_count = u16::try_from(printer.items.len()).unwrap_or(u16::MAX);
+        let top = PAD_TOP + HEADER_HEIGHT + items_count; // Position below items
         // Draw separator line above totals.
         let separator = RGB(COLOR_DARK_GREY.0, COLOR_DARK_GREY.1, COLOR_DARK_GREY.2)
             .paint(format!(
@@ -473,11 +466,13 @@ impl Printer {
             .items
             .iter()
             .map(|kv| match kv.value() {
-                DisplayItem::Item(item) => item.price().0,
+                DisplayItem::Item(item) => item.price(),
                 _ => 0,
             })
             .sum::<i32>();
-        let tax = (subtotal as f64 * MOCK_TAX_RATE).round() as i32;
+        // Tax calculation using integer arithmetic: tax = subtotal * 7 / 100 (for 7% tax rate)
+        // This avoids float truncation concerns while maintaining precision
+        let tax = subtotal * 7 / 100;
         let total_due = subtotal + tax;
 
         // Format total strings.
@@ -525,9 +520,12 @@ impl Printer {
             format!("{:<11}{}", DUE_LABEL, MoneyFmt(total_due)).chars().count()
         };
 
-        let subtotal_start_col = PAD_LEFT + COLS.saturating_sub(subtotal_len as u16);
-        let tax_start_col = PAD_LEFT + COLS.saturating_sub(tax_len as u16);
-        let total_due_start_col = PAD_LEFT + COLS.saturating_sub(total_due_len as u16);
+        let subtotal_width = u16::try_from(subtotal_len).unwrap_or(u16::MAX);
+        let tax_width = u16::try_from(tax_len).unwrap_or(u16::MAX);
+        let total_due_width = u16::try_from(total_due_len).unwrap_or(u16::MAX);
+        let subtotal_start_col = PAD_LEFT + COLS.saturating_sub(subtotal_width);
+        let tax_start_col = PAD_LEFT + COLS.saturating_sub(tax_width);
+        let total_due_start_col = PAD_LEFT + COLS.saturating_sub(total_due_width);
 
 
         // Queue commands to print totals.
@@ -550,7 +548,7 @@ impl Printer {
     }
 
     /// Prints the help text at the bottom of the screen.
-    fn print_help(stdout: &mut Stdout, printer: &Printer) -> anyhow::Result<()> {
+    fn print_help(stdout: &mut Stdout, printer: &Self) -> anyhow::Result<()> {
         execute!(stdout, BeginSynchronizedUpdate)?;
         // Choose between short and long help text based on state.
         let help_msg = if printer.show_help {
@@ -561,8 +559,10 @@ impl Printer {
 
 
         // Calculate vertical position based on number of items and totals height.
-        let top = PAD_TOP + HEADER_HEIGHT + printer.items.len() as u16 + 4; // Header + Items + Separator + 3 Totals lines
-        let start_col = PAD_LEFT + COLS.saturating_sub(help_msg.len() as u16); // Align right
+        let items_count = u16::try_from(printer.items.len()).unwrap_or(u16::MAX);
+        let top = PAD_TOP + HEADER_HEIGHT + items_count + 4; // Header + Items + Separator + 3 Totals lines
+        let help_len = u16::try_from(help_msg.len()).unwrap_or(u16::MAX);
+        let start_col = PAD_LEFT + COLS.saturating_sub(help_len); // Align right
 
         queue!(stdout, cursor::MoveTo(0, top))?; // Move below totals
         queue!(stdout, Clear(ClearType::FromCursorDown))?; // Clear area below totals

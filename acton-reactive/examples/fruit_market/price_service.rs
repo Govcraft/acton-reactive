@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use rand::Rng;
-use tracing::*;
+use tracing::{instrument, trace};
 
 use acton_reactive::prelude::*;
 
@@ -34,17 +34,17 @@ const MOCK_DELAY_MS: u64 = 100; // Simulated delay for price lookup.
 const PRICE_MIN: i32 = 100; // Minimum random price in cents.
 const PRICE_MAX: i32 = 250; // Maximum random price in cents.
 
-/// Represents the state (model) for the PriceService agent.
+/// Represents the state (model) for the `PriceService` agent.
 /// This agent is responsible for looking up (or simulating) the price of items.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
-pub(crate) struct PriceService;
+pub struct PriceService;
 
 impl PriceService {
-    /// Creates, configures, and starts a new PriceService agent.
+    /// Creates, configures, and starts a new `PriceService` agent.
     /// Returns a handle to the started agent.
     #[instrument(skip(runtime))] // Instrument for tracing, skip the runtime param.
-    pub(crate) async fn new(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
+    pub(crate) async fn create(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
         // Configure the agent's identity (ERN).
         let config =
             AgentConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
@@ -79,7 +79,7 @@ impl PriceService {
         Ok(price_service_builder.start().await)
     }
 
-    /// Simulates looking up the price for a given CartItem.
+    /// Simulates looking up the price for a given `CartItem`.
     /// Includes an artificial delay to mimic real-world latency.
     async fn get_price(&self, item: CartItem) -> i32 {
         trace!("Getting price for {}", item.name());

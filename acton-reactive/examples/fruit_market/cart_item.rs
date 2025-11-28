@@ -22,7 +22,7 @@ use mti::prelude::*;
 
 /// Represents an item within a shopping cart for the fruit market example.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct CartItem {
+pub struct CartItem {
     /// The name of the fruit item.
     name: String,
     /// The quantity of this item in the cart.
@@ -40,7 +40,7 @@ impl CartItem {
     pub(crate) fn new(name: impl Into<String>, quantity: i32) -> Self {
         let name = name.into();
         let mut upc = "upc_".to_string();
-        upc.push_str(&name.clone());
+        upc.push_str(&name);
         Self {
             name,
             quantity,
@@ -65,9 +65,8 @@ impl CartItem {
     }
 
     /// Calculates and returns the total price for this cart item (cost * quantity).
-    pub(crate) fn price(&self) -> Price {
-        let price = &self.cost * self.quantity;
-        Price(price)
+    pub(crate) fn price(&self) -> i32 {
+        &self.cost * self.quantity
     }
     /// Returns the cost per unit of the cart item.
     pub(crate) const fn cost(&self) -> &Cost {
@@ -80,7 +79,7 @@ impl CartItem {
     }
 
     /// Sets the cost per unit for this cart item.
-    pub(crate) fn set_cost(&mut self, cost: i32) {
+    pub(crate) const fn set_cost(&mut self, cost: i32) {
         self.cost = Cost(cost);
     }
 }
@@ -94,7 +93,7 @@ impl Display for CartItem {
 
 /// Represents the cost of a single item, stored in cents.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Cost(i32);
+pub struct Cost(i32);
 
 /// Allows treating `Cost` directly as an `i32` (its inner value).
 impl Deref for Cost {
@@ -141,11 +140,11 @@ impl Div<i32> for &Cost {
 
 /// Represents a total price, stored in cents.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct Price(pub(crate) i32);
+pub struct Price(i32);
 
 /// Implements display formatting for `Price` using the `format_money` helper.
-impl Display for crate::cart_item::Price {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Price {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         format_money(self.0, f)
     }
 }
@@ -159,6 +158,6 @@ impl AddAssign<Price> for i32 {
 
 
 /// Helper function to format an integer representing cents into a $X.YY string format.
-fn format_money(cents: i32, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+fn format_money(cents: i32, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
     write!(f, "${}.{}", cents / 100, cents % 100)
 }

@@ -24,8 +24,7 @@ use crossterm::{
 };
 use futures::StreamExt; // Required for reader.next().await
 use tokio::sync::oneshot;
-use tracing::*;
-use tracing::Level;
+use tracing::{error, info, Level};
 use tracing_appender::rolling::{Rotation, RollingFileAppender};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, FmtSubscriber};
 
@@ -111,7 +110,7 @@ async fn main() -> Result<()> {
     // 2. Create the main 'Register' agent.
     //    The `Register::new_transaction` function likely sets up the Register agent
     //    and potentially spawns its dependencies (like PriceService, Printer).
-    let register_handle = Register::new_transaction(&mut runtime).await?.clone();
+    let register_handle = Register::new_transaction(&mut runtime).await?;
 
     // 3. Set up graceful shutdown mechanism using a oneshot channel.
     //    The input handling task will send a signal on this channel when 'q' or Ctrl+C is pressed.
@@ -192,7 +191,7 @@ async fn main() -> Result<()> {
 // Ensures tracing initialization happens only once.
 static INIT: Once = Once::new();
 
-/// Initializes the global tracing subscriber for the fruit_market example.
+/// Initializes the global tracing subscriber for the `fruit_market` example.
 /// Configures filtering and formats logs to a rolling file.
 pub fn initialize_tracing() {
     INIT.call_once(|| {
@@ -233,7 +232,6 @@ pub fn initialize_tracing() {
             .finish();
 
         // Set the subscriber as the global default.
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("Setting default subscriber failed");
+        tracing_subscriber::util::SubscriberInitExt::init(subscriber);
     });
 }
