@@ -14,7 +14,6 @@
  * limitations under that License.
  */
 
-use std::any::type_name_of_val;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
@@ -88,6 +87,66 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         })
     }
 
+    /// Handles dispatching a mutable reactor with error handling
+    async fn dispatch_mutable_handler(
+        &mut self,
+        reactor: &ReactorItem<Agent>,
+        envelope: &mut Envelope,
+    ) {
+        match reactor {
+            ReactorItem::Mutable(fut) => {
+                fut(self, envelope).await;
+            }
+            ReactorItem::MutableFallible(fut) => {
+                let result = fut(self, envelope).await;
+                if let Err((err, error_type_id)) = result {
+                    let message_type_id = envelope.message.as_any().type_id();
+                    if let Some(handler) =
+                        self.error_handler_map.remove(&(message_type_id, error_type_id))
+                    {
+                        handler(self, envelope, err.as_ref()).await;
+                        self.error_handler_map.insert((message_type_id, error_type_id), handler);
+                    } else {
+                        tracing::error!(
+                            "Unhandled error from message handler in agent {}: {:?}",
+                            self.id(),
+                            err
+                        );
+                    }
+                }
+            }
+            ReactorItem::ReadOnly(_) | ReactorItem::ReadOnlyFallible(_) => {
+                tracing::warn!("Found read-only handler in mutable_reactors map");
+            }
+        }
+    }
+
+    /// Spawns a read-only handler as a concurrent task
+    fn spawn_read_only_handler(
+        &self,
+        reactor: &ReactorItem<Agent>,
+        envelope: &mut Envelope,
+        read_only_futures: &mut FuturesUnordered<tokio::task::JoinHandle<()>>,
+    ) {
+        match reactor {
+            ReactorItem::ReadOnly(fut) => {
+                let fut = fut(self, envelope);
+                read_only_futures.push(tokio::spawn(async move { fut.await; }));
+            }
+            ReactorItem::ReadOnlyFallible(fut) => {
+                let fut = fut(self, envelope);
+                read_only_futures.push(tokio::spawn(async move {
+                    if let Err((err, _)) = fut.await {
+                        tracing::error!("Unhandled error from read-only message handler: {:?}", err);
+                    }
+                }));
+            }
+            _ => {
+                tracing::warn!("Found mutable handler in read_only_reactors map");
+            }
+        }
+    }
+
     // wake() and terminate() are internal implementation details (`pub(crate)` or private)
     // and do not require public documentation.
     #[instrument(skip(mutable_reactors, read_only_reactors, self))]
@@ -97,7 +156,6 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         read_only_reactors: ReactorMap<Agent>,
     ) {
         (self.after_start)(self).await;
-        // Assert that cancellation_token always exists; it must never be missing.
         assert!(
             self.cancellation_token.is_some(),
             "ManagedAgent in Started state must always have a cancellation_token"
@@ -105,10 +163,6 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         let cancel_token = self.cancellation_token.clone().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
 
-        let mut _terminate_signal_received = false;
-
-        use crate::common::config::CONFIG;
-        // Concurrent execution buffer for read-only handlers
         let mut read_only_futures = FuturesUnordered::new();
         let high_water_mark = CONFIG.limits.concurrent_handlers_high_water_mark;
         let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
@@ -116,180 +170,60 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
 
         loop {
             tokio::select! {
-                // React immediately to cancellation
                 () = &mut cancel => {
                     trace!("Forceful cancellation triggered for agent: {}", self.id());
-                    // Flush any remaining read-only futures before breaking
-                    if !read_only_futures.is_empty() {
-                        trace!("Flushing {} remaining read-only futures on cancellation", read_only_futures.len());
-                        while read_only_futures.next().await.is_some() {}
-                    }
-                    break; // Immediate break on forceful cancellation.
+                    while read_only_futures.next().await.is_some() {}
+                    break;
                 }
 
-                // Check if we should flush read-only futures due to time limit
                 () = tokio::time::sleep_until((last_flush_time + max_wait_duration).into()), if !read_only_futures.is_empty() => {
-                    trace!("Flushing {} read-only futures due to time limit", read_only_futures.len());
                     while read_only_futures.next().await.is_some() {}
                     last_flush_time = Instant::now();
                 }
 
                 incoming_opt = self.inbox.recv() => {
                     let Some(incoming_envelope) = incoming_opt else { break; };
-                    let type_id;
-                    let mut envelope;
-                    trace!(
-                        "Received envelope from: {}",
-                        incoming_envelope.reply_to.sender.root
-                    );
-                    trace!(
-                        "Message type: {}",
-                        type_name_of_val(&incoming_envelope.message)
-                    );
+                    trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root);
 
-                    // Handle potential BrokerRequestEnvelope indirection
-                    if let Some(broker_request_envelope) = incoming_envelope
-                        .message
-                        .as_any()
-                        .downcast_ref::<BrokerRequestEnvelope>()
+                    // Extract envelope and type_id, handling BrokerRequestEnvelope indirection
+                    let (mut envelope, type_id) = if let Some(broker_req) = incoming_envelope
+                        .message.as_any().downcast_ref::<BrokerRequestEnvelope>()
                     {
-                        trace!("Processing message via BrokerRequestEnvelope");
-                        envelope = Envelope::new(
-                            broker_request_envelope.message.clone(), // Extract inner message
-                            incoming_envelope.reply_to.clone(),
-                            incoming_envelope.recipient.clone(),
-                        );
-                        type_id = broker_request_envelope.message.as_any().type_id(); // Use inner message TypeId
+                        (
+                            Envelope::new(broker_req.message.clone(), incoming_envelope.reply_to.clone(), incoming_envelope.recipient.clone()),
+                            broker_req.message.as_any().type_id()
+                        )
                     } else {
-                        envelope = incoming_envelope;
-                        type_id = envelope.message.as_any().type_id();
-                    }
+                        let type_id = incoming_envelope.message.as_any().type_id();
+                        (incoming_envelope, type_id)
+                    };
 
                     // Dispatch to registered handler or handle system signals
                     if let Some(reactor) = mutable_reactors.get(&type_id) {
-                        // Flush any pending read-only futures before processing mutable handlers
-                        if !read_only_futures.is_empty() {
-                            trace!("Flushing {} read-only futures before mutable handler", read_only_futures.len());
+                        while read_only_futures.next().await.is_some() {}
+                        last_flush_time = Instant::now();
+                        self.dispatch_mutable_handler(reactor.value(), &mut envelope).await;
+                    } else if let Some(reactor) = read_only_reactors.get(&type_id) {
+                        self.spawn_read_only_handler(reactor.value(), &mut envelope, &mut read_only_futures);
+                        if read_only_futures.len() >= high_water_mark {
                             while read_only_futures.next().await.is_some() {}
                             last_flush_time = Instant::now();
                         }
-
-                        match reactor.value() {
-                            ReactorItem::Mutable(fut) => {
-                                // Legacy handler: await, always Ok
-                                fut(self, &mut envelope).await;
-                            }
-                            ReactorItem::MutableFallible(fut) => {
-                                // New Result-based handler: await and trigger error handler on Err
-                                let result = fut(self, &mut envelope).await;
-                                if let Err((err, error_type_id)) = result {
-                                    let message_type_id = envelope.message.as_any().type_id();
-                                    if let Some(handler) =
-                                        self.error_handler_map.remove(&(message_type_id, error_type_id))
-                                    {
-                                        let fut = handler(self, &mut envelope, err.as_ref());
-                                        fut.await;
-                                        self.error_handler_map.insert((message_type_id, error_type_id), handler);
-                                    } else {
-                                        tracing::error!(
-                                            "Unhandled error from message handler in agent {}: {:?}",
-                                            self.id(),
-                                            err
-                                        );
-                                    }
-                                }
-                            }
-                            ReactorItem::ReadOnly(_) => {
-                                // This should not happen - read-only handlers should be in read_only_reactors
-                                tracing::warn!("Found read-only handler in mutable_reactors map");
-                            }
-                            ReactorItem::ReadOnlyFallible(_) => {
-                                // This should not happen - read-only handlers should be in read_only_reactors
-                                tracing::warn!("Found read-only Result handler in mutable_reactors map");
-                            }
-                        }
-                    } else if let Some(reactor) = read_only_reactors.get(&type_id) {
-                        match reactor.value() {
-                            ReactorItem::ReadOnly(fut) => {
-                                // Concurrent read-only handler: add to buffer
-                                let fut = fut(self, &mut envelope);
-                                read_only_futures.push(tokio::spawn(async move {
-                                    fut.await;
-                                }));
-
-                                // Check if we've hit the high water mark
-                                if read_only_futures.len() >= high_water_mark {
-                                    trace!("Flushing {} read-only futures due to high water mark", read_only_futures.len());
-                                    while read_only_futures.next().await.is_some() {}
-                                    last_flush_time = Instant::now();
-                                }
-                            }
-                            ReactorItem::ReadOnlyFallible(fut) => {
-                                // Concurrent read-only handler with error handling: add to buffer
-                                let fut = fut(self, &mut envelope);
-                                read_only_futures.push(tokio::spawn(async move {
-                                    if let Err((err, _error_type_id)) = fut.await {
-                                        // Note: Error handling for read-only handlers is not supported
-                                        // as we don't have access to the agent for error handlers
-                                        tracing::error!(
-                                            "Unhandled error from read-only message handler: {:?}",
-                                            err
-                                        );
-                                    }
-                                }));
-
-                                // Check if we've hit the high water mark
-                                if read_only_futures.len() >= high_water_mark {
-                                    trace!("Flushing {} read-only Result futures due to high water mark", read_only_futures.len());
-                                    while read_only_futures.next().await.is_some() {}
-                                    last_flush_time = Instant::now();
-                                }
-                            }
-                            _ => {
-                                // This should not happen - mutable handlers should be in mutable_reactors
-                                tracing::warn!("Found mutable handler in read_only_reactors map");
-                            }
-                        }
-                    } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate))
-                    {
-                        // Flush any remaining read-only futures before processing terminate
-                        if !read_only_futures.is_empty() {
-                            trace!("Flushing {} read-only futures before terminate", read_only_futures.len());
-                            while read_only_futures.next().await.is_some() {}
-                        }
-
+                    } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate)) {
+                        while read_only_futures.next().await.is_some() {}
                         trace!("Terminate signal received for agent: {}. Closing inbox.", self.id());
-                        _terminate_signal_received = true; // Set flag
-                        (self.before_stop)(self).await; // Execute before_stop hook
-                        self.inbox.close(); // Close inbox to stop receiving new messages.
-                        // Do NOT break here. Allow loop to drain existing messages.
+                        (self.before_stop)(self).await;
+                        self.inbox.close();
                     } else {
-                        trace!(
-                            "No handler found for message type {:?} for agent {}",
-                            type_id,
-                            self.id()
-                        );
-                        // Optionally log or handle unknown message types
+                        trace!("No handler found for message type {:?} for agent {}", type_id, self.id());
                     }
                 }
             }
         }
-        // After loop breaks (either gracefully or forcefully), perform final termination steps.
-        trace!(
-            "Message loop finished for agent: {}. Initiating final termination.",
-            self.id()
-        );
 
-        // Flush any remaining read-only futures before final termination
-        if !read_only_futures.is_empty() {
-            trace!(
-                "Flushing {} remaining read-only futures before final termination",
-                read_only_futures.len()
-            );
-            while read_only_futures.next().await.is_some() {}
-        }
-
-        self.terminate().await; // Stop children and other cleanup.
+        trace!("Message loop finished for agent: {}. Initiating final termination.", self.id());
+        while read_only_futures.next().await.is_some() {}
+        self.terminate().await;
         (self.after_stop)(self).await;
         trace!("Agent {} stopped.", self.id());
     }
