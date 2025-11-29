@@ -348,17 +348,23 @@ mod tests {
         let cloned = registry.clone();
         assert!(cloned.is_registered("TestMessage"));
 
-        // Verify the clone works independently
+        // Verify both original and clone work independently
         let msg = TestMessage {
             value: 99,
             text: "cloned".to_string(),
         };
         let bytes = serde_json::to_vec(&msg).unwrap();
-        let result = cloned.deserialize("TestMessage", &bytes);
-        assert!(result.is_ok());
 
-        // Verify the deserialized message matches
-        let boxed = result.unwrap();
+        // Original should still work
+        let original_result = registry.deserialize("TestMessage", &bytes);
+        assert!(original_result.is_ok());
+
+        // Clone should also work
+        let clone_result = cloned.deserialize("TestMessage", &bytes);
+        assert!(clone_result.is_ok());
+
+        // Verify the deserialized message from clone matches
+        let boxed = clone_result.unwrap();
         let downcast = (*boxed).as_any().downcast_ref::<TestMessage>();
         assert!(downcast.is_some());
         assert_eq!(downcast.unwrap(), &msg);
