@@ -14,25 +14,25 @@
  * limitations under that License.
  */
 
-//! IPC Serialization Foundation Example
+//! IPC (Inter-Process Communication) Example
 //!
-//! This example demonstrates the IPC (Inter-Process Communication) serialization
-//! infrastructure that enables external processes to communicate with acton-reactive
-//! agents.
+//! This example demonstrates the complete IPC infrastructure for acton-reactive:
+//!
+//! 1. **Phase 1 - Serialization Foundation**: Type registration, message envelopes,
+//!    and agent exposure via logical names.
+//!
+//! 2. **Phase 2 - UDS Listener**: Unix Domain Socket communication with external
+//!    processes using length-prefixed wire protocol.
 //!
 //! # Key Concepts Demonstrated
 //!
-//! 1. **Type Registration**: Registering message types with `IpcTypeRegistry` so they
-//!    can be deserialized from external JSON data.
-//!
-//! 2. **Agent Exposure**: Exposing agents via logical names for IPC routing using
-//!    `runtime.ipc_expose()`.
-//!
-//! 3. **Message Envelopes**: Using `IpcEnvelope` format for incoming messages with
-//!    correlation IDs, targets, and type information.
-//!
-//! 4. **Response Handling**: Creating `IpcResponse` envelopes for success/error
-//!    responses back to external callers.
+//! - **Type Registration**: Registering message types with `IpcTypeRegistry`
+//! - **Agent Exposure**: Exposing agents via logical names for IPC routing
+//! - **UDS Listener**: Starting the IPC listener with `runtime.start_ipc_listener()`
+//! - **Wire Protocol**: Using `protocol::write_envelope` and `protocol::read_response`
+//!   for client-side communication
+//! - **Socket Utilities**: Using `socket_exists` and `socket_is_alive` for
+//!   socket state checking
 //!
 //! # Running This Example
 //!
@@ -43,8 +43,10 @@
 use std::sync::Arc;
 
 use acton_macro::acton_actor;
+use acton_reactive::ipc::protocol::{read_response, write_envelope};
 use acton_reactive::prelude::*;
 use serde::{Deserialize, Serialize};
+use tokio::net::UnixStream;
 
 // ============================================================================
 // Message Definitions
@@ -313,6 +315,129 @@ async fn demonstrate_error_handling(
     }
 }
 
+/// Demonstrates the UDS listener and client-side protocol functions.
+async fn demonstrate_uds_communication(
+    runtime: &AgentRuntime,
+    printer: &AgentHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use acton_reactive::ipc::{socket_exists, socket_is_alive};
+
+    // Create a custom IPC config with a unique socket path for this example
+    let config = IpcConfig::load();
+    let socket_path = config.socket_path();
+
+    printer
+        .send(Print(format!("Socket path: {}", socket_path.display())))
+        .await;
+
+    // Check socket state before starting
+    printer
+        .send(Print(format!(
+            "Socket exists before start: {}",
+            socket_exists(&socket_path)
+        )))
+        .await;
+
+    // Start the IPC listener
+    let listener_handle = runtime.start_ipc_listener_with_config(config).await?;
+
+    printer
+        .send(Print("IPC listener started successfully!".to_string()))
+        .await;
+
+    // Small delay to ensure listener is ready
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Check socket state after starting
+    printer
+        .send(Print(format!(
+            "Socket exists after start: {}",
+            socket_exists(&socket_path)
+        )))
+        .await;
+    printer
+        .send(Print(format!(
+            "Socket is alive: {}",
+            socket_is_alive(&socket_path).await
+        )))
+        .await;
+
+    // Connect as a client and send a message
+    printer
+        .send(Print("\nConnecting as IPC client...".to_string()))
+        .await;
+
+    let stream = UnixStream::connect(&socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+
+    // Create and send an envelope using the wire protocol
+    let envelope = IpcEnvelope::new(
+        "prices",
+        "PriceUpdate",
+        serde_json::json!({
+            "symbol": "NVDA",
+            "price": 875.50,
+            "timestamp": 1_700_000_010
+        }),
+    );
+
+    printer
+        .send(Print(format!(
+            "Sending envelope via UDS: correlation_id={}",
+            envelope.correlation_id
+        )))
+        .await;
+
+    // Use the wire protocol to send the envelope
+    write_envelope(&mut writer, &envelope).await?;
+
+    // Read the response using the wire protocol
+    let response = read_response(&mut reader, 1024 * 1024).await?;
+
+    printer
+        .send(Print(format!(
+            "Received response: success={}, correlation_id={}",
+            response.success, response.correlation_id
+        )))
+        .await;
+    printer
+        .send(Print(format!(
+            "Response payload: {}",
+            serde_json::to_string_pretty(&response.payload).unwrap_or_default()
+        )))
+        .await;
+
+    // Show listener statistics
+    let stats = &listener_handle.stats;
+    printer
+        .send(Print(format!(
+            "\nListener stats:\n  Connections accepted: {}\n  Messages received: {}\n  Messages routed: {}",
+            stats.connections_accepted(),
+            stats.messages_received(),
+            stats.messages_routed()
+        )))
+        .await;
+
+    // Stop the listener
+    listener_handle.stop();
+    printer
+        .send(Print("IPC listener stopped.".to_string()))
+        .await;
+
+    // Small delay for cleanup
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Verify socket is cleaned up
+    printer
+        .send(Print(format!(
+            "Socket exists after stop: {}",
+            socket_exists(&socket_path)
+        )))
+        .await;
+
+    Ok(())
+}
+
 /// Demonstrates hiding an agent from IPC access.
 async fn demonstrate_ipc_hiding(runtime: &AgentRuntime, printer: &AgentHandle) {
     let hidden = runtime.ipc_hide("prices");
@@ -341,7 +466,7 @@ async fn main() {
     // Create printer agent for coordinated console output
     let printer = create_printer_agent(&mut runtime).await;
     printer
-        .send(Print("=== IPC Serialization Foundation Example ===\n".to_string()))
+        .send(Print("=== IPC Example (Phase 1 + Phase 2) ===\n".to_string()))
         .await;
 
     // Register IPC message types
@@ -368,8 +493,10 @@ async fn main() {
         .send(Print(format!("  - 'prices' -> {}", price_handle.id())))
         .await;
 
-    // Simulate IPC message flow
-    printer.send(PrintSection("Simulating IPC Message Flow".to_string())).await;
+    // Phase 1: Simulate IPC message flow (in-process)
+    printer
+        .send(PrintSection("Phase 1: In-Process IPC Simulation".to_string()))
+        .await;
     let incoming_json = r#"{
         "correlation_id": "req_001",
         "target": "prices",
@@ -378,27 +505,59 @@ async fn main() {
     }"#;
     process_ipc_envelope(&runtime, &registry, &printer, incoming_json).await;
 
-    // Send more updates
-    printer.send(PrintSection("Sending More Updates".to_string())).await;
-    for (symbol, price, ts) in [("GOOGL", 141.80, 1_700_000_001), ("MSFT", 378.91, 1_700_000_002), ("AAPL", 179.50, 1_700_000_003)] {
+    // Send more updates directly
+    printer
+        .send(PrintSection("Direct Agent Updates".to_string()))
+        .await;
+    for (symbol, price, ts) in [
+        ("GOOGL", 141.80, 1_700_000_001),
+        ("MSFT", 378.91, 1_700_000_002),
+        ("AAPL", 179.50, 1_700_000_003),
+    ] {
         price_handle
-            .send(PriceUpdate { symbol: symbol.to_string(), price, timestamp: ts })
+            .send(PriceUpdate {
+                symbol: symbol.to_string(),
+                price,
+                timestamp: ts,
+            })
             .await;
     }
 
     // Demonstrate envelope creation
-    printer.send(PrintSection("Creating IpcEnvelope Programmatically".to_string())).await;
+    printer
+        .send(PrintSection("Creating IpcEnvelope Programmatically".to_string()))
+        .await;
     demonstrate_envelope_creation(&printer).await;
 
     // Demonstrate error handling
-    printer.send(PrintSection("Error Handling Examples".to_string())).await;
+    printer
+        .send(PrintSection("Error Handling Examples".to_string()))
+        .await;
     demonstrate_error_handling(&runtime, &registry, &printer).await;
 
+    // Phase 2: UDS listener demonstration
+    printer
+        .send(PrintSection("Phase 2: Unix Domain Socket Communication".to_string()))
+        .await;
+    if let Err(e) = demonstrate_uds_communication(&runtime, &printer).await {
+        printer
+            .send(Print(format!("UDS demonstration error: {e}")))
+            .await;
+    }
+
+    // Allow time for async message processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
     // Demonstrate hiding agents
-    printer.send(PrintSection("Hiding Agent from IPC".to_string())).await;
+    printer
+        .send(PrintSection("Hiding Agent from IPC".to_string()))
+        .await;
     demonstrate_ipc_hiding(&runtime, &printer).await;
 
     // Shutdown - actor framework ensures all messages are processed
-    runtime.shutdown_all().await.expect("Failed to shut down system");
+    runtime
+        .shutdown_all()
+        .await
+        .expect("Failed to shut down system");
     println!("\n=== Example Complete ===");
 }

@@ -290,6 +290,86 @@ impl AgentRuntime {
         self.0.ipc_agent_registry.len()
     }
 
+    /// Starts the IPC listener with the default configuration.
+    ///
+    /// This method loads IPC configuration from XDG-compliant locations and
+    /// starts a Unix Domain Socket listener that accepts connections from
+    /// external processes and routes messages to registered agents.
+    ///
+    /// The listener runs in a background task and will be automatically stopped
+    /// when the runtime's cancellation token is triggered (e.g., during shutdown).
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    ///
+    /// # Returns
+    ///
+    /// An [`IpcListenerHandle`](crate::common::ipc::IpcListenerHandle) for
+    /// managing the listener lifecycle and accessing statistics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The socket directory cannot be created
+    /// - Another listener is already running at the socket path
+    /// - The socket cannot be bound
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut runtime = ActonApp::launch();
+    ///
+    /// // Register message types and expose agents first
+    /// runtime.ipc_registry().register::<MyMessage>("MyMessage");
+    /// runtime.ipc_expose("my_agent", agent_handle);
+    ///
+    /// // Start the IPC listener
+    /// let listener = runtime.start_ipc_listener().await?;
+    ///
+    /// // Check listener statistics
+    /// println!("Active connections: {}", listener.stats.connections_active());
+    /// ```
+    #[cfg(feature = "ipc")]
+    pub async fn start_ipc_listener(
+        &self,
+    ) -> Result<crate::common::ipc::IpcListenerHandle, crate::common::ipc::IpcError> {
+        let config = crate::common::ipc::IpcConfig::load();
+        self.start_ipc_listener_with_config(config).await
+    }
+
+    /// Starts the IPC listener with a custom configuration.
+    ///
+    /// This method allows you to provide a custom IPC configuration instead
+    /// of loading from the default XDG locations.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Custom IPC configuration.
+    ///
+    /// # Returns
+    ///
+    /// An [`IpcListenerHandle`](crate::common::ipc::IpcListenerHandle) for
+    /// managing the listener lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`start_ipc_listener`](Self::start_ipc_listener).
+    #[cfg(feature = "ipc")]
+    pub async fn start_ipc_listener_with_config(
+        &self,
+        config: crate::common::ipc::IpcConfig,
+    ) -> Result<crate::common::ipc::IpcListenerHandle, crate::common::ipc::IpcError> {
+        trace!("Starting IPC listener with config: {:?}", config);
+        crate::common::ipc::start_listener(
+            config,
+            self.0.ipc_type_registry.clone(),
+            self.0.ipc_agent_registry.clone(),
+            self.0.cancellation_token.clone(),
+        )
+        .await
+    }
+
     /// Creates, configures, and starts a top-level agent using a provided configuration and setup function.
     ///
     /// This method combines agent creation (using `config`), custom asynchronous setup (`setup_fn`),

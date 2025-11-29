@@ -311,4 +311,35 @@ impl AgentHandleInterface for AgentHandle {
             Ok(())
         }
     }
+
+    /// Sends a boxed message to the agent.
+    ///
+    /// This method accepts a boxed trait object, converts it to an Arc, and sends it
+    /// to the agent's inbox. This is primarily used for IPC scenarios where messages
+    /// are deserialized into trait objects at runtime.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message implementing `ActonMessage + Send + Sync`.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the message was successfully queued for delivery, or an error
+    /// if the send failed (e.g., channel closed).
+    #[cfg(feature = "ipc")]
+    #[instrument(skip(self, message))]
+    fn send_boxed(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_ {
+        use std::sync::Arc;
+        async move {
+            let envelope = self.create_envelope(Some(self.reply_address()));
+            trace!(recipient = %self.id, "Sending boxed message via IPC");
+            // Convert Box to Arc for the internal send mechanism
+            let arc_message: Arc<dyn ActonMessage + Send + Sync> = Arc::from(message);
+            envelope.send_arc(arc_message).await;
+            Ok(())
+        }
+    }
 }

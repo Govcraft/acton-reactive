@@ -235,4 +235,19 @@ impl OutboundEnvelope {
         // Arc the message and call the internal async sender.
         self.send_message_inner(Arc::new(message)).await;
     }
+
+    /// Sends an Arc-wrapped message asynchronously using this envelope.
+    ///
+    /// This method is similar to [`send`](OutboundEnvelope::send), but accepts an
+    /// already-Arc'd message. This is useful when the message is already wrapped
+    /// in an Arc (e.g., from IPC deserialization where Box is converted to Arc).
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: An Arc-wrapped message payload to send.
+    #[cfg(feature = "ipc")]
+    #[instrument(skip(self, message), level = "trace")]
+    pub async fn send_arc(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
+        self.send_message_inner(message).await;
+    }
 }

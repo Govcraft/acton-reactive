@@ -64,6 +64,37 @@ pub(crate) mod message;
 /// Defines core traits used throughout the Acton framework.
 pub(crate) mod traits;
 
+/// IPC (Inter-Process Communication) module for external process integration.
+///
+/// This module provides Unix Domain Socket communication infrastructure for
+/// sending messages to agents from external processes.
+///
+/// This module provides all the public IPC types and functions for building
+/// IPC clients and working with the IPC infrastructure.
+///
+/// # Feature Gate
+///
+/// This module is only available when the `ipc` feature is enabled.
+#[cfg(feature = "ipc")]
+pub mod ipc {
+    pub use crate::common::ipc::{
+        socket_exists, socket_is_alive, start_listener, IpcConfig, IpcEnvelope, IpcError,
+        IpcListenerHandle, IpcListenerStats, IpcResponse, IpcTypeRegistry,
+    };
+
+    /// Wire protocol for IPC message framing.
+    ///
+    /// This module provides functions for reading and writing IPC messages
+    /// using the length-prefixed binary wire protocol.
+    pub mod protocol {
+        pub use crate::common::ipc::protocol::{
+            is_heartbeat, read_envelope, read_frame, read_response, write_envelope, write_frame,
+            write_heartbeat, write_response, HEADER_SIZE, MAX_FRAME_SIZE, MSG_TYPE_ERROR,
+            MSG_TYPE_HEARTBEAT, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE, PROTOCOL_VERSION,
+        };
+    }
+}
+
 /// A prelude module for conveniently importing the most commonly used items.
 ///
 /// This module re-exports essential types, traits, and macros from the Acton
@@ -105,6 +136,9 @@ pub(crate) mod traits;
 /// *   [`crate::common::ipc::IpcEnvelope`]: Envelope format for IPC messages.
 /// *   [`crate::common::ipc::IpcResponse`]: Response envelope format for IPC.
 /// *   [`crate::common::ipc::IpcError`]: Error types for IPC operations.
+/// *   [`crate::common::ipc::IpcConfig`]: Configuration for IPC listener.
+/// *   [`crate::common::ipc::IpcListenerHandle`]: Handle for managing IPC listener lifecycle.
+/// *   [`crate::common::ipc::IpcListenerStats`]: Statistics for IPC listener.
 pub mod prelude {
     // Macros from acton-macro
     pub use acton_macro::*;
@@ -121,5 +155,8 @@ pub mod prelude {
 
     // IPC types (feature-gated)
     #[cfg(feature = "ipc")]
-    pub use crate::common::ipc::{IpcEnvelope, IpcError, IpcResponse, IpcTypeRegistry};
+    pub use crate::common::ipc::{
+        IpcConfig, IpcEnvelope, IpcError, IpcListenerHandle, IpcListenerStats, IpcResponse,
+        IpcTypeRegistry,
+    };
 }

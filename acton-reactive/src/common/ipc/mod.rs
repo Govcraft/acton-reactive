@@ -16,9 +16,10 @@
 
 //! IPC (Inter-Process Communication) support for acton-reactive.
 //!
-//! This module provides type registration and serialization infrastructure
-//! for sending messages across process boundaries. All items in this module
-//! are only available when the `ipc` feature is enabled.
+//! This module provides type registration, serialization infrastructure, and
+//! Unix Domain Socket (UDS) listener for sending messages across process
+//! boundaries. All items in this module are only available when the `ipc`
+//! feature is enabled.
 //!
 //! # Overview
 //!
@@ -28,6 +29,8 @@
 //! - A type registry for mapping message type names to deserializers
 //! - Serializable envelope types for IPC message framing
 //! - An agent registry for mapping logical names to agent handles
+//! - A Unix Domain Socket listener for external process communication
+//! - A wire protocol with length-prefixed framing
 //!
 //! # Key Components
 //!
@@ -41,6 +44,10 @@
 //!   success/error reporting.
 //!
 //! * [`IpcError`]: Error types specific to IPC operations.
+//!
+//! * [`IpcConfig`]: Configuration for IPC listener with XDG-compliant socket paths.
+//!
+//! * [`IpcListenerHandle`]: Handle for managing the IPC listener lifecycle.
 //!
 //! # Example
 //!
@@ -62,13 +69,29 @@
 //! let agent = runtime.new_agent::<()>();
 //! let handle = agent.start().await;
 //! runtime.ipc_expose("price_service", handle);
+//!
+//! // Start the IPC listener (Phase 2)
+//! let listener_handle = runtime.start_ipc_listener().await?;
 //! ```
 
 // --- Public Re-exports ---
+pub use config::IpcConfig;
+pub use listener::{
+    run as start_listener, socket_exists, socket_is_alive, IpcListenerHandle, IpcListenerStats,
+};
 pub use registry::IpcTypeRegistry;
 pub use types::{IpcEnvelope, IpcError, IpcResponse};
 
 // --- Submodules ---
+
+/// IPC configuration with XDG-compliant socket path handling.
+mod config;
+
+/// Unix Domain Socket listener for IPC communication.
+mod listener;
+
+/// Wire protocol implementation for IPC message framing.
+pub mod protocol;
 
 /// Defines the [`IpcTypeRegistry`] for message type registration.
 mod registry;

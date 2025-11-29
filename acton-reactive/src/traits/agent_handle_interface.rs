@@ -144,4 +144,23 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static {
     /// A `Future` that resolves to `Ok(())` upon successful termination, or an `Err`
     /// if sending the termination signal or waiting for completion fails.
     fn stop(&self) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_;
+
+    /// Sends a boxed message asynchronously to this agent handle's associated agent.
+    ///
+    /// This method is similar to [`send`](AgentHandleInterface::send), but accepts a
+    /// boxed trait object instead of a generic message type. This is useful for IPC
+    /// scenarios where messages are deserialized into trait objects at runtime.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message payload to send. Must implement [`ActonMessage`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message could not be sent (e.g., if the channel is closed).
+    #[cfg(feature = "ipc")]
+    fn send_boxed(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_;
 }
