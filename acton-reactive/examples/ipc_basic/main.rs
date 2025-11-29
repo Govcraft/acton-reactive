@@ -51,9 +51,6 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// A price update message that can be sent via IPC.
-///
-/// This message includes serde derives so it can be serialized/deserialized
-/// for cross-process communication.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PriceUpdate {
     symbol: String,
@@ -75,84 +72,172 @@ struct PriceResponse {
     found: bool,
 }
 
+/// A message to print text to the console.
+#[derive(Clone, Debug)]
+struct Print(String);
+
+/// A message to print a section header.
+#[derive(Clone, Debug)]
+struct PrintSection(String);
+
+/// Message to initialize the price service with a printer handle.
+#[derive(Clone, Debug)]
+struct InitPrinter(AgentHandle);
+
 // ============================================================================
-// Agent State
+// Agent States
 // ============================================================================
+
+/// State for the console printer agent.
+/// All console output goes through this agent to ensure proper ordering.
+#[acton_actor]
+struct PrinterState;
 
 /// State for our price tracking agent.
 #[acton_actor]
 struct PriceServiceState {
-    /// Tracks the latest prices by symbol.
     prices: std::collections::HashMap<String, f64>,
-    /// Count of updates received.
     update_count: usize,
+    printer: Option<AgentHandle>,
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-/// Registers message types with the IPC type registry.
-fn register_ipc_types(registry: &Arc<IpcTypeRegistry>) {
-    registry.register::<PriceUpdate>("PriceUpdate");
-    registry.register::<GetPrice>("GetPrice");
-    registry.register::<PriceResponse>("PriceResponse");
-
-    println!("Registered {} IPC message types:", registry.len());
-    for type_name in registry.type_names() {
-        println!("  - {type_name}");
-    }
-    println!();
+/// Creates and starts the printer agent for coordinated console output.
+async fn create_printer_agent(runtime: &mut AgentRuntime) -> AgentHandle {
+    let mut printer_agent = runtime.new_agent::<PrinterState>();
+    printer_agent
+        .act_on::<Print>(|_agent, envelope| {
+            println!("{}", envelope.message().0);
+            AgentReply::immediate()
+        })
+        .act_on::<PrintSection>(|_agent, envelope| {
+            println!("\n--- {} ---\n", envelope.message().0);
+            AgentReply::immediate()
+        });
+    printer_agent.start().await
 }
 
-/// Processes an incoming IPC envelope and routes it to the appropriate agent.
+/// Creates and starts the price service agent.
+async fn create_price_service(
+    runtime: &mut AgentRuntime,
+    printer: &AgentHandle,
+) -> AgentHandle {
+    let mut price_service =
+        runtime.new_agent_with_name::<PriceServiceState>("price_service".to_string());
+
+    price_service
+        .mutate_on::<InitPrinter>(|agent, envelope| {
+            agent.model.printer = Some(envelope.message().0.clone());
+            AgentReply::immediate()
+        })
+        .mutate_on::<PriceUpdate>(|agent, envelope| {
+            let msg = envelope.message().clone();
+            let printer = agent.model.printer.clone();
+            agent.model.prices.insert(msg.symbol.clone(), msg.price);
+            agent.model.update_count += 1;
+
+            Box::pin(async move {
+                if let Some(p) = printer {
+                    p.send(Print(format!(
+                        "[PriceService] Received update: {} = ${:.2} (ts: {})",
+                        msg.symbol, msg.price, msg.timestamp
+                    )))
+                    .await;
+                }
+            })
+        })
+        .mutate_on::<GetPrice>(|agent, envelope| {
+            let msg = envelope.message().clone();
+            let printer = agent.model.printer.clone();
+            let price = agent.model.prices.get(&msg.symbol).copied();
+            let reply_envelope = envelope.reply_envelope();
+
+            Box::pin(async move {
+                if let Some(p) = &printer {
+                    p.send(Print(format!("[PriceService] Query for: {}", msg.symbol)))
+                        .await;
+                }
+                let response = PriceResponse {
+                    symbol: msg.symbol.clone(),
+                    price: price.unwrap_or(0.0),
+                    found: price.is_some(),
+                };
+                reply_envelope.send(response).await;
+            })
+        })
+        .after_stop(|agent| {
+            let printer = agent.model.printer.clone();
+            let update_count = agent.model.update_count;
+            let prices = agent.model.prices.clone();
+
+            Box::pin(async move {
+                if let Some(p) = printer {
+                    p.send(Print(format!(
+                        "\n[PriceService] Shutting down. Processed {update_count} updates."
+                    )))
+                    .await;
+                    p.send(Print(format!("Final prices: {prices:?}"))).await;
+                }
+            })
+        });
+
+    let handle = price_service.start().await;
+    handle.send(InitPrinter(printer.clone())).await;
+    handle
+}
+
+/// Processes an incoming IPC envelope and routes it to the target agent.
 async fn process_ipc_envelope(
     runtime: &AgentRuntime,
     registry: &Arc<IpcTypeRegistry>,
+    printer: &AgentHandle,
     incoming_json: &str,
 ) {
-    println!("Received IPC envelope:\n{incoming_json}\n");
+    printer
+        .send(Print(format!("Received IPC envelope:\n{incoming_json}")))
+        .await;
 
-    // Parse the envelope
     let envelope: IpcEnvelope = serde_json::from_str(incoming_json).expect("Invalid JSON");
-    println!(
-        "Parsed envelope: correlation_id={}, target={}, type={}",
-        envelope.correlation_id, envelope.target, envelope.message_type
-    );
+    printer
+        .send(Print(format!(
+            "\nParsed envelope: correlation_id={}, target={}, type={}",
+            envelope.correlation_id, envelope.target, envelope.message_type
+        )))
+        .await;
 
-    // Look up the target agent
     if let Some(target_handle) = runtime.ipc_lookup(&envelope.target) {
-        println!("Found target agent: {}\n", target_handle.id());
+        printer
+            .send(Print(format!("Found target agent: {}", target_handle.id())))
+            .await;
 
-        // Deserialize the payload using the type registry
         match registry.deserialize_value(&envelope.message_type, &envelope.payload) {
             Ok(message) => {
-                // Send the deserialized message to the agent
-                // Note: In production, you'd use the boxed message directly.
-                // Here we demonstrate the flow by re-creating the message.
-                let price_update: &PriceUpdate = (*message)
-                    .as_any()
-                    .downcast_ref()
-                    .expect("Type mismatch");
-
+                let price_update: &PriceUpdate =
+                    (*message).as_any().downcast_ref().expect("Type mismatch");
                 target_handle.send(price_update.clone()).await;
 
-                // Create success response
                 let response = IpcResponse::success(
                     &envelope.correlation_id,
                     Some(serde_json::json!({"status": "delivered"})),
                 );
-                println!(
-                    "Response: {}\n",
-                    serde_json::to_string_pretty(&response).unwrap()
-                );
+                printer
+                    .send(Print(format!(
+                        "\nResponse: {}",
+                        serde_json::to_string_pretty(&response).unwrap()
+                    )))
+                    .await;
             }
             Err(e) => {
                 let response = IpcResponse::error(&envelope.correlation_id, &e);
-                println!(
-                    "Error response: {}\n",
-                    serde_json::to_string_pretty(&response).unwrap()
-                );
+                printer
+                    .send(Print(format!(
+                        "\nError response: {}",
+                        serde_json::to_string_pretty(&response).unwrap()
+                    )))
+                    .await;
             }
         }
     } else {
@@ -160,44 +245,17 @@ async fn process_ipc_envelope(
             &envelope.correlation_id,
             &IpcError::AgentNotFound(envelope.target.clone()),
         );
-        println!(
-            "Error: {}\n",
-            serde_json::to_string_pretty(&response).unwrap()
-        );
+        printer
+            .send(Print(format!(
+                "\nError: {}",
+                serde_json::to_string_pretty(&response).unwrap()
+            )))
+            .await;
     }
 }
 
-/// Sends multiple price updates to demonstrate internal messaging.
-async fn send_price_updates(price_handle: &AgentHandle) {
-    println!("--- Sending More Updates ---\n");
-
-    let updates = vec![
-        PriceUpdate {
-            symbol: "GOOGL".to_string(),
-            price: 141.80,
-            timestamp: 1_700_000_001,
-        },
-        PriceUpdate {
-            symbol: "MSFT".to_string(),
-            price: 378.91,
-            timestamp: 1_700_000_002,
-        },
-        PriceUpdate {
-            symbol: "AAPL".to_string(),
-            price: 179.50,
-            timestamp: 1_700_000_003,
-        },
-    ];
-
-    for update in updates {
-        price_handle.send(update).await;
-    }
-}
-
-/// Demonstrates programmatic envelope creation.
-fn demonstrate_envelope_creation() {
-    println!("\n--- Creating IpcEnvelope Programmatically ---\n");
-
+/// Demonstrates programmatic envelope creation with MTI-generated correlation ID.
+async fn demonstrate_envelope_creation(printer: &AgentHandle) {
     let new_envelope = IpcEnvelope::new(
         "prices",
         "PriceUpdate",
@@ -208,47 +266,68 @@ fn demonstrate_envelope_creation() {
         }),
     );
 
-    println!("Created envelope with auto-generated correlation_id:");
-    println!("{}\n", serde_json::to_string_pretty(&new_envelope).unwrap());
+    printer
+        .send(Print(
+            "Created envelope with auto-generated correlation_id:".to_string(),
+        ))
+        .await;
+    printer
+        .send(Print(serde_json::to_string_pretty(&new_envelope).unwrap()))
+        .await;
 }
 
 /// Demonstrates error handling for various IPC failure scenarios.
-fn demonstrate_error_handling(runtime: &AgentRuntime, registry: &Arc<IpcTypeRegistry>) {
-    println!("--- Error Handling Examples ---\n");
-
+async fn demonstrate_error_handling(
+    runtime: &AgentRuntime,
+    registry: &Arc<IpcTypeRegistry>,
+    printer: &AgentHandle,
+) {
     // Unknown message type
     let unknown_result = registry.deserialize("UnknownType", b"{}");
     if let Err(e) = unknown_result {
-        println!("Error deserializing unknown type: {e}");
+        printer
+            .send(Print(format!("Error deserializing unknown type: {e}")))
+            .await;
         let response = IpcResponse::error("req_err_1", &e);
-        println!(
-            "Response: {}\n",
-            serde_json::to_string_pretty(&response).unwrap()
-        );
+        printer
+            .send(Print(format!(
+                "Response: {}",
+                serde_json::to_string_pretty(&response).unwrap()
+            )))
+            .await;
     }
 
     // Agent not found
-    let missing_agent = runtime.ipc_lookup("nonexistent");
-    if missing_agent.is_none() {
+    if runtime.ipc_lookup("nonexistent").is_none() {
         let err = IpcError::AgentNotFound("nonexistent".to_string());
-        println!("Error looking up agent: {err}");
+        printer
+            .send(Print(format!("\nError looking up agent: {err}")))
+            .await;
         let response = IpcResponse::error("req_err_2", &err);
-        println!(
-            "Response: {}\n",
-            serde_json::to_string_pretty(&response).unwrap()
-        );
+        printer
+            .send(Print(format!(
+                "Response: {}",
+                serde_json::to_string_pretty(&response).unwrap()
+            )))
+            .await;
     }
 }
 
 /// Demonstrates hiding an agent from IPC access.
-fn demonstrate_ipc_hiding(runtime: &AgentRuntime) {
-    println!("--- Hiding Agent from IPC ---\n");
+async fn demonstrate_ipc_hiding(runtime: &AgentRuntime, printer: &AgentHandle) {
     let hidden = runtime.ipc_hide("prices");
-    println!(
-        "Removed 'prices' from IPC: {}",
-        hidden.map_or_else(|| "not found".to_string(), |h| h.id().to_string())
-    );
-    println!("Exposed agents remaining: {}\n", runtime.ipc_agent_count());
+    printer
+        .send(Print(format!(
+            "Removed 'prices' from IPC: {}",
+            hidden.map_or_else(|| "not found".to_string(), |h| h.id().to_string())
+        )))
+        .await;
+    printer
+        .send(Print(format!(
+            "Exposed agents remaining: {}",
+            runtime.ipc_agent_count()
+        )))
+        .await;
 }
 
 // ============================================================================
@@ -257,112 +336,69 @@ fn demonstrate_ipc_hiding(runtime: &AgentRuntime) {
 
 #[tokio::main]
 async fn main() {
-    println!("=== IPC Serialization Foundation Example ===\n");
-
-    // 1. Launch the Acton runtime
     let mut runtime = ActonApp::launch();
 
-    // 2. Register message types with the IPC type registry
+    // Create printer agent for coordinated console output
+    let printer = create_printer_agent(&mut runtime).await;
+    printer
+        .send(Print("=== IPC Serialization Foundation Example ===\n".to_string()))
+        .await;
+
+    // Register IPC message types
     let registry = runtime.ipc_registry();
-    register_ipc_types(&registry);
+    registry.register::<PriceUpdate>("PriceUpdate");
+    registry.register::<GetPrice>("GetPrice");
+    registry.register::<PriceResponse>("PriceResponse");
 
-    // 3. Create and configure the price service agent
-    let mut price_service =
-        runtime.new_agent_with_name::<PriceServiceState>("price_service".to_string());
+    printer
+        .send(Print(format!("Registered {} IPC message types:", registry.len())))
+        .await;
+    for type_name in registry.type_names() {
+        printer.send(Print(format!("  - {type_name}"))).await;
+    }
 
-    price_service
-        // Handle price updates
-        .mutate_on::<PriceUpdate>(|agent, envelope| {
-            let msg = envelope.message().clone();
-            println!(
-                "[PriceService] Received update: {} = ${:.2} (ts: {})",
-                msg.symbol, msg.price, msg.timestamp
-            );
-
-            // Update our price map
-            agent.model.prices.insert(msg.symbol, msg.price);
-            agent.model.update_count += 1;
-
-            AgentReply::immediate()
-        })
-        // Handle price queries
-        .mutate_on::<GetPrice>(|agent, envelope| {
-            let msg = envelope.message().clone();
-            println!("[PriceService] Query for: {}", msg.symbol);
-
-            let price = agent.model.prices.get(&msg.symbol).copied();
-            let reply_envelope = envelope.reply_envelope();
-
-            Box::pin(async move {
-                let response = PriceResponse {
-                    symbol: msg.symbol.clone(),
-                    price: price.unwrap_or(0.0),
-                    found: price.is_some(),
-                };
-                reply_envelope.send(response).await;
-            })
-        })
-        .after_stop(|agent| {
-            println!(
-                "\n[PriceService] Shutting down. Processed {} updates.",
-                agent.model.update_count
-            );
-            println!("Final prices: {:?}", agent.model.prices);
-            AgentReply::immediate()
-        });
-
-    // 4. Start the agent and get its handle
-    let price_handle = price_service.start().await;
-
-    // 5. Expose the agent for IPC access using a logical name
+    // Create and expose price service
+    let price_handle = create_price_service(&mut runtime, &printer).await;
     runtime.ipc_expose("prices", price_handle.clone());
 
-    println!("Exposed {} agent(s) for IPC:", runtime.ipc_agent_count());
-    println!("  - 'prices' -> {}\n", price_handle.id());
+    printer
+        .send(Print(format!("\nExposed {} agent(s) for IPC:", runtime.ipc_agent_count())))
+        .await;
+    printer
+        .send(Print(format!("  - 'prices' -> {}", price_handle.id())))
+        .await;
 
-    // ========================================================================
-    // Simulate IPC Message Processing
-    // ========================================================================
-
-    println!("--- Simulating IPC Message Flow ---\n");
-
-    // Simulate an external process sending JSON messages
+    // Simulate IPC message flow
+    printer.send(PrintSection("Simulating IPC Message Flow".to_string())).await;
     let incoming_json = r#"{
         "correlation_id": "req_001",
         "target": "prices",
         "message_type": "PriceUpdate",
-        "payload": {
-            "symbol": "AAPL",
-            "price": 178.25,
-            "timestamp": 1700000000
-        }
+        "payload": { "symbol": "AAPL", "price": 178.25, "timestamp": 1700000000 }
     }"#;
+    process_ipc_envelope(&runtime, &registry, &printer, incoming_json).await;
 
-    process_ipc_envelope(&runtime, &registry, incoming_json).await;
-
-    // Give the agent time to process the IPC message
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-    // Send more price updates
-    send_price_updates(&price_handle).await;
-
-    // Give the agent time to process all updates
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    // Send more updates
+    printer.send(PrintSection("Sending More Updates".to_string())).await;
+    for (symbol, price, ts) in [("GOOGL", 141.80, 1_700_000_001), ("MSFT", 378.91, 1_700_000_002), ("AAPL", 179.50, 1_700_000_003)] {
+        price_handle
+            .send(PriceUpdate { symbol: symbol.to_string(), price, timestamp: ts })
+            .await;
+    }
 
     // Demonstrate envelope creation
-    demonstrate_envelope_creation();
+    printer.send(PrintSection("Creating IpcEnvelope Programmatically".to_string())).await;
+    demonstrate_envelope_creation(&printer).await;
 
     // Demonstrate error handling
-    demonstrate_error_handling(&runtime, &registry);
+    printer.send(PrintSection("Error Handling Examples".to_string())).await;
+    demonstrate_error_handling(&runtime, &registry, &printer).await;
 
-    // Demonstrate hiding agents from IPC
-    demonstrate_ipc_hiding(&runtime);
+    // Demonstrate hiding agents
+    printer.send(PrintSection("Hiding Agent from IPC".to_string())).await;
+    demonstrate_ipc_hiding(&runtime, &printer).await;
 
-    // Shutdown
-    runtime
-        .shutdown_all()
-        .await
-        .expect("Failed to shut down system");
-
+    // Shutdown - actor framework ensures all messages are processed
+    runtime.shutdown_all().await.expect("Failed to shut down system");
     println!("\n=== Example Complete ===");
 }
