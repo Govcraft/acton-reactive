@@ -228,16 +228,14 @@ mod render {
             } else {
                 (Color::Red, "○")
             };
+            let content = format!("{status_char} {:<10}{:<46}", service.name, service.details);
             execute!(
                 stdout,
                 Print("│ "),
                 SetForegroundColor(status_color),
-                Print(format!("{status_char} ")),
+                Print(&content[..2]),
                 ResetColor,
-                Print(format!("{:<10}", service.name)),
-                SetForegroundColor(Color::White),
-                Print(format!("{:<45}", service.details)),
-                ResetColor,
+                Print(&content[2..]),
                 Print("│\r\n")
             )?;
         }
@@ -251,19 +249,21 @@ mod render {
     }
 
     pub fn statistics(stdout: &mut std::io::Stdout, state: &DashboardState) -> std::io::Result<()> {
+        let row1 = format!(
+            " {:>8} active    {:>8} total",
+            state.connections_active, state.connections_total
+        );
+        let row2 = format!(
+            " {:>8} received  {:>8} routed    {:>8} errors",
+            state.messages_received, state.messages_routed, state.errors
+        );
         execute!(
             stdout,
             SetForegroundColor(Color::Blue),
             Print("┌─ IPC Statistics ──────────────────────────────────────────┐\r\n"),
             ResetColor,
-            Print(format!(
-                "│  {:>8} active    {:>8} total                          │\r\n",
-                state.connections_active, state.connections_total
-            )),
-            Print(format!(
-                "│  {:>8} received  {:>8} routed   {:>8} errors          │\r\n",
-                state.messages_received, state.messages_routed, state.errors
-            )),
+            Print(format!("│{row1:<60}│\r\n")),
+            Print(format!("│{row2:<60}│\r\n")),
             SetForegroundColor(Color::Blue),
             Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
             ResetColor
