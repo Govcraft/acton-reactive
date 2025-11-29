@@ -484,8 +484,8 @@ mod tests {
         let cancel_token = CancellationToken::new();
 
         let handle = IpcListenerHandle {
-            stats: stats.clone(),
-            cancel_token: cancel_token.clone(),
+            stats,
+            cancel_token,
         };
 
         assert!(!handle.is_cancelled());
