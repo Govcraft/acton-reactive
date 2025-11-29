@@ -33,6 +33,9 @@ crossterm.workspace = true
 zerocopy.workspace = true
 ansi_term.workspace = true
 tempfile.workspace = true
+chrono = "0.4.42"
+scopeguard = "1.2.0"
+futures.workspace = true
 
 [features]
 default = []
