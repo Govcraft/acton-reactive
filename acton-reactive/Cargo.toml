@@ -30,10 +30,25 @@ rand.workspace = true
 [dev-dependencies]
 acton_test.workspace = true
 crossterm.workspace = true
-mti.workspace = true
 zerocopy.workspace = true
 ansi_term.workspace = true
 tempfile.workspace = true
+
+[features]
+default = []
+## IPC (Inter-Process Communication) support for external process messaging.
+##
+## Enables serialization infrastructure and type registration for sending messages
+## across process boundaries via Unix domain sockets or other transports.
+ipc = ["dep:mti", "dep:serde_json"]
+
+[dependencies.mti]
+workspace = true
+optional = true
+
+[dependencies.serde_json]
+workspace = true
+optional = true
 
 [lints]
 workspace = true

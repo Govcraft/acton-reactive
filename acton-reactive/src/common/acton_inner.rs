@@ -20,12 +20,43 @@ use tokio_util::sync::CancellationToken;
 
 use crate::common::{AgentHandle, BrokerRef, ActonConfig};
 
+#[cfg(feature = "ipc")]
+use std::sync::Arc;
+#[cfg(feature = "ipc")]
+use crate::common::ipc::IpcTypeRegistry;
+
+/// Internal state structure for the Acton runtime.
+///
+/// This struct holds all the core components needed to manage the agent system,
+/// including the message broker, agent registry, and configuration.
 #[derive(Debug, Clone)]
 pub struct ActonInner {
+    /// Handle to the central message broker agent.
     pub(crate) broker: BrokerRef,
+
+    /// Registry of top-level (root) agents, keyed by their ERN.
     pub(crate) roots: DashMap<Ern, AgentHandle>,
+
+    /// Token for coordinating graceful shutdown across all agents.
     pub(crate) cancellation_token: CancellationToken,
+
+    /// Runtime configuration loaded from XDG-compliant locations.
     pub(crate) config: ActonConfig,
+
+    /// Registry for IPC message type deserialization.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    #[cfg(feature = "ipc")]
+    pub(crate) ipc_type_registry: Arc<IpcTypeRegistry>,
+
+    /// Registry mapping logical names to agent handles for IPC routing.
+    ///
+    /// External processes reference agents by logical names (e.g., `price_service`)
+    /// rather than full ERNs. This registry maintains that mapping.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    #[cfg(feature = "ipc")]
+    pub(crate) ipc_agent_registry: Arc<DashMap<String, AgentHandle>>,
 }
 
 impl Default for ActonInner {
@@ -35,6 +66,10 @@ impl Default for ActonInner {
             roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),
             config: ActonConfig::default(),
+            #[cfg(feature = "ipc")]
+            ipc_type_registry: Arc::new(IpcTypeRegistry::new()),
+            #[cfg(feature = "ipc")]
+            ipc_agent_registry: Arc::new(DashMap::new()),
         }
     }
 }

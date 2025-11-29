@@ -65,4 +65,11 @@ mod agent_reply;
 /// Defines the configuration system for the Acton framework.
 pub mod config;
 
-// pub use crate::pool::LoadBalanceStrategy; // This seems unused currently
+/// IPC (Inter-Process Communication) support for external process messaging.
+///
+/// This module provides type registration and serialization infrastructure
+/// for sending messages across process boundaries.
+///
+/// Only available when the `ipc` feature is enabled.
+#[cfg(feature = "ipc")]
+pub mod ipc;

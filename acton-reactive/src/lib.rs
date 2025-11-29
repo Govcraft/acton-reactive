@@ -99,6 +99,12 @@ pub(crate) mod traits;
 /// *   [`crate::traits::Broker`]: Trait defining message broadcasting capabilities.
 /// *   [`crate::traits::Subscribable`]: Trait for managing message subscriptions.
 /// *   [`crate::traits::Subscriber`]: Trait for accessing the message broker.
+///
+/// ## IPC Types (requires `ipc` feature)
+/// *   [`crate::common::ipc::IpcTypeRegistry`]: Registry for IPC message type deserialization.
+/// *   [`crate::common::ipc::IpcEnvelope`]: Envelope format for IPC messages.
+/// *   [`crate::common::ipc::IpcResponse`]: Response envelope format for IPC.
+/// *   [`crate::common::ipc::IpcError`]: Error types for IPC operations.
 pub mod prelude {
     // Macros from acton-macro
     pub use acton_macro::*;
@@ -112,4 +118,8 @@ pub mod prelude {
     pub use crate::common::{ActonApp, AgentBroker, AgentHandle, AgentReply, AgentRuntime};
     pub use crate::message::{BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope};
     pub use crate::traits::{ActonMessage, AgentHandleInterface, Broker, Subscribable, Subscriber};
+
+    // IPC types (feature-gated)
+    #[cfg(feature = "ipc")]
+    pub use crate::common::ipc::{IpcEnvelope, IpcError, IpcResponse, IpcTypeRegistry};
 }

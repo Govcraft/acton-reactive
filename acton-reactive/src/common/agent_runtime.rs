@@ -171,9 +171,123 @@ impl AgentRuntime {
 
     /// Returns a clone of the handle ([`BrokerRef`]) to the system's central message broker.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn broker(&self) -> BrokerRef {
         self.0.broker.clone()
+    }
+
+    /// Returns a clone of the Arc-wrapped IPC type registry.
+    ///
+    /// The registry is used to register message types for cross-process
+    /// serialization and deserialization. Message types must be registered
+    /// before they can be received via IPC.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_reactive::prelude::*;
+    /// use serde::{Serialize, Deserialize};
+    ///
+    /// #[derive(Clone, Debug, Serialize, Deserialize)]
+    /// struct PriceUpdate {
+    ///     symbol: String,
+    ///     price: f64,
+    /// }
+    ///
+    /// let mut runtime = ActonApp::launch();
+    ///
+    /// // Register the message type with a stable name
+    /// runtime.ipc_registry().register::<PriceUpdate>("PriceUpdate");
+    /// ```
+    #[cfg(feature = "ipc")]
+    #[inline]
+    #[must_use]
+    pub fn ipc_registry(&self) -> std::sync::Arc<crate::common::ipc::IpcTypeRegistry> {
+        self.0.ipc_type_registry.clone()
+    }
+
+    /// Exposes an agent for IPC access with a logical name.
+    ///
+    /// External processes reference agents by logical names (e.g., `price_service`)
+    /// rather than full ERNs. This method registers the mapping between a
+    /// human-readable name and the agent's handle.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `name`: The logical name to expose the agent as. External IPC clients
+    ///   will use this name to target the agent.
+    /// * `handle`: The [`AgentHandle`] of the agent to expose.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut runtime = ActonApp::launch();
+    /// let agent = runtime.new_agent_with_name::<PriceServiceState>("price_service".to_string());
+    /// let handle = agent.start().await;
+    ///
+    /// // Expose the agent for IPC access
+    /// runtime.ipc_expose("price_service", handle.clone());
+    /// ```
+    #[cfg(feature = "ipc")]
+    pub fn ipc_expose(&self, name: &str, handle: AgentHandle) {
+        trace!("Exposing agent {} for IPC as '{}'", handle.id(), name);
+        self.0.ipc_agent_registry.insert(name.to_string(), handle);
+    }
+
+    /// Removes an agent from IPC exposure.
+    ///
+    /// After calling this method, external processes will no longer be able
+    /// to send messages to the agent using the specified name.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `name`: The logical name to remove from IPC exposure.
+    ///
+    /// # Returns
+    ///
+    /// The removed [`AgentHandle`] if the name was registered, or `None` if
+    /// no agent was registered with that name.
+    #[cfg(feature = "ipc")]
+    pub fn ipc_hide(&self, name: &str) -> Option<AgentHandle> {
+        trace!("Hiding agent '{}' from IPC", name);
+        self.0.ipc_agent_registry.remove(name).map(|(_, h)| h)
+    }
+
+    /// Looks up an agent handle by its IPC logical name.
+    ///
+    /// This is used internally by the IPC listener to route messages to
+    /// the correct agent.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `name`: The logical name to look up.
+    ///
+    /// # Returns
+    ///
+    /// A clone of the [`AgentHandle`] if found, or `None` if no agent
+    /// is registered with that name.
+    #[cfg(feature = "ipc")]
+    #[must_use]
+    pub fn ipc_lookup(&self, name: &str) -> Option<AgentHandle> {
+        self.0.ipc_agent_registry.get(name).map(|r| r.clone())
+    }
+
+    /// Returns the number of agents currently exposed for IPC.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    #[cfg(feature = "ipc")]
+    #[inline]
+    #[must_use]
+    pub fn ipc_agent_count(&self) -> usize {
+        self.0.ipc_agent_registry.len()
     }
 
     /// Creates, configures, and starts a top-level agent using a provided configuration and setup function.
@@ -364,6 +478,10 @@ impl From<ActonApp> for AgentRuntime {
             roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),
             config,
+            #[cfg(feature = "ipc")]
+            ipc_type_registry: std::sync::Arc::new(crate::common::ipc::IpcTypeRegistry::new()),
+            #[cfg(feature = "ipc")]
+            ipc_agent_registry: std::sync::Arc::new(DashMap::new()),
         });
         
         // Spawn broker initialization in a separate task
