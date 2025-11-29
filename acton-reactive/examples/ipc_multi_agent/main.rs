@@ -257,7 +257,7 @@ mod render {
             Print("┌─ IPC Statistics ──────────────────────────────────────────┐\r\n"),
             ResetColor,
             Print(format!(
-                "│ Connections: {:>5} active  / {:>5} total                   │\r\n",
+                "│ Connections: {:>5} active   / {:>5} total                  │\r\n",
                 state.connections_active, state.connections_total
             )),
             Print(format!(
