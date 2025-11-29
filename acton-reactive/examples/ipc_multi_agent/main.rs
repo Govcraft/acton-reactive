@@ -257,11 +257,11 @@ mod render {
             Print("┌─ IPC Statistics ──────────────────────────────────────────┐\r\n"),
             ResetColor,
             Print(format!(
-                "│ Connections: {:<5} active / {:<5} total                 │\r\n",
+                "│ Connections: {:>5} active  / {:>5} total                   │\r\n",
                 state.connections_active, state.connections_total
             )),
             Print(format!(
-                "│ Messages:    {:<5} received / {:<5} routed / {:<5} errors  │\r\n",
+                "│ Messages:    {:>5} received / {:>5} routed / {:>5} errors  │\r\n",
                 state.messages_received, state.messages_routed, state.errors
             )),
             SetForegroundColor(Color::Blue),
