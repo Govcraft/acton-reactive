@@ -340,17 +340,20 @@ async fn main() {
 
     process_ipc_envelope(&runtime, &registry, incoming_json).await;
 
+    // Give the agent time to process the IPC message
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
     // Send more price updates
     send_price_updates(&price_handle).await;
+
+    // Give the agent time to process all updates
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // Demonstrate envelope creation
     demonstrate_envelope_creation();
 
     // Demonstrate error handling
     demonstrate_error_handling(&runtime, &registry);
-
-    // Give the agent time to process all messages
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Demonstrate hiding agents from IPC
     demonstrate_ipc_hiding(&runtime);
