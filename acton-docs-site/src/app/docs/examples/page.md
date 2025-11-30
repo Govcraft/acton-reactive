@@ -354,7 +354,7 @@ cargo run --example ipc_basic
 **Message Types:**
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 // Calculator messages - use #[acton_message(ipc)] for IPC-compatible types
 #[acton_message(ipc)]
@@ -504,7 +504,7 @@ cargo run --example ipc_streaming --bin client
 **Message Types:**
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message(ipc)]
 struct PriceUpdate {

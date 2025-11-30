@@ -163,7 +163,7 @@ All message types sent over IPC must be registered with the type registry.
 ### Registration Pattern
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 // Use #[acton_message(ipc)] for IPC-compatible message types
 // This derives Clone, Debug, Serialize, and Deserialize automatically
@@ -243,7 +243,7 @@ Client sends a request, actor sends a single response.
 **Server Side:**
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message(ipc)]
 struct AddRequest { a: i32, b: i32 }
@@ -292,7 +292,7 @@ Client sends a request, actor sends multiple response frames.
 **Server Side:**
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message(ipc)]
 struct ListRequest { page_size: usize }
@@ -343,7 +343,7 @@ Client subscribes to message types and receives pushed notifications.
 **Server Side:**
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message(ipc)]
 struct PriceUpdate { symbol: String, price: f64 }
@@ -776,7 +776,7 @@ tokio::spawn(async move {
 Implement health check endpoints:
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message(ipc)]
 struct HealthCheck;

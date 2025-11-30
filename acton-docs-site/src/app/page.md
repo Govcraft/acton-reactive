@@ -111,7 +111,6 @@ Let's build a simple counter. Don't worry about understanding everything yet - j
 ```toml
 [dependencies]
 acton-reactive = "0.1"
-acton-macro = "0.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -119,7 +118,6 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust
 use acton_reactive::prelude::*;
-use acton_macro::{acton_actor, acton_message};
 
 // This is our actor's "desk" - its private data
 #[acton_actor]

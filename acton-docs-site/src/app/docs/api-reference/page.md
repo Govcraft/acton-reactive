@@ -35,6 +35,13 @@ use acton_reactive::prelude::*;
 | `BrokerRequest` | `message` | Broadcast message wrapper |
 | `ActorReply` | `common` | Utility for handler return types |
 
+### Included Macros
+
+| Macro | Description |
+|-------|-------------|
+| `#[acton_actor]` | Derives `Default`, `Clone`, `Debug` for actor state structs |
+| `#[acton_message]` | Derives `Clone`, `Debug` for message types (add `ipc` for IPC support) |
+
 ### Included Traits
 
 | Trait | Description |
@@ -239,7 +246,7 @@ impl<Model> ManagedActor<Started, Model> {
 
 **Example:**
 ```rust
-use acton_macro::{acton_actor, acton_message};
+use acton_reactive::prelude::*;
 
 #[acton_actor]
 struct CounterState {
@@ -355,7 +362,7 @@ Any type implementing `Clone + Debug + Send + Sync + 'static` automatically impl
 
 **Example (using macro - recommended):**
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message]
 struct MyMessage {

@@ -16,8 +16,7 @@ Add these to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-reactive = "0.1"       # Core framework
-acton-macro = "0.1"           # Convenience macros (optional but recommended)
+acton-reactive = "0.1"      # Core framework (includes macros via prelude)
 tokio = { version = "1", features = ["full"] }  # Required async runtime
 ```
 
@@ -35,7 +34,6 @@ Create a quick test to make sure everything is wired up correctly:
 
 ```rust
 use acton_reactive::prelude::*;
-use acton_macro::{acton_actor, acton_message};
 
 #[acton_actor]
 struct TestActor {
@@ -118,16 +116,23 @@ acton-reactive = { version = "0.1", features = ["ipc-messagepack"] }
 
 | Crate | What It Does | Required? |
 |-------|-------------|-----------|
-| `acton-reactive` | Core framework: actors, messaging, runtime | Yes |
-| `acton-macro` | Procedural macros (`#[acton_actor]`, `#[acton_message]`) | Recommended |
+| `acton-reactive` | Core framework: actors, messaging, runtime, and macros | Yes |
 | `acton-ern` | Entity Resource Names for actor identification | Included with core |
+
+{% callout type="note" title="Macros Included in Prelude" %}
+The `acton_reactive::prelude` re-exports all macros from `acton-macro`, so you only need one import:
+```rust
+use acton_reactive::prelude::*;  // Includes #[acton_actor], #[acton_message], etc.
+```
+No need to add `acton-macro` as a separate dependency.
+{% /callout %}
 
 ### Without the Macros
 
-You can use `acton-reactive` without `acton-macro`, but you'll need to derive traits manually:
+You can use `acton-reactive` without the macros, but you'll need to derive traits manually:
 
 ```rust
-// With acton-macro (recommended)
+// With macros (recommended)
 #[acton_actor]
 struct MyState {
     value: u32,
@@ -292,19 +297,12 @@ tokio = { version = "1", features = ["full"] }
 
 ### "cannot find macro `acton_actor`"
 
-**Cause:** The `acton-macro` crate isn't in your dependencies.
+**Cause:** You're not importing the prelude.
 
-**Fix:** Add it:
-
-```toml
-[dependencies]
-acton-macro = "0.1"
-```
-
-Then import it:
+**Fix:** Import the prelude which includes all macros:
 
 ```rust
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;  // Includes acton_actor, acton_message, etc.
 ```
 
 ---

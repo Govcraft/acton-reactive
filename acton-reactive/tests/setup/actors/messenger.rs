@@ -14,8 +14,7 @@
  * limitations under that License.
  */
 
-// Import the macro directly from the acton_macro crate
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;
 
 /// Represents a minimal actor state (model) for tests where the actor's
 /// primary purpose is message handling or interaction, without needing internal state.

@@ -29,8 +29,6 @@ use mti::prelude::MagicTypeId;
 use tracing::{error, trace};
 
 use acton_reactive::prelude::*;
-// Import the acton_message macro for message type definitions.
-use acton_macro::acton_message;
 
 // Import message types and data structures used by this actor.
 // Removed ToggleHelp as it's defined locally in this file.

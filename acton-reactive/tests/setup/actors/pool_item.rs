@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;
 
 /// Represents the state (model) for a generic "Pool Item" actor in tests.
 ///

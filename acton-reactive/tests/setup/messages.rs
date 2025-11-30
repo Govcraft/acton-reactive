@@ -17,9 +17,6 @@
 
 use acton_reactive::prelude::*;
 
-// Import the acton_message macro for message type definitions.
-use acton_macro::acton_message;
-
 /// Simple message often used for replies or acknowledgements in tests.
 #[acton_message]
 pub struct Pong;

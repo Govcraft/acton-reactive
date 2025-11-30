@@ -22,8 +22,6 @@ use crossterm::{
 };
 
 use acton_reactive::prelude::*;
-// Import macros for actor state structs and messages.
-use acton_macro::{acton_actor, acton_message};
 
 /// State for the `DataCollector` actor.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.

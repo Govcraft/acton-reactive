@@ -14,8 +14,7 @@
  * limitations under that License.
  */
 
-// Import the macro directly from the acton_macro crate
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;
 
 /// Represents the state (model) for a simple Counter actor in tests.
 ///

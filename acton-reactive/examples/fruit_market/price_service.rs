@@ -25,9 +25,6 @@ use acton_reactive::prelude::*;
 use crate::PriceResponse;
 use crate::{CartItem, ItemScanned};
 
-// Import the macro for actor state structs
-use acton_macro::acton_actor;
-
 // Constants for configuration and simulation.
 const PRICE_SERVICE_ROOT: &str = "price_service"; // Base name for the actor's ERN.
 const MOCK_DELAY_MS: u64 = 100; // Simulated delay for price lookup.

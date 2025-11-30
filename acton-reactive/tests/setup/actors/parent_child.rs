@@ -14,8 +14,7 @@
  * limitations under that License.
  */
 
-// Import the macro directly from the acton_macro crate
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;
 
 /// Represents the state (model) for a Parent actor in supervision tests.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.

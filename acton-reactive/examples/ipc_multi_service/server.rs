@@ -51,7 +51,6 @@ use std::io::{stdout, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acton_macro::{acton_actor, acton_message};
 use acton_reactive::ipc::{socket_exists, IpcConfig, IpcListenerStats};
 use acton_reactive::prelude::*;
 use crossterm::{

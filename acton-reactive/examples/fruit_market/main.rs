@@ -34,9 +34,6 @@ use acton_reactive::prelude::*;
 use cart_item::CartItem;
 use register::Register;
 
-// Import the acton_message macro for message type definitions.
-use acton_macro::acton_message;
-
 // Declare the modules composing this example.
 mod cart_item;
 mod price_service;

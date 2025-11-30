@@ -6,8 +6,6 @@
  * is being used.
  */
 
-// Import macros for actor state structs and messages.
-use acton_macro::{acton_actor, acton_message};
 use acton_reactive::prelude::*;
 
 /// Actor state for demonstrating configuration usage

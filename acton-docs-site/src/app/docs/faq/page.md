@@ -307,13 +307,13 @@ actor.mutate_on::<Trigger>(|actor, ctx| {
 
 ```rust
 mod a {
-    use acton_macro::acton_message;
+    use acton_reactive::prelude::*;
     #[acton_message]
     pub struct Event { pub value: i32 }
 }
 
 mod b {
-    use acton_macro::acton_message;
+    use acton_reactive::prelude::*;
     #[acton_message]
     pub struct Event { pub data: String }  // Different type!
 }
@@ -328,7 +328,7 @@ handle.send(b::Event { data: "test".into() }).await;
 **Solution:** Be explicit about types, and consider unique naming:
 
 ```rust
-use acton_macro::acton_message;
+use acton_reactive::prelude::*;
 
 #[acton_message]
 pub struct SensorEvent { pub value: i32 }

@@ -59,7 +59,7 @@ mod tests {
 ### Testing State Initialization
 
 ```rust
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;
 
 #[acton_actor]
 struct CounterState {
@@ -86,8 +86,6 @@ async fn test_initial_state() {
 ### Testing State Mutations
 
 ```rust
-use acton_macro::acton_message;
-
 #[acton_message]
 struct Increment(u32);
 
@@ -242,8 +240,6 @@ async fn test_supervision_hierarchy() {
 ### Testing Reply Behavior
 
 ```rust
-use acton_macro::acton_message;
-
 #[acton_message]
 struct Query(String);
 

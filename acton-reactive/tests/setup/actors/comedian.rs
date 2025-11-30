@@ -17,8 +17,7 @@
 // A simple actor for testing purposes
 // tracks the overall number of jokes told
 
-// Import the macro directly from the acton_macro crate
-use acton_macro::acton_actor;
+use acton_reactive::prelude::*;
 
 /// Represents the state (model) for a Comedian actor in tests.
 ///
