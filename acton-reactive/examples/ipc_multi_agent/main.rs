@@ -219,7 +219,10 @@ mod render {
         )
     }
 
-    pub fn services(stdout: &mut std::io::Stdout, services: &[ServiceState]) -> std::io::Result<()> {
+    pub fn services(
+        stdout: &mut std::io::Stdout,
+        services: &[ServiceState],
+    ) -> std::io::Result<()> {
         execute!(
             stdout,
             SetForegroundColor(Color::Yellow),
@@ -235,11 +238,14 @@ mod render {
             };
             execute!(
                 stdout,
-                Print("│ "),
+                Print("│"),
                 SetForegroundColor(status_color),
-                Print(status_char),
+                Print(format!("{:<8}{:<2}", "", status_char)),
                 ResetColor,
-                Print(format!("{:>8}  {:<24}{:<24}", service.name, service.col1, service.col2)),
+                Print(format!(
+                    "{:<17}{:<17}{:<16}",
+                    service.name, service.col1, service.col2
+                )),
                 Print("│\r\n")
             )?;
         }
@@ -274,7 +280,10 @@ mod render {
         )
     }
 
-    pub fn activity_log(stdout: &mut std::io::Stdout, log: &[ActivityEntry]) -> std::io::Result<()> {
+    pub fn activity_log(
+        stdout: &mut std::io::Stdout,
+        log: &[ActivityEntry],
+    ) -> std::io::Result<()> {
         execute!(
             stdout,
             SetForegroundColor(Color::Magenta),
@@ -299,7 +308,10 @@ mod render {
                     Print("│\r\n")
                 )?;
             } else {
-                execute!(stdout, Print("│                                                            │\r\n"))?;
+                execute!(
+                    stdout,
+                    Print("│                                                            │\r\n")
+                )?;
             }
         }
 
