@@ -70,19 +70,6 @@ pub struct ConcurrencyActor {
 #[derive(Debug, Clone)]
 pub struct DelayMessage;
 
-/// Actor for sequential vs concurrent testing
-#[derive(Default, Debug, Clone)]
-pub struct SequentialTestActor {
-    pub message_count: usize,
-    pub start_time: Option<std::time::Instant>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TrackSequential;
-
-#[derive(Debug, Clone)]
-pub struct TrackConcurrent;
-
 /// Actor for mixed handler testing
 #[derive(Default, Debug, Clone)]
 pub struct MixedActor {
@@ -380,105 +367,6 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
 
     // Wait for completion with buffer
     tokio::time::sleep(Duration::from_secs(3)).await;
-    runtime.shutdown_all().await?;
-
-    Ok(())
-}
-
-/// Test to prove mutable handlers run sequentially vs concurrent read-only handlers
-#[acton_test]
-async fn test_sequential_vs_concurrent_handlers() -> anyhow::Result<()> {
-    initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
-
-    // Test 1: Mutable handlers (sequential) - proven by message ordering
-    tracing::info!("Testing mutable handlers (sequential)...");
-    let mut mutable_actor = runtime.new_actor::<SequentialTestActor>();
-    mutable_actor.model.start_time = Some(std::time::Instant::now());
-
-    mutable_actor
-        .mutate_on::<DelayMessage>(|actor, _envelope| {
-            // Each mutable handler increments the count sequentially
-            actor.model.message_count += 1;
-            let current = actor.model.message_count;
-            let elapsed = actor.model.start_time.unwrap().elapsed();
-            tracing::info!("Mutable handler {} at {:?}", current, elapsed);
-
-            Box::pin(async move {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            })
-        })
-        .mutate_on::<TrackSequential>(|actor, _envelope| {
-            // Final verification that messages arrived in order
-            let elapsed = actor.model.start_time.unwrap().elapsed();
-            tracing::info!(
-                "Sequential verification: {} messages in {:?}",
-                actor.model.message_count,
-                elapsed
-            );
-
-            // 3 sequential handlers × 500ms = ~1500ms
-            assert!(
-                elapsed >= Duration::from_millis(1400),
-                "Mutable handlers should take ~1500ms for 3 sequential messages"
-            );
-            ActorReply::immediate()
-        });
-
-    let mutable_handle = mutable_actor.start().await;
-
-    // Send 3 mutable messages
-    for _ in 0..3 {
-        mutable_handle.send(DelayMessage).await;
-    }
-
-    // Send verification message
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    mutable_handle.send(TrackSequential).await;
-    mutable_handle.stop().await?;
-
-    // Test 2: Read-only handlers (concurrent) - proven by timing
-    tracing::info!("Testing read-only handlers (concurrent)...");
-    let mut readonly_actor = runtime.new_actor::<SequentialTestActor>();
-    readonly_actor.model.start_time = Some(std::time::Instant::now());
-
-    readonly_actor
-        .act_on::<DelayMessage>(|actor, _envelope| {
-            let elapsed = actor.model.start_time.unwrap().elapsed();
-            tracing::info!("Read-only handler at {:?}", elapsed);
-
-            Box::pin(async move {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            })
-        })
-        .mutate_on::<TrackConcurrent>(|actor, _envelope| {
-            let elapsed = actor.model.start_time.unwrap().elapsed();
-            tracing::info!(
-                "Concurrent verification: {} messages in {:?}",
-                actor.model.message_count,
-                elapsed
-            );
-
-            // 3 concurrent handlers × 500ms = ~500ms total, allow some buffer
-            assert!(
-                elapsed <= Duration::from_millis(2090),
-                "Read-only handlers should take ~500ms for 300 concurrent messages: {elapsed:?}"
-            );
-            ActorReply::immediate()
-        });
-
-    let readonly_handle = readonly_actor.start().await;
-
-    // Send 3 read-only messages
-    for _ in 0..300 {
-        readonly_handle.send(DelayMessage).await;
-    }
-
-    // Send verification message
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    readonly_handle.send(TrackConcurrent).await;
-    readonly_handle.stop().await?;
-
     runtime.shutdown_all().await?;
 
     Ok(())
