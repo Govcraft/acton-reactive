@@ -239,12 +239,14 @@ impl<Model> ManagedActor<Started, Model> {
 
 **Example:**
 ```rust
-#[derive(Default, Clone)]
+use acton_macro::{acton_actor, acton_message};
+
+#[acton_actor]
 struct CounterState {
     count: u32,
 }
 
-#[derive(Clone, Debug)]
+#[acton_message]
 struct Increment(u32);
 
 let mut actor = runtime.new_actor::<CounterState>();
@@ -351,13 +353,15 @@ pub trait ActonMessage: DynClone + Any + Send + Sync + Debug {
 
 Any type implementing `Clone + Debug + Send + Sync + 'static` automatically implements `ActonMessage`.
 
-**Example:**
+**Example (using macro - recommended):**
 ```rust
-#[derive(Clone, Debug)]
+use acton_macro::acton_message;
+
+#[acton_message]
 struct MyMessage {
     data: String,
 }
-// MyMessage automatically implements ActonMessage
+// acton_message derives Clone + Debug and asserts Send + Sync + 'static
 ```
 
 ---

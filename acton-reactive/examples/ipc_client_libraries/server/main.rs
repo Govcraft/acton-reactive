@@ -46,10 +46,9 @@
 
 use std::time::Duration;
 
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 use acton_reactive::ipc::{socket_exists, IpcConfig};
 use acton_reactive::prelude::*;
-use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 // ============================================================================
@@ -57,21 +56,21 @@ use tracing_subscriber::EnvFilter;
 // ============================================================================
 
 /// Request to add two numbers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct Add {
     a: i64,
     b: i64,
 }
 
 /// Request to multiply two numbers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct Multiply {
     a: i64,
     b: i64,
 }
 
 /// Response containing a calculation result.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct CalcResult {
     result: i64,
     operation: String,
@@ -82,14 +81,14 @@ struct CalcResult {
 // ============================================================================
 
 /// Request to search with streaming results.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SearchQuery {
     query: String,
     limit: usize,
 }
 
 /// A single search result in the stream.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SearchResult {
     id: usize,
     title: String,
@@ -101,7 +100,7 @@ struct SearchResult {
 // ============================================================================
 
 /// Log event (fire-and-forget).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct LogEvent {
     level: String,
     message: String,
@@ -112,7 +111,7 @@ struct LogEvent {
 // ============================================================================
 
 /// Price update notification (pushed to subscribers).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct PriceUpdate {
     symbol: String,
     price: f64,
@@ -120,7 +119,7 @@ struct PriceUpdate {
 }
 
 /// Status change notification (pushed to subscribers).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct StatusChange {
     service: String,
     status: String,
@@ -156,7 +155,7 @@ struct PricePublisherState {
 }
 
 /// Internal message to trigger price publication.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct PublishTick;
 
 // ============================================================================
@@ -222,7 +221,7 @@ async fn create_search_actor(runtime: &mut ActorRuntime) -> ActorHandle {
     search.mutate_on::<SearchQuery>(|actor, envelope| {
         let msg = envelope.message();
         let query = msg.query.clone();
-        let limit = msg.limit.min(10).max(1); // 1-10 results
+        let limit = msg.limit.clamp(1, 10); // 1-10 results
         actor.model.searches_performed += 1;
 
         println!(
@@ -234,7 +233,7 @@ async fn create_search_actor(runtime: &mut ActorRuntime) -> ActorHandle {
 
         Box::pin(async move {
             // Simulate search results
-            let sample_items = vec![
+            let sample_items = [
                 "Getting Started Guide",
                 "API Reference",
                 "Tutorial: Building Actors",
@@ -248,10 +247,12 @@ async fn create_search_actor(runtime: &mut ActorRuntime) -> ActorHandle {
             ];
 
             for (idx, title) in sample_items.iter().take(limit).enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let score = (idx as f64).mul_add(-0.1, 1.0);
                 let result = SearchResult {
                     id: idx + 1,
-                    title: format!("{} (matches: {})", title, query),
-                    score: 1.0 - (idx as f64 * 0.1),
+                    title: format!("{title} (matches: {query})"),
+                    score,
                 };
 
                 println!("  [Search] Sending result {}/{}", idx + 1, limit);
@@ -310,7 +311,9 @@ async fn create_price_publisher(runtime: &mut ActorRuntime) -> ActorHandle {
             "AMZN" => 180.0,
             _ => 100.0,
         };
-        let change = ((tick as f64 * 0.7).sin() * 2.0 * 100.0).round() / 100.0;
+        #[allow(clippy::cast_precision_loss)]
+        let change = f64::mul_add((tick as f64 * 0.7).sin(), 2.0, 0.0);
+        let change = (change * 100.0).round() / 100.0;
         let price = base_price + change;
 
         let update = PriceUpdate {
@@ -319,10 +322,7 @@ async fn create_price_publisher(runtime: &mut ActorRuntime) -> ActorHandle {
             change,
         };
 
-        println!(
-            "  [Publisher] Publishing: {} @ ${:.2} ({:+.2})",
-            symbol, price, change
-        );
+        println!("  [Publisher] Publishing: {symbol} @ ${price:.2} ({change:+.2})");
 
         let broker = actor.broker().clone();
         Box::pin(async move {

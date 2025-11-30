@@ -29,7 +29,8 @@ use mti::prelude::MagicTypeId;
 use tracing::{error, trace};
 
 use acton_reactive::prelude::*;
-// Note: #[acton_message] is not used for ToggleHelp, relying on derive + blanket impl.
+// Import the acton_message macro for message type definitions.
+use acton_macro::acton_message;
 
 // Import message types and data structures used by this actor.
 // Removed ToggleHelp as it's defined locally in this file.
@@ -87,7 +88,7 @@ impl Default for Printer {
 }
 
 /// Message to toggle the help display in the `Printer` UI.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub struct ToggleHelp;
 
 /// Represents the different states an item can be in for display purposes.

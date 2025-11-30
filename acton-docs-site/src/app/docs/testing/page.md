@@ -59,7 +59,9 @@ mod tests {
 ### Testing State Initialization
 
 ```rust
-#[derive(Default, Clone, Debug)]
+use acton_macro::acton_actor;
+
+#[acton_actor]
 struct CounterState {
     count: u32,
 }
@@ -84,7 +86,9 @@ async fn test_initial_state() {
 ### Testing State Mutations
 
 ```rust
-#[derive(Clone, Debug)]
+use acton_macro::acton_message;
+
+#[acton_message]
 struct Increment(u32);
 
 #[tokio::test]
@@ -238,10 +242,12 @@ async fn test_supervision_hierarchy() {
 ### Testing Reply Behavior
 
 ```rust
-#[derive(Clone, Debug)]
+use acton_macro::acton_message;
+
+#[acton_message]
 struct Query(String);
 
-#[derive(Clone, Debug)]
+#[acton_message]
 struct QueryResponse(String);
 
 #[tokio::test]

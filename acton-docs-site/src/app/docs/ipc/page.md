@@ -163,15 +163,16 @@ All message types sent over IPC must be registered with the type registry.
 ### Registration Pattern
 
 ```rust
-use serde::{Deserialize, Serialize};
+use acton_macro::acton_message;
 
-// Message must implement these traits for IPC
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// Use #[acton_message(ipc)] for IPC-compatible message types
+// This derives Clone, Debug, Serialize, and Deserialize automatically
+#[acton_message(ipc)]
 struct MyRequest {
     query: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct MyResponse {
     result: String,
 }
@@ -242,10 +243,12 @@ Client sends a request, actor sends a single response.
 **Server Side:**
 
 ```rust
-#[derive(Clone, Debug, Serialize, Deserialize)]
+use acton_macro::acton_message;
+
+#[acton_message(ipc)]
 struct AddRequest { a: i32, b: i32 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct AddResult { sum: i32 }
 
 // Register types
@@ -289,10 +292,12 @@ Client sends a request, actor sends multiple response frames.
 **Server Side:**
 
 ```rust
-#[derive(Clone, Debug, Serialize, Deserialize)]
+use acton_macro::acton_message;
+
+#[acton_message(ipc)]
 struct ListRequest { page_size: usize }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct ListItem { id: u64, name: String }
 
 // Handler sends multiple responses
@@ -338,7 +343,9 @@ Client subscribes to message types and receives pushed notifications.
 **Server Side:**
 
 ```rust
-#[derive(Clone, Debug, Serialize, Deserialize)]
+use acton_macro::acton_message;
+
+#[acton_message(ipc)]
 struct PriceUpdate { symbol: String, price: f64 }
 
 // Register subscribable type
@@ -769,10 +776,12 @@ tokio::spawn(async move {
 Implement health check endpoints:
 
 ```rust
-#[derive(Clone, Debug, Serialize, Deserialize)]
+use acton_macro::acton_message;
+
+#[acton_message(ipc)]
 struct HealthCheck;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct HealthStatus { status: String }
 
 registry.register::<HealthCheck>("HealthCheck");

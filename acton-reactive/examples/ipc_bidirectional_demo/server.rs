@@ -53,10 +53,9 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 use acton_reactive::ipc::{socket_exists, IpcConfig};
 use acton_reactive::prelude::*;
-use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 // ============================================================================
@@ -64,21 +63,21 @@ use tracing_subscriber::EnvFilter;
 // ============================================================================
 
 /// Request to add two numbers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct AddRequest {
     a: i64,
     b: i64,
 }
 
 /// Request to multiply two numbers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct MultiplyRequest {
     a: i64,
     b: i64,
 }
 
 /// Response containing a calculation result.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct CalculationResult {
     result: i64,
     operation: String,
@@ -89,20 +88,20 @@ struct CalculationResult {
 // ============================================================================
 
 /// Request to set a key-value pair.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SetValue {
     key: String,
     value: String,
 }
 
 /// Request to get a value by key.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct GetValue {
     key: String,
 }
 
 /// Response containing the retrieved value (or None if not found).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct ValueResponse {
     key: String,
     value: Option<String>,
@@ -110,7 +109,7 @@ struct ValueResponse {
 }
 
 /// Acknowledgment response for set operations.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SetAcknowledgment {
     key: String,
     success: bool,

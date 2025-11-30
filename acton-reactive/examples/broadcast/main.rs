@@ -22,8 +22,8 @@ use crossterm::{
 };
 
 use acton_reactive::prelude::*;
-// Import the macro for actor state structs
-use acton_macro::acton_actor;
+// Import macros for actor state structs and messages.
+use acton_macro::{acton_actor, acton_message};
 
 /// State for the `DataCollector` actor.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
@@ -61,7 +61,7 @@ impl Default for Printer {
 // --- Messages ---
 
 /// Message broadcast when new data is available.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct NewData(i32);
 
 // Type aliases for clarity in StatusUpdate message.
@@ -69,7 +69,7 @@ type From = String;
 type Status = String;
 
 /// Message broadcast to report actor status or results.
-#[derive(Clone, Debug)]
+#[acton_message]
 enum StatusUpdate {
     Ready(From, Status),
     Updated(From, i32),
@@ -79,6 +79,7 @@ enum StatusUpdate {
 // --- Main Application Logic ---
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() {
     // 1. Launch the Acton runtime environment.
     let mut runtime = ActonApp::launch();
@@ -104,7 +105,7 @@ async fn main() {
             Box::pin(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Updated("DataCollector".to_string(), message))
-                    .await
+                    .await;
             })
         })
         // After starting, broadcast its readiness.
@@ -133,7 +134,7 @@ async fn main() {
             Box::pin(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Updated("Aggregator".to_string(), sum))
-                    .await
+                    .await;
             })
         })
         // After starting, broadcast its readiness.
@@ -213,7 +214,7 @@ async fn main() {
                         "Printer".to_string(),
                         "ready to display messages".to_string(),
                     ))
-                    .await
+                    .await;
             })
         });
 

@@ -62,7 +62,7 @@ struct Counter {
 }
 
 // Messages are the only way in.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct Increment(u32);
 
 // Handlers are simple functions.
@@ -119,7 +119,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust
 use acton_reactive::prelude::*;
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 
 // This is our actor's "desk" - its private data
 #[acton_actor]
@@ -128,7 +128,7 @@ struct CounterState {
 }
 
 // This is a message - a memo telling the counter what to do
-#[derive(Clone, Debug)]
+#[acton_message]
 struct Increment(u32);
 
 #[tokio::main]

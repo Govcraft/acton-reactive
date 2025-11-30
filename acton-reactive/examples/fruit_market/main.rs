@@ -34,13 +34,14 @@ use acton_reactive::prelude::*;
 use cart_item::CartItem;
 use register::Register;
 
+// Import the acton_message macro for message type definitions.
+use acton_macro::acton_message;
+
 // Declare the modules composing this example.
 mod cart_item;
 mod price_service;
 mod printer;
 mod register;
-
-// Import specific types used in messages.
 
 // Constants for error messages and configuration.
 const FAILED_TO_ENABLE_RAW_MODE: &str = "Failed to enable raw mode";
@@ -50,24 +51,25 @@ const LOG_DIRECTORY: &str = "logs"; // Directory for log files.
 const LOG_FILENAME: &str = "fruit_market.log"; // Base name for log files.
 
 // --- Messages ---
-// Messages are the primary way actors communicate. They must be Clone + Debug.
+// Messages are the primary way actors communicate.
+// The `#[acton_message]` macro derives `Clone` and `Debug`.
 
 /// Message sent when an item is successfully scanned (likely includes price info).
-#[derive(Clone, Debug)]
+#[acton_message]
 struct ItemScanned(CartItem);
 
 /// Message sent to request the price of a specific item.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct PriceRequest(CartItem);
 
 /// Message containing the price response for a requested item.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct PriceResponse {
     item: CartItem,
 }
 
 /// Message specific to controlling the Printer actor.
-#[derive(Clone, Debug)]
+#[acton_message]
 enum PrinterMessage {
     /// Instructs the printer to repaint the display.
     Repaint,

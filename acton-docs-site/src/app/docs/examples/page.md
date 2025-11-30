@@ -354,21 +354,23 @@ cargo run --example ipc_basic
 **Message Types:**
 
 ```rust
-// Calculator messages
-#[derive(Clone, Debug, Serialize, Deserialize)]
+use acton_macro::acton_message;
+
+// Calculator messages - use #[acton_message(ipc)] for IPC-compatible types
+#[acton_message(ipc)]
 struct AddRequest { a: i32, b: i32 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct CalculationResult { result: i32 }
 
 // KV Store messages
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SetValue { key: String, value: String }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct GetValue { key: String }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct ValueResponse { value: Option<String> }
 ```
 
@@ -502,21 +504,23 @@ cargo run --example ipc_streaming --bin client
 **Message Types:**
 
 ```rust
-#[derive(Clone, Debug, Serialize, Deserialize)]
+use acton_macro::acton_message;
+
+#[acton_message(ipc)]
 struct PriceUpdate {
     symbol: String,
     price: f64,
     timestamp: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct TradeExecuted {
     symbol: String,
     quantity: u32,
     price: f64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SystemStatus {
     status: String,
     message: String,

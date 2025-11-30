@@ -17,56 +17,52 @@
 
 use acton_reactive::prelude::*;
 
+// Import the acton_message macro for message type definitions.
+use acton_macro::acton_message;
+
 /// Simple message often used for replies or acknowledgements in tests.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub struct Pong;
 
 /// Simple message often used to trigger an action or request in tests.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub struct Ping;
 
 /// Represents different types of jokes a `Comedian` actor might tell.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub enum FunnyJoke {
     ChickenCrossesRoad,
     Pun,
 }
 
 /// Represents a joke targeted at a specific child actor or identified by a string.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub enum FunnyJokeFor {
     ChickenCrossesRoad(Ern),
     Pun(String),
 }
 
 /// Represents audience reactions to a joke.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub enum AudienceReactionMsg {
     Chuckle,
     Groan,
 }
 
 /// Generic message representing a joke being told (content not specified).
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub struct Joke;
 
 /// Message used to instruct the `Counter` actor to increment its count.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub struct Tally;
 
 /// Message used by an actor to report its status, often including a count.
-/// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
-#[derive(Clone, Debug)]
+#[acton_message]
 pub enum StatusReport {
     Complete(usize),
 }
 
+/// Message used to increment a counter.
 #[acton_message]
 pub struct Increment;

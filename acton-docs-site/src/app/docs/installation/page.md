@@ -35,14 +35,14 @@ Create a quick test to make sure everything is wired up correctly:
 
 ```rust
 use acton_reactive::prelude::*;
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 
 #[acton_actor]
 struct TestActor {
     ready: bool,
 }
 
-#[derive(Clone, Debug)]
+#[acton_message]
 struct Ping;
 
 #[tokio::main]

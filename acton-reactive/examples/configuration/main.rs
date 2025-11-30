@@ -6,7 +6,8 @@
  * is being used.
  */
 
-use acton_macro::acton_actor;
+// Import macros for actor state structs and messages.
+use acton_macro::{acton_actor, acton_message};
 use acton_reactive::prelude::*;
 
 /// Actor state for demonstrating configuration usage
@@ -19,7 +20,7 @@ struct ConfigActor {
 }
 
 /// Message to request actor configuration
-#[derive(Debug, Clone)]
+#[acton_message]
 struct GetConfig;
 
 #[tokio::main]
@@ -91,5 +92,5 @@ async fn main() {
 }
 
 /// Simple increment message
-#[derive(Debug, Clone)]
+#[acton_message]
 struct Increment;

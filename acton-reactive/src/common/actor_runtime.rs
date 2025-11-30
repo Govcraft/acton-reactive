@@ -481,7 +481,7 @@ impl ActorRuntime {
         if let Ok(res) =
             tokio_timeout(Duration::from_millis(timeout_ms), self.0.broker.stop()).await
         {
-            res?
+            res?;
         } else {
             error!(
                 "Timeout waiting for broker to shut down after {} ms",

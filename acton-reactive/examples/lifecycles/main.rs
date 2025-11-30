@@ -16,8 +16,8 @@
 use acton_reactive::prelude::*;
 use tokio::time::{sleep, Duration};
 
-// Import the macro for actor state structs
-use acton_macro::acton_actor;
+// Import macros for actor state structs and messages.
+use acton_macro::{acton_actor, acton_message};
 
 /// Represents the state (model) for an actor that tracks a list of items.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
@@ -28,11 +28,11 @@ struct ItemTracker {
 }
 
 /// Message to add a new item to the tracker's list.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct AddItem(String);
 
 /// Message to request the current list of items (demonstrates async handler).
-#[derive(Clone, Debug)]
+#[acton_message]
 struct GetItems;
 
 #[tokio::main]

@@ -49,10 +49,9 @@
 
 use std::time::Duration;
 
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 use acton_reactive::ipc::{socket_exists, IpcConfig};
 use acton_reactive::prelude::*;
-use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 // ============================================================================
@@ -60,7 +59,7 @@ use tracing_subscriber::EnvFilter;
 // ============================================================================
 
 /// Request to start a countdown from a given number.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct CountdownRequest {
     /// Starting number for the countdown.
     start: u32,
@@ -69,7 +68,7 @@ struct CountdownRequest {
 }
 
 /// A single countdown tick sent as a streaming response.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct CountdownTick {
     /// Current number in the countdown.
     number: u32,
@@ -82,14 +81,14 @@ struct CountdownTick {
 // ============================================================================
 
 /// Request to list items with pagination.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct ListItemsRequest {
     /// Number of items per page.
     page_size: usize,
 }
 
 /// A page of items sent as a streaming response.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct ItemPage {
     /// Page number (1-indexed).
     page: usize,
@@ -111,7 +110,6 @@ struct CountdownState {
 
 /// List service - streams paginated results from a collection.
 #[acton_actor]
-#[derive(Default)]
 struct ListServiceState {
     #[allow(dead_code)]
     request_count: usize,

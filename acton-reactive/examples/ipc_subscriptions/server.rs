@@ -51,9 +51,9 @@
 
 use std::time::Duration;
 
+use acton_macro::acton_message;
 use acton_reactive::ipc::{socket_exists, IpcConfig};
 use acton_reactive::prelude::*;
-use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 // ============================================================================
@@ -63,7 +63,7 @@ use tracing_subscriber::EnvFilter;
 /// A stock price update broadcast by the price feed service.
 ///
 /// Clients can subscribe to `PriceUpdate` to receive these notifications.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct PriceUpdate {
     /// Stock symbol (e.g., "AAPL", "GOOGL").
     symbol: String,
@@ -78,7 +78,7 @@ struct PriceUpdate {
 /// A trade execution event.
 ///
 /// Clients can subscribe to `TradeExecuted` to receive these notifications.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct TradeExecuted {
     /// Trade ID.
     trade_id: String,
@@ -95,7 +95,7 @@ struct TradeExecuted {
 /// System status notification.
 ///
 /// Clients can subscribe to `SystemStatus` to receive these notifications.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SystemStatus {
     /// Status type (e.g., `market_open`, `market_close`, `maintenance`).
     status: String,
@@ -110,13 +110,12 @@ struct SystemStatus {
 // ============================================================================
 
 /// Internal message to trigger a price broadcast.
-/// Must derive Clone + Debug to be sent as a message.
-#[derive(Clone, Debug, Default)]
+#[acton_message]
+#[derive(Default)]
 struct BroadcastPrices;
 
 /// Internal message to trigger a trade broadcast.
-/// Must derive Clone + Debug to be sent as a message.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct BroadcastTrade {
     symbol: String,
     quantity: u32,

@@ -15,8 +15,8 @@
  */
 
 use acton_reactive::prelude::*;
-// Import the macro for actor state structs
-use acton_macro::acton_actor;
+// Import macros for actor state structs and messages.
+use acton_macro::{acton_actor, acton_message};
 
 /// Defines the internal state (the "model") for our basic actor.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
@@ -27,18 +27,16 @@ struct BasicActorState {
 }
 
 /// A message used to initiate interaction with the actor.
-// Messages need to be Clone and Debug to satisfy the ActonMessage trait bounds.
-#[derive(Debug, Clone)]
+// The `#[acton_message]` macro derives `Clone` and `Debug`.
+#[acton_message]
 struct PingMsg;
 
 /// A reply message sent back by the actor after receiving `PingMsg`.
-// Note: We rely on the blanket `impl<T> ActonMessage for T` and derive traits manually.
-#[derive(Debug, Clone)]
+#[acton_message]
 struct PongMsg;
 
 /// A final message sent by the actor before stopping.
-// Note: We rely on the blanket `impl<T> ActonMessage for T` and derive traits manually.
-#[derive(Debug, Clone)]
+#[acton_message]
 struct BuhByeMsg;
 
 #[tokio::main]

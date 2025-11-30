@@ -51,7 +51,7 @@ use std::io::{stdout, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 use acton_reactive::ipc::{socket_exists, IpcConfig, IpcListenerStats};
 use acton_reactive::prelude::*;
 use crossterm::{
@@ -64,7 +64,6 @@ use crossterm::{
     },
 };
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 // ============================================================================
@@ -72,33 +71,33 @@ use tokio::sync::watch;
 // ============================================================================
 
 /// Increment the counter by an amount.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct Increment {
     amount: i64,
 }
 
 /// Decrement the counter by an amount.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct Decrement {
     amount: i64,
 }
 
 /// Log a message at a specified level.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct LogMessage {
     level: String,
     message: String,
 }
 
 /// Set a configuration value.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct SetConfig {
     key: String,
     value: String,
 }
 
 /// Get a configuration value.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct GetConfig {
     key: String,
 }

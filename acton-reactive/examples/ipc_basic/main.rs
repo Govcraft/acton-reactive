@@ -42,10 +42,9 @@
 
 use std::sync::Arc;
 
-use acton_macro::acton_actor;
+use acton_macro::{acton_actor, acton_message};
 use acton_reactive::ipc::protocol::{read_response, write_envelope};
 use acton_reactive::prelude::*;
-use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
 
 // ============================================================================
@@ -53,7 +52,7 @@ use tokio::net::UnixStream;
 // ============================================================================
 
 /// A price update message that can be sent via IPC.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct PriceUpdate {
     symbol: String,
     price: f64,
@@ -61,13 +60,13 @@ struct PriceUpdate {
 }
 
 /// A request to get the current price of a symbol.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct GetPrice {
     symbol: String,
 }
 
 /// Response containing the current price.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[acton_message(ipc)]
 struct PriceResponse {
     symbol: String,
     price: f64,
@@ -75,15 +74,15 @@ struct PriceResponse {
 }
 
 /// A message to print text to the console.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct Print(String);
 
 /// A message to print a section header.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct PrintSection(String);
 
 /// Message to initialize the price service with a printer handle.
-#[derive(Clone, Debug)]
+#[acton_message]
 struct InitPrinter(ActorHandle);
 
 // ============================================================================
