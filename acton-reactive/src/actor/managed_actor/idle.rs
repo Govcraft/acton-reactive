@@ -69,6 +69,39 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// # Returns
     ///
     /// Returns a mutable reference to `self` to allow for method chaining during configuration.
+    ///
+    /// # Cancellation Safety
+    ///
+    /// Message handlers should be written with cancellation safety in mind. If the actor
+    /// is shut down (via `CancellationToken`) while a handler is executing, the handler's
+    /// future will be dropped at the next `.await` point. Any side effects that occurred
+    /// *before* that await point will persist, while operations *after* it will not execute.
+    ///
+    /// **Guidelines for cancellation-safe handlers:**
+    ///
+    /// - Perform validation and checks before making any state changes
+    /// - Use atomic operations or transactions when modifying external state
+    /// - Consider using [`Drop`] guards for cleanup of partial state changes
+    /// - If a handler must not be interrupted, complete critical sections before awaiting
+    ///
+    /// **Example of a cancellation-safe pattern:**
+    ///
+    /// ```ignore
+    /// actor.mutate_on::<MyMessage>(|actor, ctx| {
+    ///     Box::pin(async move {
+    ///         // Validate first (safe to cancel here)
+    ///         if !is_valid(&ctx.message) {
+    ///             return;
+    ///         }
+    ///
+    ///         // Perform atomic state change (completes before any await)
+    ///         actor.model.counter += 1;
+    ///
+    ///         // External I/O after state change (cancellation here is safe)
+    ///         notify_external_system().await;
+    ///     })
+    /// });
+    /// ```
     #[instrument(skip(self, message_processor), level = "debug")]
     pub fn mutate_on<M>(
         &mut self,
@@ -218,6 +251,22 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// # Returns
     ///
     /// Returns a mutable reference to `self` to allow for method chaining during configuration.
+    ///
+    /// # Cancellation Safety
+    ///
+    /// Read-only handlers are spawned as separate tasks and may be cancelled independently
+    /// when the actor shuts down. Since these handlers cannot modify actor state directly,
+    /// cancellation is generally safer than with `mutate_on` handlers.
+    ///
+    /// However, if your handler interacts with external systems (databases, APIs, etc.),
+    /// the same cancellation safety guidelines apply:
+    ///
+    /// - Side effects before an `.await` point will persist even if the handler is cancelled
+    /// - Use idempotent operations for external system interactions when possible
+    /// - Consider using timeouts to prevent handlers from blocking shutdown indefinitely
+    ///
+    /// **Note:** Read-only handlers run concurrently with each other but are flushed
+    /// (awaited to completion) before any mutable handler executes, ensuring consistency.
     #[instrument(skip(self, message_processor), level = "debug")]
     pub fn act_on<M>(
         &mut self,
