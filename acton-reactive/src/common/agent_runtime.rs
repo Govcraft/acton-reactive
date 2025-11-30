@@ -361,13 +361,21 @@ impl AgentRuntime {
         config: crate::common::ipc::IpcConfig,
     ) -> Result<crate::common::ipc::IpcListenerHandle, crate::common::ipc::IpcError> {
         trace!("Starting IPC listener with config: {:?}", config);
-        crate::common::ipc::start_listener(
+        let handle = crate::common::ipc::start_listener(
             config,
             self.0.ipc_type_registry.clone(),
             self.0.ipc_agent_registry.clone(),
             self.0.cancellation_token.clone(),
         )
-        .await
+        .await?;
+
+        // Store the subscription manager reference so the broker can forward broadcasts to IPC clients
+        {
+            let mut guard = self.0.ipc_subscription_manager.write();
+            *guard = Some(handle.subscription_manager().clone());
+        }
+
+        Ok(handle)
     }
 
     /// Creates, configures, and starts a top-level agent using a provided configuration and setup function.
@@ -562,6 +570,8 @@ impl From<ActonApp> for AgentRuntime {
             ipc_type_registry: std::sync::Arc::new(crate::common::ipc::IpcTypeRegistry::new()),
             #[cfg(feature = "ipc")]
             ipc_agent_registry: std::sync::Arc::new(DashMap::new()),
+            #[cfg(feature = "ipc")]
+            ipc_subscription_manager: std::sync::Arc::new(parking_lot::RwLock::new(None)),
         });
         
         // Spawn broker initialization in a separate task

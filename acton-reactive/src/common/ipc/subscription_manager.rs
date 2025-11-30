@@ -111,6 +111,16 @@ impl Default for SubscriptionManager {
     }
 }
 
+impl std::fmt::Debug for SubscriptionManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubscriptionManager")
+            .field("connection_count", &self.connections.len())
+            .field("subscribed_types_count", &self.type_to_connections.len())
+            .field("stats", &self.stats)
+            .finish()
+    }
+}
+
 impl SubscriptionManager {
     /// Creates a new subscription manager.
     #[must_use]

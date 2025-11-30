@@ -29,6 +29,11 @@ use crate::common::{AgentHandle, AgentRuntime, BrokerRef};
 use crate::message::{BrokerRequest, BrokerRequestEnvelope, SubscribeBroker};
 use crate::traits::AgentHandleInterface;
 
+#[cfg(feature = "ipc")]
+use parking_lot::RwLock;
+#[cfg(feature = "ipc")]
+use crate::common::ipc::{IpcPushNotification, IpcTypeRegistry, SubscriptionManager};
+
 /// Manages message subscriptions and broadcasts messages to interested subscribers.
 ///
 /// The `AgentBroker` acts as a central publish-subscribe hub within the Acton system.
@@ -50,6 +55,12 @@ pub struct AgentBroker {
     subscribers: Subscribers,
     /// The underlying handle for the broker agent itself.
     agent_handle: AgentHandle,
+    /// Reference to IPC subscription manager for forwarding broadcasts to external clients.
+    #[cfg(feature = "ipc")]
+    ipc_subscription_manager: Arc<RwLock<Option<Arc<SubscriptionManager>>>>,
+    /// Reference to IPC type registry for looking up type names.
+    #[cfg(feature = "ipc")]
+    ipc_type_registry: Arc<IpcTypeRegistry>,
 }
 
 /// Type alias for the internal storage of subscribers.
@@ -102,6 +113,14 @@ impl AgentBroker {
         let mut broker_agent: ManagedAgent<Idle, Self> =
             ManagedAgent::new(Some(&runtime), Some(&actor_config));
 
+        // Set IPC-related fields on the broker model
+        #[cfg(feature = "ipc")]
+        {
+            broker_agent.model.ipc_subscription_manager =
+                runtime.0.ipc_subscription_manager.clone();
+            broker_agent.model.ipc_type_registry = runtime.0.ipc_type_registry.clone();
+        }
+
         // Configure the broker agent's message handlers.
         broker_agent
             .mutate_on::<BrokerRequest>(|agent, event| {
@@ -110,9 +129,19 @@ impl AgentBroker {
                 let subscribers = agent.model.subscribers.clone(); // Clone Arc<DashMap>
                 let message_to_broadcast = event.message.clone(); // Clone the BrokerRequest
 
+                // Clone IPC-related references for async block
+                #[cfg(feature = "ipc")]
+                let ipc_sub_mgr = agent.model.ipc_subscription_manager.clone();
+                #[cfg(feature = "ipc")]
+                let ipc_type_reg = agent.model.ipc_type_registry.clone();
+
                 Box::pin(async move {
                     // Call the static broadcast method.
-                    Self::broadcast(subscribers, message_to_broadcast).await;
+                    Self::broadcast(subscribers, message_to_broadcast.clone()).await;
+
+                    // Forward to IPC subscribers if available
+                    #[cfg(feature = "ipc")]
+                    Self::forward_to_ipc(ipc_sub_mgr, ipc_type_reg, &message_to_broadcast);
                 })
             })
             .act_on::<SubscribeBroker>(|agent, event| {
@@ -185,5 +214,53 @@ impl AgentBroker {
         } else {
             trace!(message_type = ?message_type_id, "No subscribers found for message type");
         }
+    }
+
+    /// Forwards a broadcast message to IPC clients subscribed to this message type.
+    ///
+    /// This method checks if there's an active IPC subscription manager and, if so,
+    /// looks up the message type name from the IPC type registry and forwards the
+    /// message to all subscribed external clients.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    #[cfg(feature = "ipc")]
+    fn forward_to_ipc(
+        ipc_sub_mgr: Arc<RwLock<Option<Arc<SubscriptionManager>>>>,
+        ipc_type_reg: Arc<IpcTypeRegistry>,
+        request: &BrokerRequest,
+    ) {
+        // Check if there's an active subscription manager
+        let sub_mgr = {
+            let guard = ipc_sub_mgr.read();
+            guard.clone()
+        };
+
+        let Some(sub_mgr) = sub_mgr else {
+            trace!("No IPC subscription manager active, skipping IPC forward");
+            return;
+        };
+
+        // Look up the type name in the IPC registry
+        let Some(type_name) = ipc_type_reg.get_type_name_by_id(&request.message_type_id) else {
+            trace!(type_id = ?request.message_type_id, "Type not registered for IPC, skipping forward");
+            return;
+        };
+
+        // Serialize the message payload to JSON for IPC transmission
+        let payload_json = match ipc_type_reg.serialize_by_type_id(
+            &request.message_type_id,
+            request.message.as_ref(),
+        ) {
+            Ok(json) => json,
+            Err(e) => {
+                trace!(type_name, error = %e, "Failed to serialize payload for IPC forward");
+                return;
+            }
+        };
+
+        // Create and forward the push notification
+        let notification = IpcPushNotification::new(type_name.clone(), None, payload_json);
+        sub_mgr.forward_to_subscribers(&notification);
+        trace!(type_name, "Forwarded broadcast to IPC subscribers");
     }
 }

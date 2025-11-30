@@ -23,7 +23,9 @@ use crate::common::{AgentHandle, BrokerRef, ActonConfig};
 #[cfg(feature = "ipc")]
 use std::sync::Arc;
 #[cfg(feature = "ipc")]
-use crate::common::ipc::IpcTypeRegistry;
+use parking_lot::RwLock;
+#[cfg(feature = "ipc")]
+use crate::common::ipc::{IpcTypeRegistry, SubscriptionManager};
 
 /// Internal state structure for the Acton runtime.
 ///
@@ -57,6 +59,16 @@ pub struct ActonInner {
     /// Only available when the `ipc` feature is enabled.
     #[cfg(feature = "ipc")]
     pub(crate) ipc_agent_registry: Arc<DashMap<String, AgentHandle>>,
+
+    /// Subscription manager for IPC push notifications.
+    ///
+    /// This is set when an IPC listener is started and enables the broker
+    /// to forward broadcasts to external IPC clients that have subscribed
+    /// to specific message types.
+    ///
+    /// Only available when the `ipc` feature is enabled.
+    #[cfg(feature = "ipc")]
+    pub(crate) ipc_subscription_manager: Arc<RwLock<Option<Arc<SubscriptionManager>>>>,
 }
 
 impl Default for ActonInner {
@@ -70,6 +82,8 @@ impl Default for ActonInner {
             ipc_type_registry: Arc::new(IpcTypeRegistry::new()),
             #[cfg(feature = "ipc")]
             ipc_agent_registry: Arc::new(DashMap::new()),
+            #[cfg(feature = "ipc")]
+            ipc_subscription_manager: Arc::new(RwLock::new(None)),
         }
     }
 }

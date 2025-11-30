@@ -33,6 +33,13 @@ type DeserializerFn = Arc<
     dyn Fn(&[u8]) -> Result<Box<dyn ActonMessage + Send + Sync>, String> + Send + Sync,
 >;
 
+/// Type alias for the serializer function stored in the registry.
+///
+/// The function takes a trait object reference and returns JSON bytes.
+type SerializerFn = Arc<
+    dyn Fn(&dyn ActonMessage) -> Result<serde_json::Value, String> + Send + Sync,
+>;
+
 /// Registry mapping message type names to deserializers.
 ///
 /// The `IpcTypeRegistry` is the central component for IPC message deserialization.
@@ -68,6 +75,10 @@ type DeserializerFn = Arc<
 pub struct IpcTypeRegistry {
     /// Maps type names to deserializer functions.
     deserializers: DashMap<String, DeserializerFn>,
+    /// Maps TypeId to type names for reverse lookup during broadcast forwarding.
+    type_id_to_name: DashMap<std::any::TypeId, String>,
+    /// Maps TypeId to serializer functions for broadcast forwarding.
+    serializers: DashMap<std::any::TypeId, SerializerFn>,
 }
 
 impl std::fmt::Debug for IpcTypeRegistry {
@@ -84,6 +95,8 @@ impl IpcTypeRegistry {
     pub fn new() -> Self {
         Self {
             deserializers: DashMap::new(),
+            type_id_to_name: DashMap::new(),
+            serializers: DashMap::new(),
         }
     }
 
@@ -118,6 +131,22 @@ impl IpcTypeRegistry {
             Ok(Box::new(msg))
         });
         self.deserializers.insert(name.to_string(), deserializer);
+
+        let type_id = std::any::TypeId::of::<M>();
+
+        // Store the reverse mapping for broadcast forwarding
+        self.type_id_to_name.insert(type_id, name.to_string());
+
+        // Store serializer for broadcast forwarding
+        let serializer: SerializerFn = Arc::new(|msg: &dyn ActonMessage| {
+            // Downcast to the concrete type and serialize
+            let concrete = msg
+                .as_any()
+                .downcast_ref::<M>()
+                .ok_or_else(|| "Type mismatch during serialization".to_string())?;
+            serde_json::to_value(concrete).map_err(|e| e.to_string())
+        });
+        self.serializers.insert(type_id, serializer);
     }
 
     /// Registers a message type using its Rust type name.
@@ -227,17 +256,68 @@ impl IpcTypeRegistry {
     pub fn type_names(&self) -> impl Iterator<Item = String> + '_ {
         self.deserializers.iter().map(|entry| entry.key().clone())
     }
+
+    /// Gets the type name for a given `TypeId`.
+    ///
+    /// This is used during broadcast forwarding to look up the IPC type name
+    /// for a message's `TypeId`.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_id`: The `TypeId` to look up.
+    ///
+    /// # Returns
+    ///
+    /// The registered type name if found, or `None` if the type is not registered.
+    #[must_use]
+    pub fn get_type_name_by_id(&self, type_id: &std::any::TypeId) -> Option<String> {
+        self.type_id_to_name.get(type_id).map(|r| r.clone())
+    }
+
+    /// Serializes a message to JSON using the registered serializer.
+    ///
+    /// This is used during broadcast forwarding to serialize messages for IPC clients.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_id`: The `TypeId` of the message.
+    /// * `message`: The message to serialize (as a trait object).
+    ///
+    /// # Returns
+    ///
+    /// A JSON value on success, or an error string on failure.
+    pub fn serialize_by_type_id(
+        &self,
+        type_id: &std::any::TypeId,
+        message: &dyn ActonMessage,
+    ) -> Result<serde_json::Value, String> {
+        let serializer = self
+            .serializers
+            .get(type_id)
+            .ok_or_else(|| "Type not registered for IPC serialization".to_string())?;
+        serializer(message)
+    }
 }
 
-// Manual Clone implementation since DeserializerFn is Arc-wrapped
+// Manual Clone implementation since DeserializerFn and SerializerFn are Arc-wrapped
 impl Clone for IpcTypeRegistry {
     fn clone(&self) -> Self {
-        let new_map = DashMap::new();
+        let new_deserializers = DashMap::new();
         for entry in &self.deserializers {
-            new_map.insert(entry.key().clone(), entry.value().clone());
+            new_deserializers.insert(entry.key().clone(), entry.value().clone());
+        }
+        let new_type_id_map = DashMap::new();
+        for entry in &self.type_id_to_name {
+            new_type_id_map.insert(*entry.key(), entry.value().clone());
+        }
+        let new_serializers = DashMap::new();
+        for entry in &self.serializers {
+            new_serializers.insert(*entry.key(), entry.value().clone());
         }
         Self {
-            deserializers: new_map,
+            deserializers: new_deserializers,
+            type_id_to_name: new_type_id_map,
+            serializers: new_serializers,
         }
     }
 }
