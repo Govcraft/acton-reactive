@@ -37,7 +37,7 @@ struct PongMsg;
 #[acton_message]
 struct BuhByeMsg;
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     // 1. Launch the Acton runtime environment.
     let mut runtime = ActonApp::launch();

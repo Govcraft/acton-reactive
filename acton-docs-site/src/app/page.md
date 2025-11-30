@@ -111,7 +111,6 @@ Let's build a simple counter. Don't worry about understanding everything yet - j
 ```toml
 [dependencies]
 acton-reactive = "0.1"
-tokio = { version = "1", features = ["full"] }
 ```
 
 ### Step 2: Write the Code
@@ -129,7 +128,7 @@ struct CounterState {
 #[acton_message]
 struct Increment(u32);
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     // Start the "office" (runtime)
     let mut runtime = ActonApp::launch();

@@ -349,7 +349,7 @@ fn spawn_price_ticker(publisher: ActorHandle) {
 // Main
 // ============================================================================
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()

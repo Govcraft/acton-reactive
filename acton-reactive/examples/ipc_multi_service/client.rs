@@ -56,6 +56,7 @@ use acton_reactive::ipc::protocol::{
     is_heartbeat, read_frame, read_response, write_envelope, write_heartbeat, MAX_FRAME_SIZE,
 };
 use acton_reactive::ipc::{socket_exists, socket_is_alive, IpcConfig, IpcEnvelope};
+use acton_reactive::prelude::acton_main;
 use tokio::net::UnixStream;
 use tokio::time::timeout;
 
@@ -178,7 +179,7 @@ fn resolve_socket_path() -> PathBuf {
     config.socket_path()
 }
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== IPC Client Example ===\n");
 

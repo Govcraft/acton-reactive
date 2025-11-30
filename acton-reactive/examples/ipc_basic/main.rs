@@ -455,7 +455,7 @@ async fn demonstrate_ipc_hiding(runtime: &ActorRuntime, printer: &ActorHandle) {
 // Main
 // ============================================================================
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     let mut runtime = ActonApp::launch();
 

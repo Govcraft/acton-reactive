@@ -14,14 +14,20 @@ const code = `use acton_reactive::prelude::*;
 #[acton_actor]
 struct Counter { count: u32 }
 
-#[derive(Clone, Debug)]
+#[acton_message]
 struct Increment(u32);
 
-let mut actor = runtime.new_actor::<Counter>();
-actor.mutate_on::<Increment>(|actor, ctx| {
-    actor.model.count += ctx.message().0;
-    ActorReply::immediate()
-});`
+#[acton_main]
+async fn main() {
+    let mut app = ActonApp::launch();
+    let mut actor = app.new_actor::<Counter>();
+    actor.mutate_on::<Increment>(|actor, ctx| {
+        actor.model.count += ctx.message().0;
+        ActorReply::immediate()
+    });
+    let handle = actor.start().await;
+    handle.send(Increment(1)).await;
+}`
 
 const tabs = [
   { name: 'main.rs', isActive: true },

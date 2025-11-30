@@ -35,13 +35,13 @@ struct BasicActorState {
 }
 
 // 2. Define messages
-#[derive(Debug, Clone)]
+#[acton_message]
 struct PingMsg;
 
-#[derive(Debug, Clone)]
+#[acton_message]
 struct PongMsg;
 
-#[derive(Debug, Clone)]
+#[acton_message]
 struct BuhByeMsg;
 
 // 3. Configure handlers

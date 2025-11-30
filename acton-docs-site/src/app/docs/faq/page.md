@@ -102,7 +102,7 @@ Enable tracing to see what's happening:
 ```rust
 use tracing_subscriber;
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -223,7 +223,7 @@ fn main() {
 **Solution:** Always await `shutdown_all`:
 
 ```rust
-#[tokio::main]
+#[acton_main]
 async fn main() {
     let mut app = ActonApp::launch();
     // ... do stuff

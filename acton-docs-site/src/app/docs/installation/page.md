@@ -12,18 +12,17 @@ Get `acton-reactive` set up in your Rust project in under 5 minutes.
 
 ## Quick Start
 
-Add these to your `Cargo.toml`:
+Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-reactive = "0.1"      # Core framework (includes macros via prelude)
-tokio = { version = "1", features = ["full"] }  # Required async runtime
+acton-reactive = "0.1"
 ```
 
 That's it! You're ready to build actors.
 
-{% callout type="note" title="Why Tokio?" %}
-`acton-reactive` is built on top of [Tokio](https://tokio.rs/), Rust's most widely-used async runtime. The `full` feature set is recommended for complete functionality, though you can use a minimal set if binary size is critical.
+{% callout type="note" title="Batteries Included" %}
+`acton-reactive` includes everything you need, including the async runtime (Tokio). The `#[acton_main]` macro handles runtime setup automatically, so you don't need to add any additional dependencies.
 {% /callout %}
 
 ---
@@ -43,7 +42,7 @@ struct TestActor {
 #[acton_message]
 struct Ping;
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     let mut runtime = ActonApp::launch();
 
@@ -272,26 +271,23 @@ struct MyState {
 
 ---
 
-### "tokio runtime not available"
+### "async runtime not available"
 
-**Cause:** You're missing the tokio runtime or `#[tokio::main]`.
+**Cause:** You're missing the `#[acton_main]` attribute on your main function.
 
-**Fix:** Make sure your main function is async with tokio:
+**Fix:** Make sure your main function uses the `#[acton_main]` macro:
 
 ```rust
-#[tokio::main]  // This is required!
+use acton_reactive::prelude::*;
+
+#[acton_main]  // This sets up the async runtime for you!
 async fn main() {
     let mut runtime = ActonApp::launch();
     // ...
 }
 ```
 
-And check your `Cargo.toml`:
-
-```toml
-[dependencies]
-tokio = { version = "1", features = ["full"] }
-```
+The `#[acton_main]` macro automatically configures the async runtime with the correct settings for Acton. You don't need to add tokio to your `Cargo.toml` - it's included with acton-reactive.
 
 ---
 

@@ -93,7 +93,7 @@ acton-reactive = { version = "0.1", features = ["ipc-messagepack"] }
 ```rust
 use acton_reactive::prelude::*;
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> anyhow::Result<()> {
     // 1. Launch runtime
     let mut runtime = ActonApp::launch();

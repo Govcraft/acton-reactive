@@ -158,6 +158,7 @@ pub mod prelude {
     // External crate re-exports
     pub use acton_ern::*;
     pub use async_trait::async_trait;
+    pub use tokio;
 
     // Core types
     pub use crate::actor::{ActorConfig, Idle, ManagedActor, Started};

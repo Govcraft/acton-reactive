@@ -21,7 +21,7 @@ struct ConfigActor {
 #[acton_message]
 struct GetConfig;
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     println!("=== Acton Reactive Configuration Example ===");
     println!("This example demonstrates automatic configuration loading.");

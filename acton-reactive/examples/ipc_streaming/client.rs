@@ -43,6 +43,7 @@ use std::time::Duration;
 
 use acton_reactive::ipc::protocol::{is_stream, read_frame, write_envelope, MAX_FRAME_SIZE};
 use acton_reactive::ipc::{socket_exists, socket_is_alive, IpcConfig, IpcEnvelope, IpcStreamFrame};
+use acton_reactive::prelude::acton_main;
 use tokio::net::UnixStream;
 use tokio::time::timeout;
 
@@ -287,7 +288,7 @@ async fn demo_error_handling(
     Ok(())
 }
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║       IPC Streaming Response Example (Client)                ║");

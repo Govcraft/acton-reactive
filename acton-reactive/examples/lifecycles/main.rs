@@ -32,7 +32,7 @@ struct AddItem(String);
 #[acton_message]
 struct GetItems;
 
-#[tokio::main]
+#[acton_main]
 async fn main() {
     // 1. Launch the Acton runtime.
     let mut runtime = ActonApp::launch();

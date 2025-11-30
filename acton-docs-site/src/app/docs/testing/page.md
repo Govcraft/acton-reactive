@@ -18,9 +18,12 @@ Add test dependencies to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
 acton-test = "0.1"  # Optional: Test utilities
 ```
+
+{% callout type="note" title="Tokio Available" %}
+Since `acton-reactive` re-exports `tokio` in its prelude, you can use `#[tokio::test]` directly without adding tokio as a dev-dependency. If you need additional tokio features like `test-util`, you can add it explicitly.
+{% /callout %}
 
 ### Basic Test Structure
 

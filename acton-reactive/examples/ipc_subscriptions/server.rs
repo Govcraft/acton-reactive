@@ -245,7 +245,7 @@ async fn create_price_feed_actor(runtime: &mut ActorRuntime) -> ActorHandle {
 // Main
 // ============================================================================
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()

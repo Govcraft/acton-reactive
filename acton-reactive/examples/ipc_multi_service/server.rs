@@ -586,7 +586,7 @@ async fn stats_update_loop(
 // Main
 // ============================================================================
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create dashboard state channel
     let (state_tx, state_rx) = watch::channel(DashboardState::new());

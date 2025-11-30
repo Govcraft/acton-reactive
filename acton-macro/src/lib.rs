@@ -47,11 +47,26 @@
 //!     count: i32,
 //! }
 //! ```
+//!
+//! # Main Entry Point
+//!
+//! The [`acton_main`] macro provides a convenient entry point for Acton applications:
+//!
+//! ```ignore
+//! use acton_reactive::prelude::*;
+//!
+//! #[acton_main]
+//! async fn main() {
+//!     let app = ActonApp::launch();
+//!     // ... your application logic
+//!     app.shutdown_all().await;
+//! }
+//! ```
 
 use proc_macro::TokenStream;
 
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, DeriveInput, ItemFn};
 
 fn has_derive(input: &DeriveInput, trait_name: &str) -> bool {
     input.attrs.iter().any(|attr| {
@@ -287,5 +302,116 @@ pub fn acton_actor(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // Return the generated tokens.
+    TokenStream::from(expanded)
+}
+
+/// Entry point macro for Acton applications.
+///
+/// This macro marks an async function as the entry point for an Acton application,
+/// setting up the async runtime automatically. It is a convenience wrapper that
+/// eliminates the need to directly reference the underlying async runtime.
+///
+/// # Usage
+///
+/// ```ignore
+/// use acton_reactive::prelude::*;
+///
+/// #[acton_main]
+/// async fn main() {
+///     let app = ActonApp::launch();
+///     // ... your application logic
+///     app.shutdown_all().await;
+/// }
+/// ```
+///
+/// # Configuration
+///
+/// The macro supports optional configuration for the runtime:
+///
+/// - `flavor`: The runtime flavor (`"multi_thread"` or `"current_thread"`)
+/// - `worker_threads`: Number of worker threads (only for multi-threaded runtime)
+///
+/// ```ignore
+/// // Use single-threaded runtime
+/// #[acton_main(flavor = "current_thread")]
+/// async fn main() { }
+///
+/// // Specify worker thread count
+/// #[acton_main(worker_threads = 4)]
+/// async fn main() { }
+/// ```
+///
+/// The default is a multi-threaded runtime with the default number of worker threads.
+#[proc_macro_attribute]
+pub fn acton_main(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+
+    let attrs = &input.attrs;
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let body = &input.block;
+
+    // Validate that the function is async
+    if sig.asyncness.is_none() {
+        return syn::Error::new_spanned(
+            &sig.fn_token,
+            "the async keyword is missing from the function declaration",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Validate function name is main
+    if sig.ident != "main" {
+        return syn::Error::new_spanned(
+            &sig.ident,
+            "acton_main can only be applied to the main function",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Parse configuration attributes
+    let attr_string = attr.to_string();
+    let use_current_thread = attr_string.contains("current_thread");
+
+    // Extract worker_threads if specified
+    let worker_threads: Option<usize> = attr_string
+        .split(',')
+        .find(|s| s.contains("worker_threads"))
+        .and_then(|s| s.split('=').nth(1).and_then(|v| v.trim().parse().ok()));
+
+    // Generate the runtime builder based on configuration
+    let runtime_builder = if use_current_thread {
+        quote! {
+            ::acton_reactive::prelude::tokio::runtime::Builder::new_current_thread()
+        }
+    } else if let Some(threads) = worker_threads {
+        quote! {
+            ::acton_reactive::prelude::tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(#threads)
+        }
+    } else {
+        quote! {
+            ::acton_reactive::prelude::tokio::runtime::Builder::new_multi_thread()
+        }
+    };
+
+    // Create the sync function signature (remove async)
+    let fn_name = &sig.ident;
+    let fn_inputs = &sig.inputs;
+    let fn_output = &sig.output;
+
+    let expanded = quote! {
+        #(#attrs)*
+        #vis fn #fn_name(#fn_inputs) #fn_output {
+            #runtime_builder
+                .enable_all()
+                .build()
+                .expect("Failed to build Acton runtime")
+                .block_on(async #body)
+        }
+    };
+
     TokenStream::from(expanded)
 }

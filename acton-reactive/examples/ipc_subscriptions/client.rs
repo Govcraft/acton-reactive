@@ -49,6 +49,7 @@ use acton_reactive::ipc::{
     socket_exists, socket_is_alive, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse,
     IpcPushNotification, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
 };
+use acton_reactive::prelude::acton_main;
 use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
 use tokio::time::timeout;
@@ -477,7 +478,7 @@ async fn demo_trades_only(
 // Main
 // ============================================================================
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("====================================================================");
     println!("       IPC Subscriptions Example (Client)");

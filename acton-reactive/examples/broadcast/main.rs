@@ -76,7 +76,7 @@ enum StatusUpdate {
 
 // --- Main Application Logic ---
 
-#[tokio::main]
+#[acton_main]
 #[allow(clippy::too_many_lines)]
 async fn main() {
     // 1. Launch the Acton runtime environment.

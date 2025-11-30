@@ -87,7 +87,7 @@ impl Drop for RawModeGuard {
 
 // --- Main Application Logic ---
 
-#[tokio::main]
+#[acton_main]
 async fn main() -> Result<()> {
     // Initialize logging first.
     initialize_tracing();
