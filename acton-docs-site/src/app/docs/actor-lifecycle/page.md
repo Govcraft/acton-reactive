@@ -59,20 +59,20 @@ actor
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant A as Actor
-    participant L as Message Loop
-    U->>A: start().await
-    A->>A: before_start()
-    A->>L: Enter message loop
-    A->>A: after_start()
-    Note over L: Processing messages...
-    U->>A: stop()
-    L->>A: Exit message loop
-    A->>A: before_stop()
-    A->>A: Close channels
-    A->>A: after_stop()
-    A->>U: Actor stopped
+    participant HT_U as User
+    participant HT_A as Actor
+    participant HT_L as Loop
+    HT_U->>HT_A: start().await
+    HT_A->>HT_A: before_start()
+    HT_A->>HT_L: Enter message loop
+    HT_A->>HT_A: after_start()
+    Note over HT_L: Processing messages...
+    HT_U->>HT_A: stop()
+    HT_L->>HT_A: Exit message loop
+    HT_A->>HT_A: before_stop()
+    HT_A->>HT_A: Close channels
+    HT_A->>HT_A: after_stop()
+    HT_A->>HT_U: Actor stopped
 ```
 
 ### When to Use Each Hook
@@ -245,18 +245,18 @@ When you call `start().await`:
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant B as ActorBuilder
-    participant A as Actor
-    participant C as Channel
-    U->>B: start().await
-    B->>C: Create MPSC channel
-    B->>A: Spawn actor task
-    A->>A: before_start()
-    A->>A: Enter message loop
-    A->>A: after_start()
-    A-->>U: ActorHandle
-    Note over A: Ready to receive messages
+    participant ST_U as User
+    participant ST_B as Builder
+    participant ST_A as Actor
+    participant ST_C as Channel
+    ST_U->>ST_B: start().await
+    ST_B->>ST_C: Create MPSC channel
+    ST_B->>ST_A: Spawn actor task
+    ST_A->>ST_A: before_start()
+    ST_A->>ST_A: Enter message loop
+    ST_A->>ST_A: after_start()
+    ST_A-->>ST_U: ActorHandle
+    Note over ST_A: Ready to receive messages
 ```
 
 **Key points:**
@@ -274,19 +274,19 @@ When shutdown is triggered:
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant A as Actor
-    participant Ch as Children
-    participant C as Channel
-    U->>A: stop() or shutdown_all()
-    Note over A,Ch: Children stop first (if any)
-    A->>Ch: Propagate stop
-    Ch-->>A: Children stopped
-    A->>A: Exit message loop
-    A->>A: before_stop()
-    A->>C: Close channel
-    A->>A: after_stop()
-    A-->>U: Shutdown complete
+    participant SD_U as User
+    participant SD_A as Actor
+    participant SD_Ch as Children
+    participant SD_C as Channel
+    SD_U->>SD_A: stop() or shutdown_all()
+    Note over SD_A,SD_Ch: Children stop first
+    SD_A->>SD_Ch: Propagate stop
+    SD_Ch-->>SD_A: Children stopped
+    SD_A->>SD_A: Exit message loop
+    SD_A->>SD_A: before_stop()
+    SD_A->>SD_C: Close channel
+    SD_A->>SD_A: after_stop()
+    SD_A-->>SD_U: Shutdown complete
 ```
 
 **Key points:**
