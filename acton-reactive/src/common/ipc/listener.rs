@@ -32,11 +32,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 use super::config::IpcConfig;
-use super::protocol::{
-    is_heartbeat, read_frame, write_heartbeat, write_response, MSG_TYPE_REQUEST,
-};
+use super::protocol::{is_heartbeat, read_frame, write_heartbeat, write_response, MSG_TYPE_REQUEST};
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
+use super::subscription_manager::SubscriptionManager;
 use super::types::{IpcEnvelope, IpcError, IpcResponse};
 use crate::common::{AgentHandle, Envelope};
 use crate::message::MessageAddress;
@@ -63,6 +62,10 @@ pub struct IpcListenerStats {
     pub shutdown_rejections: AtomicUsize,
     /// Current number of in-flight requests being processed.
     pub in_flight_requests: AtomicUsize,
+    /// Total subscription requests processed.
+    pub subscriptions_processed: AtomicUsize,
+    /// Total push notifications sent to IPC clients.
+    pub push_notifications_sent: AtomicUsize,
 }
 
 /// Shutdown state for graceful shutdown coordination.
@@ -168,6 +171,18 @@ impl IpcListenerStats {
         self.in_flight_requests.load(Ordering::SeqCst)
     }
 
+    /// Get the number of subscription requests processed.
+    #[must_use]
+    pub fn subscriptions_processed(&self) -> usize {
+        self.subscriptions_processed.load(Ordering::Relaxed)
+    }
+
+    /// Get the number of push notifications sent.
+    #[must_use]
+    pub fn push_notifications_sent(&self) -> usize {
+        self.push_notifications_sent.load(Ordering::Relaxed)
+    }
+
     /// Increment the in-flight request counter.
     fn increment_in_flight(&self) {
         self.in_flight_requests.fetch_add(1, Ordering::SeqCst);
@@ -199,6 +214,19 @@ struct ConnectionContext {
     stats: Arc<IpcListenerStats>,
     /// Shutdown coordination state.
     shutdown_state: Arc<ShutdownState>,
+    /// Subscription manager for broker forwarding.
+    subscription_manager: Arc<SubscriptionManager>,
+}
+
+impl ConnectionContext {
+    /// Returns a reference to the subscription manager.
+    ///
+    /// This is used for handling subscribe/unsubscribe requests
+    /// and forwarding broker notifications to IPC clients.
+    #[inline]
+    fn subscription_manager(&self) -> &SubscriptionManager {
+        &self.subscription_manager
+    }
 }
 
 /// IPC listener handle for managing the listener lifecycle.
@@ -211,6 +239,8 @@ pub struct IpcListenerHandle {
     shutdown_state: Arc<ShutdownState>,
     /// Configured drain timeout.
     drain_timeout: Duration,
+    /// Subscription manager for broker forwarding.
+    subscription_manager: Arc<SubscriptionManager>,
 }
 
 impl IpcListenerHandle {
@@ -234,6 +264,14 @@ impl IpcListenerHandle {
     #[must_use]
     pub fn is_draining(&self) -> bool {
         self.shutdown_state.is_draining()
+    }
+
+    /// Returns a reference to the subscription manager.
+    ///
+    /// Use this to forward broker broadcasts to subscribed IPC connections.
+    #[must_use]
+    pub const fn subscription_manager(&self) -> &Arc<SubscriptionManager> {
+        &self.subscription_manager
     }
 
     /// Gracefully shut down the listener, allowing in-flight requests to complete.
@@ -405,6 +443,9 @@ pub async fn run(
     let shutdown_state = Arc::new(ShutdownState::new());
     let drain_timeout = config.drain_timeout();
 
+    // Create subscription manager for broker forwarding
+    let subscription_manager = Arc::new(SubscriptionManager::new());
+
     // Create connection context for the accept loop
     let context = ConnectionContext {
         config,
@@ -414,6 +455,7 @@ pub async fn run(
         connection_semaphore,
         stats: stats.clone(),
         shutdown_state: shutdown_state.clone(),
+        subscription_manager: subscription_manager.clone(),
     };
     let socket_path_clone = socket_path.clone();
 
@@ -436,6 +478,7 @@ pub async fn run(
         cancel_token,
         shutdown_state,
         drain_timeout,
+        subscription_manager,
     })
 }
 
@@ -597,10 +640,14 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
     let max_message_size = ctx.config.limits.max_message_size;
     let mut rate_limiter = RateLimiter::new(&ctx.config.rate_limit);
 
+    // Access subscription manager to log subscription stats
+    let sub_stats = ctx.subscription_manager();
+
     debug!(
         conn_id,
         rate_limiting_enabled = rate_limiter.is_enabled(),
         available_tokens = rate_limiter.available_tokens(),
+        active_subscriptions = sub_stats.total_subscriptions(),
         "Connection handler started"
     );
 
@@ -906,12 +953,14 @@ mod tests {
         let stats = Arc::new(IpcListenerStats::new());
         let cancel_token = CancellationToken::new();
         let shutdown_state = Arc::new(ShutdownState::new());
+        let subscription_manager = Arc::new(SubscriptionManager::new());
 
         let handle = IpcListenerHandle {
             stats,
             cancel_token,
             shutdown_state,
             drain_timeout: Duration::from_secs(5),
+            subscription_manager,
         };
 
         assert!(!handle.is_cancelled());
@@ -925,12 +974,14 @@ mod tests {
         let stats = Arc::new(IpcListenerStats::new());
         let cancel_token = CancellationToken::new();
         let shutdown_state = Arc::new(ShutdownState::new());
+        let subscription_manager = Arc::new(SubscriptionManager::new());
 
         let handle = IpcListenerHandle {
             stats,
             cancel_token,
             shutdown_state: shutdown_state.clone(),
             drain_timeout: Duration::from_secs(5),
+            subscription_manager,
         };
 
         assert!(!handle.is_draining());
@@ -958,12 +1009,14 @@ mod tests {
         let stats = Arc::new(IpcListenerStats::new());
         let cancel_token = CancellationToken::new();
         let shutdown_state = Arc::new(ShutdownState::new());
+        let subscription_manager = Arc::new(SubscriptionManager::new());
 
         let handle = IpcListenerHandle {
             stats,
             cancel_token: cancel_token.clone(),
             shutdown_state,
             drain_timeout: Duration::from_millis(100),
+            subscription_manager,
         };
 
         // No in-flight requests, should drain immediately

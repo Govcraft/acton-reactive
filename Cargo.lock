@@ -39,6 +39,7 @@ dependencies = [
  "dyn-clone",
  "futures",
  "mti",
+ "parking_lot",
  "rand",
  "scopeguard",
  "serde",

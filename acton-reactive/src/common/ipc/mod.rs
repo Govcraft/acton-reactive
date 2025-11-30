@@ -81,13 +81,19 @@ pub use listener::{
     ShutdownResult,
 };
 pub use registry::IpcTypeRegistry;
-pub use types::{IpcEnvelope, IpcError, IpcResponse};
+pub use subscription_manager::{
+    create_push_channel, ConnectionId, PushReceiver, PushSender, SubscriptionManager,
+    SubscriptionStats,
+};
+pub use types::{
+    IpcEnvelope, IpcError, IpcPushNotification, IpcResponse, IpcSubscribeRequest,
+    IpcSubscriptionResponse, IpcUnsubscribeRequest,
+};
 
 // Re-export config types for users who want to customize defaults
 pub use config::{RateLimitConfig, ShutdownConfig};
 
-// Use config types in a const to prevent unused import warnings
-// These are public API types for library consumers
+// Assert public API types are constructable - compile-time check
 const _: () = {
     fn _assert_config_types_usable() {
         let _rate_limit = RateLimitConfig::default();
@@ -111,6 +117,9 @@ mod rate_limiter;
 
 /// Defines the [`IpcTypeRegistry`] for message type registration.
 mod registry;
+
+/// Subscription manager for IPC broker forwarding.
+pub mod subscription_manager;
 
 /// Defines IPC-specific types: [`IpcEnvelope`], [`IpcResponse`], [`IpcError`].
 mod types;

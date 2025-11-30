@@ -405,6 +405,210 @@ pub struct IpcResponse {
     pub payload: Option<serde_json::Value>,
 }
 
+// ============================================================================
+// Broker Subscription Types
+// ============================================================================
+
+/// Request to subscribe to broker broadcasts of specific message types.
+///
+/// When an IPC client subscribes to message types, any messages of those types
+/// that are broadcast via the internal broker will be forwarded to the client
+/// as [`IpcPushNotification`] messages.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "correlation_id": "sub_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "message_types": ["PriceUpdate", "OrderStatus"]
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcSubscribeRequest {
+    /// Correlation ID for the subscribe request.
+    pub correlation_id: String,
+
+    /// List of message type names to subscribe to.
+    ///
+    /// These must match the names registered with [`IpcTypeRegistry`](super::IpcTypeRegistry).
+    pub message_types: Vec<String>,
+}
+
+impl IpcSubscribeRequest {
+    /// Creates a new subscribe request with a generated correlation ID.
+    #[must_use]
+    pub fn new(message_types: Vec<String>) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "sub".create_type_id::<V7>().to_string(),
+            message_types,
+        }
+    }
+
+    /// Creates a new subscribe request with a specified correlation ID.
+    #[must_use]
+    pub fn with_correlation_id(correlation_id: impl Into<String>, message_types: Vec<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            message_types,
+        }
+    }
+}
+
+/// Request to unsubscribe from broker broadcasts of specific message types.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "correlation_id": "unsub_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "message_types": ["PriceUpdate"]
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcUnsubscribeRequest {
+    /// Correlation ID for the unsubscribe request.
+    pub correlation_id: String,
+
+    /// List of message type names to unsubscribe from.
+    ///
+    /// If empty, unsubscribes from all message types.
+    pub message_types: Vec<String>,
+}
+
+impl IpcUnsubscribeRequest {
+    /// Creates a new unsubscribe request with a generated correlation ID.
+    #[must_use]
+    pub fn new(message_types: Vec<String>) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "unsub".create_type_id::<V7>().to_string(),
+            message_types,
+        }
+    }
+
+    /// Creates a new unsubscribe request to unsubscribe from all message types.
+    #[must_use]
+    pub fn unsubscribe_all() -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "unsub".create_type_id::<V7>().to_string(),
+            message_types: Vec::new(),
+        }
+    }
+}
+
+/// Push notification sent from server to client for broker subscription forwarding.
+///
+/// When internal agents broadcast messages via the broker, and an IPC client has
+/// subscribed to that message type, the message is forwarded to the client as
+/// a push notification.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "notification_id": "push_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "message_type": "PriceUpdate",
+///   "source_agent": "price_service",
+///   "payload": { "symbol": "AAPL", "price": 150.25 }
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcPushNotification {
+    /// Unique ID for this notification (MTI format).
+    pub notification_id: String,
+
+    /// The message type name.
+    pub message_type: String,
+
+    /// The source agent that broadcast the message (if known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_agent: Option<String>,
+
+    /// The serialized message payload.
+    pub payload: serde_json::Value,
+
+    /// Timestamp when the message was broadcast (Unix milliseconds).
+    pub timestamp_ms: u64,
+}
+
+impl IpcPushNotification {
+    /// Creates a new push notification.
+    #[must_use]
+    pub fn new(
+        message_type: impl Into<String>,
+        source_agent: Option<String>,
+        payload: serde_json::Value,
+    ) -> Self {
+        use mti::prelude::*;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+
+        Self {
+            notification_id: "push".create_type_id::<V7>().to_string(),
+            message_type: message_type.into(),
+            source_agent,
+            payload,
+            timestamp_ms,
+        }
+    }
+}
+
+/// Response to subscribe/unsubscribe requests.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "correlation_id": "sub_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "success": true,
+///   "subscribed_types": ["PriceUpdate", "OrderStatus"]
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcSubscriptionResponse {
+    /// Correlation ID matching the request.
+    pub correlation_id: String,
+
+    /// Whether the subscription operation succeeded.
+    pub success: bool,
+
+    /// Error message if `success` is `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+
+    /// List of message types the client is currently subscribed to after this operation.
+    pub subscribed_types: Vec<String>,
+}
+
+impl IpcSubscriptionResponse {
+    /// Creates a successful subscription response.
+    #[must_use]
+    pub fn success(correlation_id: impl Into<String>, subscribed_types: Vec<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: true,
+            error: None,
+            subscribed_types,
+        }
+    }
+
+    /// Creates an error subscription response.
+    #[must_use]
+    pub fn error(correlation_id: impl Into<String>, error: impl Into<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: false,
+            error: Some(error.into()),
+            subscribed_types: Vec::new(),
+        }
+    }
+}
+
 impl IpcResponse {
     /// Creates a successful response with an optional payload.
     #[must_use]
@@ -584,5 +788,154 @@ mod tests {
 
         let err = IpcError::TargetBusy;
         assert_eq!(err.to_string(), "Target agent inbox is full");
+    }
+
+    // --- Subscription types tests ---
+
+    #[test]
+    fn test_ipc_subscribe_request_new() {
+        let request = IpcSubscribeRequest::new(vec![
+            "PriceUpdate".to_string(),
+            "OrderStatus".to_string(),
+        ]);
+
+        assert!(request.correlation_id.starts_with("sub_"));
+        assert_eq!(request.message_types.len(), 2);
+        assert!(request.message_types.contains(&"PriceUpdate".to_string()));
+        assert!(request.message_types.contains(&"OrderStatus".to_string()));
+    }
+
+    #[test]
+    fn test_ipc_subscribe_request_with_correlation_id() {
+        let request = IpcSubscribeRequest::with_correlation_id(
+            "custom_123",
+            vec!["MyMessage".to_string()],
+        );
+
+        assert_eq!(request.correlation_id, "custom_123");
+        assert_eq!(request.message_types.len(), 1);
+    }
+
+    #[test]
+    fn test_ipc_subscribe_request_serialization() {
+        let request = IpcSubscribeRequest::with_correlation_id(
+            "test_sub",
+            vec!["TypeA".to_string(), "TypeB".to_string()],
+        );
+
+        let json = serde_json::to_string(&request).unwrap();
+        let deserialized: IpcSubscribeRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.correlation_id, "test_sub");
+        assert_eq!(deserialized.message_types, request.message_types);
+    }
+
+    #[test]
+    fn test_ipc_unsubscribe_request_new() {
+        let request = IpcUnsubscribeRequest::new(vec!["PriceUpdate".to_string()]);
+
+        assert!(request.correlation_id.starts_with("unsub_"));
+        assert_eq!(request.message_types.len(), 1);
+    }
+
+    #[test]
+    fn test_ipc_unsubscribe_request_unsubscribe_all() {
+        let request = IpcUnsubscribeRequest::unsubscribe_all();
+
+        assert!(request.correlation_id.starts_with("unsub_"));
+        assert!(request.message_types.is_empty());
+    }
+
+    #[test]
+    fn test_ipc_unsubscribe_request_serialization() {
+        let request = IpcUnsubscribeRequest::unsubscribe_all();
+
+        let json = serde_json::to_string(&request).unwrap();
+        let deserialized: IpcUnsubscribeRequest = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.message_types.is_empty());
+    }
+
+    #[test]
+    fn test_ipc_push_notification_new() {
+        let notification = IpcPushNotification::new(
+            "PriceUpdate",
+            Some("price_service".to_string()),
+            serde_json::json!({ "symbol": "AAPL", "price": 150.25 }),
+        );
+
+        assert!(notification.notification_id.starts_with("push_"));
+        assert_eq!(notification.message_type, "PriceUpdate");
+        assert_eq!(notification.source_agent, Some("price_service".to_string()));
+        assert!(notification.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn test_ipc_push_notification_no_source() {
+        let notification = IpcPushNotification::new(
+            "SystemEvent",
+            None,
+            serde_json::json!({ "event": "startup" }),
+        );
+
+        assert_eq!(notification.message_type, "SystemEvent");
+        assert!(notification.source_agent.is_none());
+    }
+
+    #[test]
+    fn test_ipc_push_notification_serialization() {
+        let notification = IpcPushNotification::new(
+            "TestMessage",
+            Some("test_agent".to_string()),
+            serde_json::json!({ "data": 123 }),
+        );
+
+        let json = serde_json::to_string(&notification).unwrap();
+        let deserialized: IpcPushNotification = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.message_type, "TestMessage");
+        assert_eq!(deserialized.source_agent, Some("test_agent".to_string()));
+        assert_eq!(deserialized.payload["data"], 123);
+    }
+
+    #[test]
+    fn test_ipc_subscription_response_success() {
+        let response = IpcSubscriptionResponse::success(
+            "sub_123",
+            vec!["TypeA".to_string(), "TypeB".to_string()],
+        );
+
+        assert!(response.success);
+        assert_eq!(response.correlation_id, "sub_123");
+        assert!(response.error.is_none());
+        assert_eq!(response.subscribed_types.len(), 2);
+    }
+
+    #[test]
+    fn test_ipc_subscription_response_error() {
+        let response = IpcSubscriptionResponse::error(
+            "sub_456",
+            "Connection not registered",
+        );
+
+        assert!(!response.success);
+        assert_eq!(response.correlation_id, "sub_456");
+        assert_eq!(response.error, Some("Connection not registered".to_string()));
+        assert!(response.subscribed_types.is_empty());
+    }
+
+    #[test]
+    fn test_ipc_subscription_response_serialization() {
+        let response = IpcSubscriptionResponse::success(
+            "test_corr",
+            vec!["PriceUpdate".to_string()],
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcSubscriptionResponse = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.success);
+        assert_eq!(deserialized.correlation_id, "test_corr");
+        assert_eq!(deserialized.subscribed_types, vec!["PriceUpdate".to_string()]);
     }
 }

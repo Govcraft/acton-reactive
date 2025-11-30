@@ -40,13 +40,15 @@
 //!
 //! Start the server:
 //! ```bash
-//! cargo run --example ipc_bidirectional --features ipc
+//! cargo run --example ipc_bidirectional_server --features ipc
 //! ```
 //!
 //! Then connect with the client (in another terminal):
 //! ```bash
 //! cargo run --example ipc_bidirectional_client --features ipc
 //! ```
+//!
+//! See the README.md in this directory for more details.
 
 use std::collections::HashMap;
 use std::time::Duration;

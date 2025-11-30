@@ -43,7 +43,11 @@ default = []
 ##
 ## Enables serialization infrastructure and type registration for sending messages
 ## across process boundaries via Unix domain sockets or other transports.
-ipc = ["dep:mti", "dep:serde_json"]
+ipc = ["dep:mti", "dep:serde_json", "dep:parking_lot"]
+
+[dependencies.parking_lot]
+workspace = true
+optional = true
 
 [dependencies.mti]
 workspace = true

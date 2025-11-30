@@ -27,25 +27,27 @@
 //!
 //! # Running This Example
 //!
-//! First, start the IPC server (e.g., `ipc_multi_agent` example):
+//! First, start the IPC server:
 //! ```bash
-//! cargo run --example ipc_multi_agent --features ipc
+//! cargo run --example ipc_multi_service_server --features ipc
 //! ```
 //!
 //! Then, in another terminal, run this client:
 //! ```bash
-//! cargo run --example ipc_client --features ipc
+//! cargo run --example ipc_multi_service_client --features ipc
 //! ```
 //!
-//! By default, this client connects to the `ipc_multi_agent` server.
+//! By default, this client connects to the `ipc_multi_service_server` server.
 //! You can specify a different server name or custom socket path:
 //! ```bash
 //! # Connect to a different server by name
-//! cargo run --example ipc_client --features ipc -- --server ipc_basic
+//! cargo run --example ipc_multi_service_client --features ipc -- --server ipc_basic
 //!
 //! # Or specify a full socket path
-//! cargo run --example ipc_client --features ipc -- /path/to/socket.sock
+//! cargo run --example ipc_multi_service_client --features ipc -- /path/to/socket.sock
 //! ```
+//!
+//! See the README.md in this directory for more details.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -138,7 +140,7 @@ async fn demonstrate_error_handling(
 }
 
 /// Default server name to connect to.
-const DEFAULT_SERVER: &str = "ipc_multi_agent";
+const DEFAULT_SERVER: &str = "ipc_multi_service_server";
 
 /// Resolves the socket path from command line arguments.
 ///

@@ -30,13 +30,15 @@
 //!
 //! First, start the server:
 //! ```bash
-//! cargo run --example ipc_bidirectional --features ipc
+//! cargo run --example ipc_bidirectional_server --features ipc
 //! ```
 //!
 //! Then, in another terminal, run this client:
 //! ```bash
 //! cargo run --example ipc_bidirectional_client --features ipc
 //! ```
+//!
+//! See the README.md in this directory for more details.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -47,7 +49,7 @@ use tokio::net::UnixStream;
 use tokio::time::timeout;
 
 /// Default server name to connect to.
-const DEFAULT_SERVER: &str = "ipc_bidirectional";
+const DEFAULT_SERVER: &str = "ipc_bidirectional_server";
 
 /// Resolves the socket path from command line arguments or defaults.
 fn resolve_socket_path() -> PathBuf {

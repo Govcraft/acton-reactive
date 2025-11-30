@@ -56,6 +56,15 @@ pub const MSG_TYPE_ERROR: u8 = 0x03;
 /// Message type: Heartbeat (bidirectional).
 pub const MSG_TYPE_HEARTBEAT: u8 = 0x04;
 
+/// Message type: Push notification (server → client, for broker subscription forwarding).
+pub const MSG_TYPE_PUSH: u8 = 0x05;
+
+/// Message type: Subscribe request (client → server, for broker subscriptions).
+pub const MSG_TYPE_SUBSCRIBE: u8 = 0x06;
+
+/// Message type: Unsubscribe request (client → server, for broker subscriptions).
+pub const MSG_TYPE_UNSUBSCRIBE: u8 = 0x07;
+
 /// Frame header size: 4 bytes length + 1 byte version + 1 byte type.
 pub const HEADER_SIZE: usize = 6;
 
@@ -92,7 +101,13 @@ where
     // Validate message type
     if !matches!(
         msg_type,
-        MSG_TYPE_REQUEST | MSG_TYPE_RESPONSE | MSG_TYPE_ERROR | MSG_TYPE_HEARTBEAT
+        MSG_TYPE_REQUEST
+            | MSG_TYPE_RESPONSE
+            | MSG_TYPE_ERROR
+            | MSG_TYPE_HEARTBEAT
+            | MSG_TYPE_PUSH
+            | MSG_TYPE_SUBSCRIBE
+            | MSG_TYPE_UNSUBSCRIBE
     ) {
         return Err(IpcError::ProtocolError(format!(
             "Unknown message type: {msg_type:#04x}"
@@ -270,6 +285,77 @@ pub const fn is_heartbeat(msg_type: u8) -> bool {
     msg_type == MSG_TYPE_HEARTBEAT
 }
 
+/// Check if a message type is a subscribe request.
+#[must_use]
+pub const fn is_subscribe(msg_type: u8) -> bool {
+    msg_type == MSG_TYPE_SUBSCRIBE
+}
+
+/// Check if a message type is an unsubscribe request.
+#[must_use]
+pub const fn is_unsubscribe(msg_type: u8) -> bool {
+    msg_type == MSG_TYPE_UNSUBSCRIBE
+}
+
+/// Write a push notification to the stream.
+///
+/// Push notifications are sent from the server to clients for broker subscription
+/// forwarding. They carry messages that were broadcast internally and match the
+/// client's subscriptions.
+pub async fn write_push<W>(
+    writer: &mut W,
+    push: &super::types::IpcPushNotification,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_vec(push)?;
+    write_frame(writer, MSG_TYPE_PUSH, &payload).await
+}
+
+/// Read a push notification from the stream.
+pub async fn read_push<R>(
+    reader: &mut R,
+    max_size: usize,
+) -> Result<super::types::IpcPushNotification, IpcError>
+where
+    R: AsyncRead + Unpin,
+{
+    let (msg_type, payload) = read_frame(reader, max_size).await?;
+
+    if msg_type != MSG_TYPE_PUSH {
+        return Err(IpcError::ProtocolError(format!(
+            "Expected push message type ({MSG_TYPE_PUSH:#04x}), got {msg_type:#04x}"
+        )));
+    }
+
+    serde_json::from_slice(&payload).map_err(IpcError::from)
+}
+
+/// Write a subscribe request to the stream.
+pub async fn write_subscribe<W>(
+    writer: &mut W,
+    request: &super::types::IpcSubscribeRequest,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_vec(request)?;
+    write_frame(writer, MSG_TYPE_SUBSCRIBE, &payload).await
+}
+
+/// Write an unsubscribe request to the stream.
+pub async fn write_unsubscribe<W>(
+    writer: &mut W,
+    request: &super::types::IpcUnsubscribeRequest,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_vec(request)?;
+    write_frame(writer, MSG_TYPE_UNSUBSCRIBE, &payload).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +497,99 @@ mod tests {
         assert_eq!(MSG_TYPE_RESPONSE, 0x02);
         assert_eq!(MSG_TYPE_ERROR, 0x03);
         assert_eq!(MSG_TYPE_HEARTBEAT, 0x04);
+    }
+
+    #[test]
+    fn test_subscription_message_type_helpers() {
+        assert!(is_subscribe(MSG_TYPE_SUBSCRIBE));
+        assert!(!is_subscribe(MSG_TYPE_REQUEST));
+        assert!(!is_subscribe(MSG_TYPE_UNSUBSCRIBE));
+
+        assert!(is_unsubscribe(MSG_TYPE_UNSUBSCRIBE));
+        assert!(!is_unsubscribe(MSG_TYPE_REQUEST));
+        assert!(!is_unsubscribe(MSG_TYPE_SUBSCRIBE));
+    }
+
+    #[tokio::test]
+    async fn test_write_read_push_notification() {
+        use super::super::types::IpcPushNotification;
+
+        let mut buffer = Vec::new();
+        let notification = IpcPushNotification::new(
+            "PriceUpdate",
+            Some("price_service".to_string()),
+            serde_json::json!({ "price": 100.50 }),
+        );
+
+        // Write push notification
+        write_push(&mut buffer, &notification).await.unwrap();
+
+        // Read push notification
+        let mut reader = Cursor::new(buffer);
+        let read_notification = read_push(&mut reader, 1024).await.unwrap();
+
+        assert_eq!(read_notification.message_type, "PriceUpdate");
+        assert_eq!(read_notification.source_agent, Some("price_service".to_string()));
+        assert_eq!(read_notification.payload["price"], 100.50);
+    }
+
+    #[tokio::test]
+    async fn test_write_subscribe_request() {
+        use super::super::types::IpcSubscribeRequest;
+
+        let mut buffer = Vec::new();
+        let request = IpcSubscribeRequest::new(vec![
+            "PriceUpdate".to_string(),
+            "OrderStatus".to_string(),
+        ]);
+
+        // Write subscribe request
+        write_subscribe(&mut buffer, &request).await.unwrap();
+
+        // Verify the frame was written with correct message type
+        let mut reader = Cursor::new(buffer);
+        let (msg_type, payload) = read_frame(&mut reader, 1024).await.unwrap();
+
+        assert!(is_subscribe(msg_type));
+        let parsed: IpcSubscribeRequest = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(parsed.message_types.len(), 2);
+        assert!(parsed.message_types.contains(&"PriceUpdate".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_write_unsubscribe_request() {
+        use super::super::types::IpcUnsubscribeRequest;
+
+        let mut buffer = Vec::new();
+        let request = IpcUnsubscribeRequest::new(vec!["PriceUpdate".to_string()]);
+
+        // Write unsubscribe request
+        write_unsubscribe(&mut buffer, &request).await.unwrap();
+
+        // Verify the frame was written with correct message type
+        let mut reader = Cursor::new(buffer);
+        let (msg_type, payload) = read_frame(&mut reader, 1024).await.unwrap();
+
+        assert!(is_unsubscribe(msg_type));
+        let parsed: IpcUnsubscribeRequest = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(parsed.message_types.len(), 1);
+        assert_eq!(parsed.message_types[0], "PriceUpdate");
+    }
+
+    #[tokio::test]
+    async fn test_unsubscribe_all() {
+        use super::super::types::IpcUnsubscribeRequest;
+
+        let mut buffer = Vec::new();
+        let request = IpcUnsubscribeRequest::unsubscribe_all();
+
+        write_unsubscribe(&mut buffer, &request).await.unwrap();
+
+        let mut reader = Cursor::new(buffer);
+        let (msg_type, payload) = read_frame(&mut reader, 1024).await.unwrap();
+
+        assert!(is_unsubscribe(msg_type));
+        let parsed: IpcUnsubscribeRequest = serde_json::from_slice(&payload).unwrap();
+        assert!(parsed.message_types.is_empty());
     }
 }

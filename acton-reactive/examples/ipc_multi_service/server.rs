@@ -36,13 +36,15 @@
 //! # Running This Example
 //!
 //! ```bash
-//! cargo run --example ipc_multi_agent --features ipc
+//! cargo run --example ipc_multi_service_server --features ipc
 //! ```
 //!
-//! Then connect with the `ipc_client` example:
+//! Then connect with the client example:
 //! ```bash
-//! cargo run --example ipc_client --features ipc
+//! cargo run --example ipc_multi_service_client --features ipc
 //! ```
+//!
+//! See the README.md in this directory for more details.
 
 use std::collections::HashMap;
 use std::io::{stdout, Write};
