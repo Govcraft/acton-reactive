@@ -91,8 +91,9 @@ actor
 ```
 
 **Execution order:**
-```text
-before_start → message loop → after_start → [processing] → before_stop → after_stop
+```mermaid
+flowchart LR
+    A["before_start"] --> B["message loop"] --> C["after_start"] --> D["processing"] --> E["before_stop"] --> F["after_stop"]
 ```
 
 ```bash
@@ -107,16 +108,12 @@ cargo run --example lifecycles
 
 Demonstrates pub/sub messaging using the broker.
 
-```text
-┌──────────────────┐    broadcast    ┌─────────────────┐
-│ Main Application │ ──────────────→ │  ActorBroker    │
-└──────────────────┘                 └────────┬────────┘
-                                              │
-                    ┌─────────────────────────┼─────────────────────────┐
-                    ▼                         ▼                         ▼
-           ┌───────────────┐         ┌───────────────┐         ┌───────────────┐
-           │ DataCollector │         │  Aggregator   │         │    Printer    │
-           └───────────────┘         └───────────────┘         └───────────────┘
+```mermaid
+flowchart TB
+    App[Main Application] -->|broadcast| Broker[ActorBroker]
+    Broker --> DC[DataCollector]
+    Broker --> Agg[Aggregator]
+    Broker --> Pr[Printer]
 ```
 
 ```rust

@@ -185,24 +185,11 @@ RECEIVE: IpcPushNotification { message_type: "PriceUpdate", payload: {...} }
 
 ### Architecture
 
-```text
-                              ┌──────────────┐
-                              │  Price Feed  │
-                              │    Actor     │
-                              └──────┬───────┘
-                                     │ broadcast
-                                     ▼
-┌──────────────┐              ┌──────────────┐
-│  Client A    │←─────────────│  ActorBroker │
-│ subscribed   │  push        └──────┬───────┘
-│ to: Price    │                     │
-└──────────────┘                     │
-                                     │
-┌──────────────┐                     │
-│  Client B    │←────────────────────┘
-│ subscribed   │  push
-│ to: Trade    │
-└──────────────┘
+```mermaid
+flowchart TD
+    PF["Price Feed Actor"] -->|broadcast| Broker["ActorBroker"]
+    Broker -->|push Price| CA["Client A<br/>subscribed to: Price"]
+    Broker -->|push Trade| CB["Client B<br/>subscribed to: Trade"]
 ```
 
 ---

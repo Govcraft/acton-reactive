@@ -84,13 +84,14 @@ dummy_channel_size = 1
 
 Read-only handlers (`act_on`) can execute concurrently. The `concurrent_handlers_high_water_mark` prevents unbounded concurrency:
 
-```text
-Messages arrive: M1, M2, M3, ... M100
-├── Handler for M1 spawned
-├── Handler for M2 spawned
-├── ...
-├── Handler for M100 spawned
-└── HWM reached: Wait for all 100 to complete before processing more
+```mermaid
+flowchart TD
+    A["Messages arrive: M1, M2, M3, ... M100"]
+    A --> B["Handler for M1 spawned"]
+    A --> C["Handler for M2 spawned"]
+    A --> D["..."]
+    A --> E["Handler for M100 spawned"]
+    E --> F["HWM reached: Wait for all 100<br/>to complete before processing more"]
 ```
 
 ---

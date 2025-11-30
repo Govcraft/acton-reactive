@@ -24,37 +24,34 @@ The IPC module allows external processes (written in any language) to communicat
 
 ### Architecture
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│                     External Processes                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │  Python  │  │ Node.js  │  │   Rust   │  │  Other   │   │
-│  │  Client  │  │  Client  │  │  Client  │  │  Client  │   │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘   │
-└───────│─────────────│─────────────│─────────────│──────────┘
-        │             │             │             │
-        └─────────────┴──────┬──────┴─────────────┘
-                             │
-                    Unix Domain Socket
-                      /tmp/acton.sock
-                             │
-┌────────────────────────────┴───────────────────────────────┐
-│                      acton-reactive                         │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │                    IPC Listener                      │   │
-│  │  ┌───────────┐  ┌───────────┐  ┌─────────────────┐  │   │
-│  │  │ Type      │  │ Rate      │  │ Subscription    │  │   │
-│  │  │ Registry  │  │ Limiter   │  │ Manager         │  │   │
-│  │  └───────────┘  └───────────┘  └─────────────────┘  │   │
-│  └──────────────────────────┬──────────────────────────┘   │
-│                             │                               │
-│  ┌──────────────────────────┴──────────────────────────┐   │
-│  │                    Actor System                      │   │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐             │   │
-│  │  │ Actor A │  │ Actor B │  │  Broker │             │   │
-│  │  └─────────┘  └─────────┘  └─────────┘             │   │
-│  └─────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph External["External Processes"]
+        Py["Python Client"]
+        Node["Node.js Client"]
+        Rs["Rust Client"]
+        Other["Other Client"]
+    end
+
+    Py & Node & Rs & Other --> Socket["Unix Domain Socket<br/>/tmp/acton.sock"]
+
+    subgraph Acton["acton-reactive"]
+        subgraph Listener["IPC Listener"]
+            TR["Type Registry"]
+            RL["Rate Limiter"]
+            SM["Subscription Manager"]
+        end
+
+        subgraph Actors["Actor System"]
+            AA["Actor A"]
+            AB["Actor B"]
+            Broker["Broker"]
+        end
+
+        Listener --> Actors
+    end
+
+    Socket --> Listener
 ```
 
 ---

@@ -249,24 +249,14 @@ actor.try_mutate_on::<FetchMessage>(|actor, ctx| {
 
 Here's what happens when you send a message:
 
-```text
-1. handle.send(MyMessage)
-   │
-   ▼
-2. Message wrapped in envelope
-   │
-   ▼
-3. Envelope sent through channel
-   │
-   ▼
-4. Actor receives envelope
-   │
-   ▼
-5. Actor looks up handler by message TypeId
-   │
-   ├─ Handler found → Execute handler
-   │
-   └─ No handler → Message dropped (silent)
+```mermaid
+flowchart TD
+    A["1. handle.send(MyMessage)"] --> B["2. Message wrapped in envelope"]
+    B --> C["3. Envelope sent through channel"]
+    C --> D["4. Actor receives envelope"]
+    D --> E["5. Actor looks up handler by message TypeId"]
+    E -->|Handler found| F["Execute handler"]
+    E -->|No handler| G["Message dropped (silent)"]
 ```
 
 ### No Handler = Silent Drop
@@ -295,16 +285,25 @@ Within a single actor:
 - **Mutable handlers**: One at a time, sequential
 - **Read-only handlers**: Can run concurrently
 
-```text
-Actor inbox: [M1, M2, M3, Q1, Q2, M4]
-             └──mutate──┘  └act_on┘  └mutate┘
+```mermaid
+flowchart TD
+    subgraph Inbox["Actor Inbox"]
+        direction LR
+        M1["M1<br/>(mutate)"] ~~~ M2["M2<br/>(mutate)"] ~~~ M3["M3<br/>(mutate)"] ~~~ Q1["Q1<br/>(act)"] ~~~ Q2["Q2<br/>(act)"] ~~~ M4["M4<br/>(mutate)"]
+    end
 
-Execution (mutate_on handlers):
-M1 → M2 → M3 → M4  (sequential)
+    subgraph MutExec["mutate_on: Sequential"]
+        direction LR
+        ME1["M1"] --> ME2["M2"] --> ME3["M3"] --> ME4["M4"]
+    end
 
-Execution (act_on handlers):
-Q1 ┬→ (concurrent)
-Q2 ┘
+    subgraph ActExec["act_on: Concurrent"]
+        AE1["Q1"]
+        AE2["Q2"]
+    end
+
+    Inbox --> MutExec
+    Inbox --> ActExec
 ```
 
 ---

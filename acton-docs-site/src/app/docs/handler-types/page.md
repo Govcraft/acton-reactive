@@ -45,17 +45,22 @@ actor.mutate_on::<UpdateCounter>(|actor, ctx| {
 
 **Execution model:**
 
-```text
-Message Queue: [M1, M2, M3, M4]
+```mermaid
+flowchart LR
+    subgraph Queue["Message Queue"]
+        direction LR
+        M1["M1"] ~~~ M2["M2"] ~~~ M3["M3"] ~~~ M4["M4"]
+    end
 
-Execution:
-┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
-│   M1    │→ │   M2    │→ │   M3    │→ │   M4    │
-└─────────┘  └─────────┘  └─────────┘  └─────────┘
-   time →
+    subgraph Exec["Sequential Execution"]
+        direction LR
+        E1["M1"] --> E2["M2"] --> E3["M3"] --> E4["M4"]
+    end
+
+    Queue --> Exec
+```
 
 Each message completes before the next starts.
-```
 
 **When to use:**
 - State mutations (counters, adding to collections, updating fields)
@@ -88,14 +93,24 @@ actor.act_on::<GetStatus>(|actor, ctx| {
 
 **Execution model:**
 
-```text
-Message Queue: [Q1, Q2, Q3, Q4, Q5]
+```mermaid
+flowchart LR
+    subgraph Queue["Message Queue"]
+        Q1["Q1"] ~~~ Q2["Q2"] ~~~ Q3["Q3"] ~~~ Q4["Q4"] ~~~ Q5["Q5"]
+    end
 
-Execution (concurrent, up to high-water mark):
-┌─────┬─────┬─────┐     ┌─────┬─────┐
-│ Q1  │ Q2  │ Q3  │ →   │ Q4  │ Q5  │
-└─────┴─────┴─────┘     └─────┴─────┘
-    batch 1              batch 2
+    subgraph B1["Batch 1 (concurrent)"]
+        E1["Q1"]
+        E2["Q2"]
+        E3["Q3"]
+    end
+
+    subgraph B2["Batch 2 (concurrent)"]
+        E4["Q4"]
+        E5["Q5"]
+    end
+
+    Queue --> B1 --> B2
 ```
 
 **When to use:**
@@ -259,15 +274,15 @@ If no error handler is registered, errors are logged and the message is dropped.
 
 ## Choosing the Right Handler
 
-```text
-Do you need to modify state?
-├─ Yes → Can the operation fail?
-│        ├─ Yes → try_mutate_on
-│        └─ No  → mutate_on
-│
-└─ No  → Can the operation fail?
-         ├─ Yes → try_act_on
-         └─ No  → act_on
+```mermaid
+flowchart TD
+    Start{"Do you need to modify state?"}
+    Start -->|Yes| ModYes{"Can the operation fail?"}
+    Start -->|No| ModNo{"Can the operation fail?"}
+    ModYes -->|Yes| TryMut["try_mutate_on"]
+    ModYes -->|No| Mut["mutate_on"]
+    ModNo -->|Yes| TryAct["try_act_on"]
+    ModNo -->|No| Act["act_on"]
 ```
 
 ### Examples by Use Case

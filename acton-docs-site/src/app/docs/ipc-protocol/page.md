@@ -16,11 +16,14 @@ This page documents the wire protocol for IPC communication, including frame for
 
 All messages use length-prefixed framing:
 
-```text
-┌───────────────────┬────────────────────────────┐
-│  Length (4 bytes) │  Payload (JSON/MessagePack)│
-│    Big-endian     │                            │
-└───────────────────┴────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Frame["Wire Frame"]
+        direction LR
+        L["Length (4 bytes)<br/>Big-endian"]
+        P["Payload<br/>JSON/MessagePack"]
+    end
+    L ~~~ P
 ```
 
 The length field contains the size of the payload in bytes, encoded as a 4-byte big-endian unsigned integer.
