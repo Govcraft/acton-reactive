@@ -1,6 +1,6 @@
 # IPC Client Libraries
 
-This directory contains client library implementations for communicating with `acton-reactive` IPC servers from external languages. These libraries implement the full IPC protocol, enabling seamless integration between Rust actor systems and applications written in Python, Node.js, and other languages.
+This directory contains client library implementations for communicating with `acton-reactive` IPC servers from external languages. These libraries implement the full IPC protocol, enabling seamless integration between Rust actor systems and applications written in Python, Node.js, Deno, and other languages.
 
 ## Protocol Overview
 
@@ -63,7 +63,13 @@ python example_client.py
 ```bash
 cd acton-reactive/examples/ipc_client_libraries/nodejs
 npm install
-npx ts-node src/example-client.ts
+npm run example
+```
+
+**Deno:**
+```bash
+cd acton-reactive/examples/ipc_client_libraries/deno
+deno task example
 ```
 
 ## Python Client
@@ -168,6 +174,57 @@ await client.subscribe(['PriceUpdate']);
 await client.close();
 ```
 
+## Deno Client
+
+### Installation
+
+No installation required! Deno has native TypeScript support.
+
+### Usage
+
+```typescript
+import { ActonIpcClient, getDefaultSocketPath } from "./acton_ipc.ts";
+
+const socketPath = getDefaultSocketPath("ipc_client_example");
+const client = new ActonIpcClient(socketPath);
+
+await client.connect();
+
+// Request-Response
+const response = await client.request("calculator", "Add", { a: 5, b: 3 });
+console.log(`Result: ${JSON.stringify(response.payload)}`);
+
+// Fire-and-Forget
+await client.fireAndForget("logger", "LogEvent", {
+  level: "info",
+  message: "Hello from Deno!",
+});
+
+// Streaming
+for await (const frame of client.stream("search", "SearchQuery", { query: "test", limit: 5 })) {
+  console.log(`Result: ${JSON.stringify(frame.payload)}`);
+  if (frame.is_final) break;
+}
+
+// Subscriptions
+client.onPush((notification) => {
+  console.log(`Price: ${JSON.stringify(notification.payload)}`);
+});
+await client.subscribe(["PriceUpdate"]);
+
+await client.close();
+```
+
+### Running
+
+```bash
+# Using deno task
+deno task example
+
+# Or directly with permissions
+deno run --allow-read --allow-write --allow-env --allow-net=unix example_client.ts
+```
+
 ## Available Services (Example Server)
 
 The example server exposes these services:
@@ -183,7 +240,7 @@ The example server exposes these services:
 
 ## Service Discovery
 
-Both clients support service discovery to query available agents and message types:
+All clients support service discovery to query available agents and message types:
 
 **Python:**
 ```python
@@ -192,7 +249,7 @@ print(f"Agents: {discovery.agents}")
 print(f"Message Types: {discovery.message_types}")
 ```
 
-**Node.js:**
+**Node.js/Deno:**
 ```typescript
 const discovery = await client.discover();
 console.log(`Agents: ${discovery.agents.map(a => a.name)}`);
@@ -214,7 +271,7 @@ Default fallback (if `XDG_RUNTIME_DIR` is not set):
 
 ## Error Handling
 
-Both clients handle these error types:
+All clients handle these error types:
 
 | Error | Description |
 |-------|-------------|
@@ -258,7 +315,7 @@ To implement a client in another language, you need to:
 5. Handle async responses (map correlation IDs to pending requests)
 6. Implement timeout handling per request
 
-See the Python and Node.js implementations for reference.
+See the Python, Node.js, and Deno implementations for reference.
 
 ## License
 
