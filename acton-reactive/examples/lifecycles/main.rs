@@ -45,12 +45,12 @@ async fn main() {
         // Hook executed *before* the actor's main task loop starts.
         .before_start(|_| {
             println!("Actor is preparing to track items... Here we go!");
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Hook executed *after* the actor's main task loop has started.
         .after_start(|_| {
             println!("Actor is now tracking items!");
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler for `AddItem` messages.
         .mutate_on::<AddItem>(|actor, envelope| {
@@ -58,7 +58,7 @@ async fn main() {
             println!("Adding item: {item}");
             // Mutate the actor's internal state.
             actor.model.items.push(item.clone());
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler for `GetItems` messages.
         .mutate_on::<GetItems>(|actor, _| {
@@ -66,7 +66,7 @@ async fn main() {
             // Clone the items list to move it into the async block.
             let items = actor.model.items.clone();
             // Use `from_async` to perform work asynchronously.
-            ActorReply::from_async(async move {
+            Reply::pending(async move {
                 // Simulate a delay (e.g., fetching from a database).
                 sleep(Duration::from_secs(2)).await;
                 println!("Current items: {items:?}");
@@ -76,7 +76,7 @@ async fn main() {
         // (after receiving a stop signal but before stopping children).
         .before_stop(|_| {
             println!("Actor is stopping... finishing up!");
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Hook executed *after* the actor's task has fully stopped
         // and all children (if any) have stopped.
@@ -84,7 +84,7 @@ async fn main() {
             println!("Actor stopped! Final items: {:?}", actor.model.items);
             // Assert the final state.
             debug_assert_eq!(actor.model.items, vec!["Apple", "Banana", "Cherry"]);
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // 4. Start the actor. Lifecycle: before_start -> after_start.

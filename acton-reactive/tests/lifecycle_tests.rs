@@ -49,13 +49,13 @@ async fn test_actor_lifecycle_events() -> anyhow::Result<()> {
         // Register a function to run immediately after the actor's task starts.
         .after_start(|actor| {
             tracing::info!("Actor started with ID: {}", actor.id());
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Register a function to run after the actor has processed all messages
         // following a stop signal and its task is about to terminate.
         .after_stop(|actor| {
             tracing::info!("Actor stopping with ID: {}", actor.id());
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the actor, spawning its task and returning a handle.

@@ -74,11 +74,11 @@ async fn test_broker() -> anyhow::Result<()> {
         .mutate_on::<Pong>(|actor, _envelope| {
             info!("Also SUCCESS! PONG!");
             actor.model.count += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             assert_eq!(actor.model.count, 1, "count should be 1");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Configure Comedian actor's handlers.
@@ -86,16 +86,16 @@ async fn test_broker() -> anyhow::Result<()> {
         .mutate_on::<Ping>(|actor, _envelope| {
             info!("SUCCESS! PING!");
             actor.model.funny += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .mutate_on::<Pong>(|actor, _envelope| {
             actor.model.funny += 1;
             info!("SUCCESS! PONG!");
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             assert_eq!(actor.model.funny, 2, "funny count should be 2");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Subscribe actors to messages *before* starting them.
@@ -167,19 +167,19 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
         .mutate_on::<Pong>(|actor, _envelope| {
             info!("Also SUCCESS! PONG!");
             actor.model.count += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             assert_eq!(actor.model.count, 1, "count should be 1");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Configure Comedian handler to broadcast from within.
     comedian_actor_builder.mutate_on::<Ping>(|actor, _envelope| {
         // Get the broker handle associated with this actor.
         let actor_broker_handle = actor.broker().clone();
-        // Return an async block to perform the broadcast.
-        Box::pin(async move {
+        // Return an Reply to perform the broadcast.
+        Reply::pending(async move {
             // Broadcast Pong using the handle obtained within the actor context.
             actor_broker_handle.broadcast(Pong).await;
         })

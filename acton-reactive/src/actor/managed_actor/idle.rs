@@ -276,7 +276,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// It associates a specific message type `M` with a closure (`message_processor`) that
     /// will be executed when the actor receives a message of that type after it has started.
     ///
-    /// Unlike `mutate_on_fallible`, handlers registered with `act_on_fallible` operate on an immutable reference
+    /// Unlike `try_mutate_on`, handlers registered with `try_act_on` operate on an immutable reference
     /// to the actor (`&ManagedActor`) and can be executed concurrently with other read-only handlers.
     /// Message ordering is not guaranteed for read-only handlers.
     ///
@@ -297,7 +297,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// Returns a mutable reference to `self` to allow for method chaining during configuration.
     #[instrument(skip(self, message_processor), level = "debug")]
-    pub fn act_on_fallible<M, T, E>(
+    pub fn try_act_on<M, T, E>(
         &mut self,
         message_processor: impl for<'a> Fn(
                 &'a ManagedActor<Started, State>,
@@ -375,7 +375,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     }
 
     /// Registers an asynchronous message handler for a specific message type `M` that returns a Result (new style, preferred).
-    pub fn mutate_on_fallible<M, T, E>(
+    pub fn try_mutate_on<M, T, E>(
         &mut self,
         message_processor: impl for<'a> Fn(
                 &'a mut ManagedActor<Started, State>,

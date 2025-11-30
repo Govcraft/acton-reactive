@@ -19,21 +19,21 @@ impl ViewManager {
             .mutate_on::<MenuMoveUp>(|actor, context| {
                 let view = actor.model.active.clone();
                 let msg = context.message().clone();
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     view.send(msg).await;
                 })
             })
             .mutate_on::<MenuMoveDown>(|actor, context| {
                 let view = actor.model.active.clone();
                 let msg = context.message().clone();
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     view.send(msg).await;
                 })
             })
             .mutate_on::<MenuSelect>(|actor, context| {
                 let view = actor.model.active.clone();
                 let msg = context.message().clone();
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     view.send(msg).await;
                 })
             });

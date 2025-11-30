@@ -68,7 +68,7 @@ struct Increment(u32);
 // Handlers are simple functions.
 counter.mutate_on::<Increment>(|actor, ctx| {
     actor.model.count += ctx.message().0;
-    ActorReply::immediate()
+    Reply::ready()
 });
 
 // Send messages. That's it.
@@ -140,7 +140,7 @@ async fn main() {
     counter.mutate_on::<Increment>(|actor, ctx| {
         actor.model.count += ctx.message().0;
         println!("Count is now: {}", actor.model.count);
-        ActorReply::immediate()
+        Reply::ready()
     });
 
     // The actor starts working
@@ -187,7 +187,7 @@ When defining what an actor does with messages, you have two main choices:
 ```rust
 counter.mutate_on::<Increment>(|actor, ctx| {
     actor.model.count += ctx.message().0; // Changing data
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -198,7 +198,7 @@ counter.act_on::<GetCount>(|actor, ctx| {
     let count = actor.model.count; // Just reading
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         reply.send(CountResponse(count)).await;
     })
 });
@@ -218,19 +218,19 @@ Want to run code when an actor starts or stops? Use lifecycle hooks:
 counter
     .before_start(|_| {
         println!("Actor is booting up...");
-        ActorReply::immediate()
+        Reply::ready()
     })
     .after_start(|_| {
         println!("Actor is ready for messages!");
-        ActorReply::immediate()
+        Reply::ready()
     })
     .before_stop(|_| {
         println!("Actor is shutting down...");
-        ActorReply::immediate()
+        Reply::ready()
     })
     .after_stop(|actor| {
         println!("Final count was: {}", actor.model.count);
-        ActorReply::immediate()
+        Reply::ready()
     });
 ```
 

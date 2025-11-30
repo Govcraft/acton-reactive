@@ -151,7 +151,7 @@ async fn create_countdown_actor(runtime: &mut ActorRuntime) -> ActorHandle {
         // Get the reply envelope to send multiple responses
         let reply_envelope = envelope.reply_envelope();
 
-        Box::pin(async move {
+        Reply::pending(async move {
             for i in (0..=start).rev() {
                 let tick = CountdownTick {
                     number: i,
@@ -192,7 +192,7 @@ async fn create_list_actor(runtime: &mut ActorRuntime) -> ActorHandle {
 
         let reply_envelope = envelope.reply_envelope();
 
-        Box::pin(async move {
+        Reply::pending(async move {
             let chunks: Vec<_> = items.chunks(page_size).collect();
             let total_pages = chunks.len();
 

@@ -75,9 +75,9 @@ async fn test_async_reactor() -> anyhow::Result<()> {
             // Clone the actor's handle. Handles are cheap to clone and allow interaction
             // with the actor (like sending messages) from outside the actor's task.
             let actor_handle = actor.handle().clone();
-            // Return a pinned future (`Pin<Box<dyn Future>>`). This allows the handler
+            // Return an Reply. `from_async` allows the handler
             // to perform asynchronous operations after the initial synchronous part.
-            Box::pin(async move {
+            Reply::pending(async move {
                 trace!("emitting async");
                 // Send a `Ping` message back to the actor itself asynchronously.
                 actor_handle.send(Ping).await;
@@ -91,13 +91,13 @@ async fn test_async_reactor() -> anyhow::Result<()> {
                 AudienceReactionMsg::Chuckle => actor.model.funny += 1,
                 AudienceReactionMsg::Groan => actor.model.bombers += 1,
             }
-            // This handler completes synchronously, so we return `ActorReply::immediate()`.
-            ActorReply::immediate()
+            // This handler completes synchronously, so we return `Reply::ready()`.
+            Reply::ready()
         })
         // Define a handler for `Ping` messages (sent from the FunnyJoke handler).
         .mutate_on::<Ping>(|_actor, _envelope| {
             trace!("PING");
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Define a callback function to execute *after* the actor has stopped processing messages
         // and its internal task has finished.
@@ -111,7 +111,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
             );
             // Assert the final state after the actor has run.
             assert_eq!(actor.model.jokes_told, 2);
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Transition the actor from `Idle` to `Started`. This spawns the actor's main task loop
@@ -165,14 +165,14 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
             info!("on tally");
             // Increment the internal counter.
             actor.model.count += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler executed after the actor stops.
         .after_stop(|actor| {
             // Assert the final count after processing messages.
             assert_eq!(4, actor.model.count);
             trace!("on stopping");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the counter actor.
@@ -190,12 +190,12 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
         // Handler executed after the actor starts.
         .after_start(|_actor| {
             trace!("*");
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler executed after the actor stops.
         .after_stop(|_actor| {
             trace!("*");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the messenger actor.
@@ -261,7 +261,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
                     actor.model.receive_count += 1;
                 }
             }
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler executed after the child actor stops.
         .after_stop(|actor| {
@@ -271,7 +271,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
                 actor.model.receive_count, 22,
                 "Child actor did not process the expected number of PINGs"
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Get the child's unique ID before it's moved during supervision.
@@ -416,8 +416,8 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
             let self_envelope = actor.new_envelope();
             // Clone the incoming message content to determine the reaction.
             let message = envelope.message().clone();
-            // Return an async block to send the reaction message.
-            Box::pin(async move {
+            // Return an Reply to send the reaction message.
+            Reply::pending(async move {
                 // Ensure the envelope was created successfully.
                 if let Some(self_envelope) = self_envelope {
                     match message {
@@ -440,7 +440,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
                 AudienceReactionMsg::Chuckle => actor.model.funny += 1,
                 AudienceReactionMsg::Groan => actor.model.bombers += 1,
             }
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler executed after the actor stops.
         .after_stop(|actor| {
@@ -455,7 +455,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
             assert_eq!(actor.model.jokes_told, 2);
             assert_eq!(actor.model.funny, 1);
             assert_eq!(actor.model.bombers, 1);
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the actor.
@@ -528,9 +528,8 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
             );
 
             // Use the child handle if found, otherwise log an error.
-            // Both branches return the same Box::pin(async {}) type for type unification.
             let maybe_child = actor.handle().find_child(&child_id);
-            Box::pin(async move {
+            Reply::pending(async move {
                 if let Some(child_handle) = maybe_child {
                     trace!("Pinging child {}", &child_id);
                     child_handle.send(Ping).await;
@@ -541,7 +540,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
             })
         } else {
             // If the message wasn't the expected variant.
-            ActorReply::immediate()
+            Reply::ready()
         }
     });
 
@@ -557,7 +556,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     // Configure the child's message handler for `Ping`.
     child_actor_builder.mutate_on::<Ping>(|actor, _envelope| {
         info!("Child {} received Ping from parent actor", actor.id());
-        ActorReply::immediate()
+        Reply::ready()
     });
 
     // Get the child's ID before it's moved during supervision.

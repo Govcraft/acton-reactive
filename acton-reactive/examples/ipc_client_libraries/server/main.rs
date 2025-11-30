@@ -183,7 +183,7 @@ async fn create_calculator_actor(runtime: &mut ActorRuntime) -> ActorHandle {
         );
 
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(response).await;
         })
     });
@@ -205,7 +205,7 @@ async fn create_calculator_actor(runtime: &mut ActorRuntime) -> ActorHandle {
         );
 
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(response).await;
         })
     });
@@ -231,7 +231,7 @@ async fn create_search_actor(runtime: &mut ActorRuntime) -> ActorHandle {
 
         let reply_envelope = envelope.reply_envelope();
 
-        Box::pin(async move {
+        Reply::pending(async move {
             // Simulate search results
             let sample_items = [
                 "Getting Started Guide",
@@ -285,7 +285,7 @@ async fn create_logger_actor(runtime: &mut ActorRuntime) -> ActorHandle {
             msg.message
         );
 
-        Box::pin(async {})
+        Reply::ready()
     });
 
     logger.start().await
@@ -325,7 +325,7 @@ async fn create_price_publisher(runtime: &mut ActorRuntime) -> ActorHandle {
         println!("  [Publisher] Publishing: {symbol} @ ${price:.2} ({change:+.2})");
 
         let broker = actor.broker().clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             broker.broadcast(update).await;
         })
     });

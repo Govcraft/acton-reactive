@@ -45,7 +45,7 @@ impl HomeScreen {
             queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 1)).unwrap();
             let _ = stdout.write(TAGLINE.as_ref());
             let _ = stdout.flush();
-            ActorReply::immediate()
+            Reply::ready()
         })
             .mutate_on::<MenuMoveDown>(|actor, _context| {
                 trace!(" MenuMoveDown");
@@ -56,7 +56,7 @@ impl HomeScreen {
                     actor.model.menu[next_index].selected = true;
                 }
                 actor.model.paint();
-                ActorReply::immediate()
+                Reply::ready()
             })
             .mutate_on::<MenuMoveUp>(|actor, _context| {
                 trace!(" MenuMoveUp");
@@ -67,16 +67,16 @@ impl HomeScreen {
                     actor.model.menu.iter_mut().rev().nth(len - prev_index - 1).unwrap().selected = true;
                 }
                 actor.model.paint();
-                ActorReply::immediate()
+                Reply::ready()
             })
             .mutate_on::<MenuSelect>(|actor, _context| {
                 //use debug to print the selected menu item label
                 debug!(" MenuSelect: {:?}", actor.model.menu.iter().find(|item| item.selected).unwrap().label);
-                ActorReply::immediate()
+                Reply::ready()
             })
             .after_start(|actor| {
                 actor.model.paint();
-                ActorReply::immediate()
+                Reply::ready()
             });
         actor.model.menu.push(MenuItem { label: "Create a new project".to_string(), selected: true });
         actor.model.menu.push(MenuItem { label: "Update an existing project".to_string(), selected: false });

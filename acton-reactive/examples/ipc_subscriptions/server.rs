@@ -203,7 +203,7 @@ async fn create_price_feed_actor(runtime: &mut ActorRuntime) -> ActorHandle {
             })
             .collect();
 
-        Box::pin(async move {
+        Reply::pending(async move {
             for update in updates {
                 println!(
                     "  [PriceFeed] Broadcasting: {} @ ${:.2} ({:+.2})",
@@ -233,7 +233,7 @@ async fn create_price_feed_actor(runtime: &mut ActorRuntime) -> ActorHandle {
             trade.side, trade.quantity, trade.symbol, trade.price
         );
 
-        Box::pin(async move {
+        Reply::pending(async move {
             broker.broadcast(trade).await;
         })
     });

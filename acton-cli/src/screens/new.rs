@@ -45,7 +45,7 @@ impl NewScreen {
             queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 1)).unwrap();
             let _ = stdout.write("Scaffold a new application".as_ref());
             let _ = stdout.flush();
-            ActorReply::immediate()
+            Reply::ready()
         })
             .mutate_on::<MenuMoveDown>(|actor, _context| {
                 trace!(" MenuMoveDown");
@@ -56,7 +56,7 @@ impl NewScreen {
                     actor.model.menu[next_index].selected = true;
                 }
                 actor.model.paint();
-                ActorReply::immediate()
+                Reply::ready()
             })
             .mutate_on::<MenuMoveUp>(|actor, _context| {
                 trace!(" MenuMoveUp");
@@ -67,11 +67,11 @@ impl NewScreen {
                     actor.model.menu.iter_mut().rev().nth(len - prev_index - 1).unwrap().selected = true;
                 }
                 actor.model.paint();
-                ActorReply::immediate()
+                Reply::ready()
             })
             .after_start(|actor| {
                 actor.model.paint();
-                ActorReply::immediate()
+                Reply::ready()
             });
         actor.model.menu.push(MenuItem { label: "Name".to_string(), selected: true });
         actor.model.menu.push(MenuItem { label: "Location".to_string(), selected: false });

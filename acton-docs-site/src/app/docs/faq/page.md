@@ -39,7 +39,7 @@ actor.mutate_on::<RequestMessage>(|actor, ctx| {
     let reply = ctx.reply_envelope();
     let data = actor.model.some_data.clone();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         reply.send(ResponseMessage { data }).await;
     })
 });
@@ -50,7 +50,7 @@ Or for simple, synchronous replies:
 ```rust
 actor.mutate_on::<RequestMessage>(|actor, ctx| {
     ctx.reply(ResponseMessage { data: actor.model.data.clone() });
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -141,7 +141,7 @@ actor.mutate_on::<SaveUser>(|actor, ctx| {
     let user = ctx.message().user.clone();
     let db = actor.model.db_pool.clone();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         sqlx::query("INSERT INTO users ...")
             .bind(&user.name)
             .execute(&db)
@@ -155,23 +155,30 @@ actor.mutate_on::<SaveUser>(|actor, ctx| {
 
 ### How do I handle errors in handlers?
 
-Use fallible handlers:
+Use fallible handlers with `Reply::try_*` helpers:
 
 ```rust
-actor.mutate_on_fallible::<RiskyOperation>(|actor, ctx| {
-    Box::pin(async move {
-        if something_bad() {
-            Err(Box::new(MyError::new("something went wrong")) as Box<dyn std::error::Error>)
-        } else {
-            Ok(Box::new(SuccessResult) as Box<dyn ActonMessageReply>)
-        }
+// Immediate result (sync)
+actor.try_mutate_on::<RiskyOperation>(|actor, ctx| {
+    if something_bad() {
+        Reply::try_err(MyError::new("something went wrong"))
+    } else {
+        Reply::try_ok(SuccessResult)
+    }
+});
+
+// Or with async operations
+actor.try_mutate_on::<RiskyOperation>(|actor, ctx| {
+    Reply::try_pending(async move {
+        let result = do_risky_thing().await?;
+        Ok(SuccessResult { data: result })
     })
 });
 
 // Register error handler
 actor.on_error::<RiskyOperation, MyError>(|actor, ctx, error| {
     println!("Error: {}", error);
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -185,7 +192,7 @@ actor.on_error::<RiskyOperation, MyError>(|actor, ctx, error| {
 
 ```rust
 actor.mutate_on::<MyMessage>(|actor, ctx| {
-    Box::pin(async move {
+    Reply::pending(async move {
         // ERROR: actor.model is borrowed in async block
         println!("{}", actor.model.value);
     })
@@ -198,7 +205,7 @@ actor.mutate_on::<MyMessage>(|actor, ctx| {
 actor.mutate_on::<MyMessage>(|actor, ctx| {
     let value = actor.model.value; // Clone before async
 
-    Box::pin(async move {
+    Reply::pending(async move {
         println!("{}", value);  // Use the clone
     })
 });
@@ -241,7 +248,7 @@ async fn main() {
 // This won't compile!
 actor.act_on::<Increment>(|actor, ctx| {
     actor.model.count += 1;  // ERROR: actor.model is immutable
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -250,7 +257,7 @@ actor.act_on::<Increment>(|actor, ctx| {
 ```rust
 actor.mutate_on::<Increment>(|actor, ctx| {
     actor.model.count += 1;  // Works!
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -283,7 +290,7 @@ let handle = actor.start().await;
 actor.mutate_on::<Trigger>(|actor, ctx| {
     // DANGER: If the channel is full, this blocks forever
     some_handle.send_sync(BlockingMessage, &address);
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -293,7 +300,7 @@ actor.mutate_on::<Trigger>(|actor, ctx| {
 actor.mutate_on::<Trigger>(|actor, ctx| {
     let handle = some_handle.clone();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         handle.send(AsyncMessage).await;  // Non-blocking
     })
 });
@@ -362,14 +369,14 @@ When you need data in an async block, clone just what you need:
 // Good - clone only what's needed
 let value = actor.model.expensive_data.clone();
 
-Box::pin(async move {
+Reply::pending(async move {
     use_value(value).await;
 })
 
 // Bad - cloning entire model when you only need one field
 let model = actor.model.clone();
 
-Box::pin(async move {
+Reply::pending(async move {
     use_value(model.expensive_data).await;
 })
 ```
@@ -426,7 +433,7 @@ Version 5.0 renamed the handler methods for clarity:
 ```rust
 builder.act_on::<MyMessage>(|actor, _| {
     actor.model.value += 1;  // Was mutable in v4
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -436,13 +443,13 @@ builder.act_on::<MyMessage>(|actor, _| {
 // For mutations, use mutate_on
 builder.mutate_on::<MyMessage>(|actor, _| {
     actor.model.value += 1;
-    ActorReply::immediate()
+    Reply::ready()
 });
 
 // act_on is now read-only and concurrent
 builder.act_on::<QueryMessage>(|actor, _| {
     let value = actor.model.value;  // Read-only
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 

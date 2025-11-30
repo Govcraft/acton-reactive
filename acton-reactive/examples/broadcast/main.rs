@@ -100,7 +100,7 @@ async fn main() {
             // Broadcast a status update via the broker.
             let broker_handle = actor.broker().clone();
             let message = envelope.message().0;
-            Box::pin(async move {
+            Reply::pending(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Updated("DataCollector".to_string(), message))
                     .await;
@@ -109,7 +109,7 @@ async fn main() {
         // After starting, broadcast its readiness.
         .after_start(|actor| {
             let broker_handle = actor.broker().clone();
-            Box::pin(async move {
+            Reply::pending(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Ready(
                         "DataCollector".to_string(),
@@ -129,7 +129,7 @@ async fn main() {
             // Broadcast an update with the current sum.
             let broker_handle = actor.broker().clone();
             let sum = actor.model.sum;
-            Box::pin(async move {
+            Reply::pending(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Updated("Aggregator".to_string(), sum))
                     .await;
@@ -138,7 +138,7 @@ async fn main() {
         // After starting, broadcast its readiness.
         .after_start(|actor| {
             let broker_handle = actor.broker().clone();
-            Box::pin(async move {
+            Reply::pending(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Ready(
                         "Aggregator".to_string(),
@@ -151,7 +151,7 @@ async fn main() {
         .before_stop(|actor| {
             let broker_handle = actor.broker().clone();
             let sum = actor.model.sum;
-            Box::pin(async move {
+            Reply::pending(async move {
                 broker_handle.broadcast(StatusUpdate::Done(sum)).await;
             })
         });
@@ -198,7 +198,7 @@ async fn main() {
                 }
             }
 
-            ActorReply::immediate()
+            Reply::ready()
         })
         // After starting, broadcast its readiness.
         .after_start(|actor| {
@@ -206,7 +206,7 @@ async fn main() {
             // the `actor` reference in lifecycle hooks is immutable, and `execute!`
             // requires a mutable reference to `actor.model.out`.
             let broker_handle = actor.broker().clone();
-            Box::pin(async move {
+            Reply::pending(async move {
                 broker_handle
                     .broadcast(StatusUpdate::Ready(
                         "Printer".to_string(),

@@ -33,7 +33,7 @@ use acton_reactive::prelude::*;
 | `MessageAddress` | `message` | Actor endpoint address |
 | `OutboundEnvelope` | `message` | Message wrapper for sending |
 | `BrokerRequest` | `message` | Broadcast message wrapper |
-| `ActorReply` | `common` | Utility for handler return types |
+| `Reply` | `common` | Utility for handler return types |
 
 ### Included Macros
 
@@ -150,7 +150,7 @@ impl<Model> ManagedActor<Idle, Model> {
         M: ActonMessage;
 
     /// Register a fallible mutable handler
-    pub fn mutate_on_fallible<M>(
+    pub fn try_mutate_on<M>(
         &mut self,
         handler: impl Fn(&mut ManagedActor<Started, Model>, &mut MessageContext<M>)
             -> impl Future<Output = Result<Box<dyn ActonMessageReply>, Box<dyn Error>>>
@@ -160,7 +160,7 @@ impl<Model> ManagedActor<Idle, Model> {
         M: ActonMessage;
 
     /// Register a fallible read-only handler
-    pub fn act_on_fallible<M>(
+    pub fn try_act_on<M>(
         &mut self,
         handler: impl Fn(&ManagedActor<Started, Model>, &mut MessageContext<M>)
             -> impl Future<Output = Result<Box<dyn ActonMessageReply>, Box<dyn Error>>>
@@ -260,14 +260,12 @@ let mut actor = runtime.new_actor::<CounterState>();
 
 actor
     .mutate_on::<Increment>(|actor, ctx| {
-        Box::pin(async move {
-            actor.model_mut().count += ctx.message().0;
-        })
+        actor.model.count += ctx.message().0;
+        Reply::ready()
     })
     .before_start(|actor| {
-        Box::pin(async move {
-            println!("Actor starting with count: {}", actor.model().count);
-        })
+        println!("Actor starting with count: {}", actor.model.count);
+        Reply::ready()
     });
 
 let handle = actor.start().await;
@@ -484,6 +482,100 @@ impl<M: ActonMessage> MessageContext<M> {
     /// Send a reply to the sender
     pub fn reply(&self, message: impl ActonMessage);
 }
+```
+
+---
+
+### Reply
+
+Utility struct providing convenient helpers for creating handler return types.
+
+```rust
+pub struct Reply;
+
+impl Reply {
+    // =========================================================================
+    // Infallible handlers (mutate_on, act_on)
+    // =========================================================================
+
+    /// Creates an immediately resolving future for synchronous handlers.
+    pub fn ready() -> Pin<Box<impl Future<Output = ()> + Sized>>;
+
+    /// Wraps an async block into the required handler return type.
+    pub fn pending<F>(future: F) -> Pin<Box<F>>
+    where
+        F: Future<Output = ()> + Sized;
+
+    // =========================================================================
+    // Fallible handlers (try_mutate_on, try_act_on)
+    // =========================================================================
+
+    /// Wraps an async block returning Result for fallible handlers.
+    pub fn try_pending<F, T, E>(future: F) -> Pin<Box<F>>
+    where
+        F: Future<Output = Result<T, E>> + Send + Sync + 'static,
+        T: ActonMessageReply + 'static,
+        E: Error + Send + Sync + 'static;
+
+    /// Creates an immediate success result for fallible handlers.
+    pub fn try_ok<T, E>(value: T) -> Pin<Box<impl Future<Output = Result<T, E>> + Send + Sync>>
+    where
+        T: ActonMessageReply + Send + Sync + 'static,
+        E: Error + Send + Sync + 'static;
+
+    /// Creates an immediate error result for fallible handlers.
+    pub fn try_err<T, E>(error: E) -> Pin<Box<impl Future<Output = Result<T, E>> + Send + Sync>>
+    where
+        T: ActonMessageReply + Send + Sync + 'static,
+        E: Error + Send + Sync + 'static;
+}
+```
+
+#### Usage by Handler Type
+
+| Handler Type | Sync Return | Async Return |
+|--------------|-------------|--------------|
+| `mutate_on` / `act_on` | `Reply::ready()` | `Reply::pending(async { })` |
+| `try_mutate_on` / `try_act_on` | `Reply::try_ok(val)` or `Reply::try_err(err)` | `Reply::try_pending(async { Ok/Err })` |
+
+**Examples:**
+
+```rust
+// Infallible synchronous handler
+actor.mutate_on::<Increment>(|actor, ctx| {
+    actor.model.count += 1;
+    Reply::ready()
+});
+
+// Infallible async handler
+actor.mutate_on::<SendNotification>(|actor, ctx| {
+    let handle = actor.handle().clone();
+    Reply::pending(async move {
+        handle.send(Notification::new()).await;
+    })
+});
+
+// Fallible handler with immediate result
+actor.try_mutate_on::<Withdraw>(|actor, ctx| {
+    let amount = ctx.message().amount;
+    if actor.model.balance >= amount {
+        actor.model.balance -= amount;
+        Reply::try_ok(WithdrawSuccess { remaining: actor.model.balance })
+    } else {
+        Reply::try_err(InsufficientFunds { balance: actor.model.balance })
+    }
+});
+
+// Fallible handler with async result
+actor.try_mutate_on::<ProcessPayment>(|actor, ctx| {
+    let payment_service = actor.model.payment_service.clone();
+    let amount = ctx.message().amount;
+
+    Reply::try_pending(async move {
+        payment_service.charge(amount).await?;
+        Ok(PaymentSuccess { amount })
+    })
+});
 ```
 
 ---

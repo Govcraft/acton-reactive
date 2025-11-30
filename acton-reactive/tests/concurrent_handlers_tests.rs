@@ -101,7 +101,7 @@ async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
             let _count = actor.model.read_only_count.fetch_add(1, Ordering::SeqCst);
 
             // Simulate some work to test concurrency
-            Box::pin(async move {
+            Reply::pending(async move {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 // This should be safe for concurrent execution
             })
@@ -109,7 +109,7 @@ async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
         .mutate_on::<MutableMessage>(|actor, _envelope| {
             // This should have mutable access - using &mut ConcurrentTestActor
             actor.model.mutable_count += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             let readonly_count = actor.model.read_only_count.load(Ordering::SeqCst);
@@ -118,7 +118,7 @@ async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
                 actor.model.mutable_count, 5,
                 "Should have 5 mutable executions"
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = actor_builder.start().await;
@@ -155,7 +155,7 @@ async fn test_concurrent_readonly_state_safety() -> anyhow::Result<()> {
                 .concurrent_executions
                 .fetch_add(1, Ordering::SeqCst);
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 // Ensure we don't have mutable access to non-atomic fields
                 // This would not compile if we tried to mutate non-atomic state
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -164,7 +164,7 @@ async fn test_concurrent_readonly_state_safety() -> anyhow::Result<()> {
         .after_stop(|actor| {
             let count = actor.model.concurrent_executions.load(Ordering::SeqCst);
             assert!(count > 0, "Should have some concurrent executions");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = actor_builder.start().await;
@@ -218,14 +218,14 @@ async fn test_readonly_complex_data_access() -> anyhow::Result<()> {
                 .fetch_add(usize::try_from(sum).unwrap_or(0), Ordering::SeqCst);
             actor.model.read_count.fetch_add(1, Ordering::SeqCst);
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             })
         })
         .mutate_on::<AddData>(|actor, envelope| {
             // Mutable access to add data
             actor.model.data.push(envelope.message().0);
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             let total = actor.model.total.load(Ordering::SeqCst);
@@ -237,7 +237,7 @@ async fn test_readonly_complex_data_access() -> anyhow::Result<()> {
                 7,
                 "Should have 7 items after additions"
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = actor_builder.start().await;
@@ -270,7 +270,7 @@ async fn test_concurrent_performance() -> anyhow::Result<()> {
         .act_on::<PerformanceMessage>(|actor, _envelope| {
             actor.model.counter.fetch_add(1, Ordering::SeqCst);
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 // Simulate work
                 tokio::time::sleep(Duration::from_millis(10)).await;
             })
@@ -286,7 +286,7 @@ async fn test_concurrent_performance() -> anyhow::Result<()> {
                 elapsed < Duration::from_millis(500),
                 "Concurrent execution should complete within reasonable time"
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = actor_builder.start().await;
@@ -316,7 +316,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
             let completion_times = actor.model.completion_times.clone();
             let message_count = actor.model.message_count.clone();
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 // Each handler waits 1 second
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -354,7 +354,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
                 "Total time for 10 concurrent 1-second handlers: {:?}",
                 total_elapsed
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = actor_builder.start().await;
@@ -386,7 +386,7 @@ async fn test_mixed_handlers() -> anyhow::Result<()> {
             let _ = actor.model.data.len();
             actor.model.read_only_hits.fetch_add(1, Ordering::SeqCst);
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             })
         })
@@ -394,7 +394,7 @@ async fn test_mixed_handlers() -> anyhow::Result<()> {
             // Mutable: actually modify state
             actor.model.data.push(envelope.message().0.clone());
             actor.model.mutable_hits += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .act_on::<StatsRequest>(|actor, _envelope| {
             // Read-only stats access
@@ -402,7 +402,7 @@ async fn test_mixed_handlers() -> anyhow::Result<()> {
             let mutable_count = actor.model.mutable_hits;
             let data_count = actor.model.data.len();
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 tracing::info!(
                     "Stats: read={}, mutable={}, data={}",
                     read_count,
@@ -419,7 +419,7 @@ async fn test_mixed_handlers() -> anyhow::Result<()> {
                 "Should have 4 mutable operations"
             );
             assert_eq!(actor.model.data.len(), 4, "Should have 4 data items");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = actor_builder.start().await;

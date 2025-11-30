@@ -13,7 +13,7 @@
 //! *   [`ActorHandle`]: The primary interface for interacting with individual actors (sending
 //!     messages, stopping, supervising).
 //! *   [`Broker`]: The central publish-subscribe message broker implementation.
-//! *   [`ActorReply`]: A utility struct for creating standard return types for message handlers.
+//! *   [`Reply`]: A utility struct for creating standard return types for message handlers.
 //!
 //! Internal types and submodules handle the implementation details for these components.
 
@@ -35,15 +35,15 @@
 
 // --- Public Re-exports ---
 pub use acton::ActonApp;
-pub use broker::Broker;
 pub use actor_handle::ActorHandle;
-pub use actor_reply::ActorReply;
+pub use actor_reply::Reply;
 pub use actor_runtime::ActorRuntime;
+pub use broker::Broker;
 pub use config::ActonConfig;
 
 // --- Crate-Internal Re-exports ---
-pub use types::*; // Re-export all types from the internal `types` module
-pub use crate::message::{Envelope, MessageError, OutboundEnvelope}; // Used by common components
+pub use crate::message::{Envelope, MessageError, OutboundEnvelope};
+pub use types::*; // Re-export all types from the internal `types` module // Used by common components
 
 // --- Submodules ---
 
@@ -56,12 +56,12 @@ mod acton;
 mod acton_inner;
 /// Defines the `ActorHandle` for actor interaction.
 mod actor_handle;
-/// Defines the `Broker` implementation.
-mod broker;
+/// Defines the `Reply` utility.
+mod actor_reply;
 /// Defines the `ActorRuntime` for managing the system.
 mod actor_runtime;
-/// Defines the `ActorReply` utility.
-mod actor_reply;
+/// Defines the `Broker` implementation.
+mod broker;
 /// Defines the configuration system for the Acton framework.
 pub mod config;
 

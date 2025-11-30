@@ -459,7 +459,7 @@ async fn create_counter_actor(
                 });
             }
 
-            Box::pin(async {})
+            Reply::ready()
         })
         .mutate_on::<Decrement>(move |actor, envelope| {
             let amount = envelope.message().amount;
@@ -475,7 +475,7 @@ async fn create_counter_actor(
                 });
             }
 
-            Box::pin(async {})
+            Reply::ready()
         });
 
     counter.start().await
@@ -503,7 +503,7 @@ async fn create_logger_actor(
             });
         }
 
-        Box::pin(async {})
+        Reply::ready()
     });
 
     logger.start().await
@@ -532,7 +532,7 @@ async fn create_config_actor(
                 });
             }
 
-            Box::pin(async {})
+            Reply::ready()
         })
         .mutate_on::<GetConfig>(move |actor, envelope| {
             let key = envelope.message().key.clone();
@@ -548,7 +548,7 @@ async fn create_config_actor(
                 });
             }
 
-            Box::pin(async {})
+            Reply::ready()
         });
 
     config.start().await

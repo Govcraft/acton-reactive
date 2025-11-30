@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use acton_reactive::prelude::{acton_actor, ActorHandle, ActorReply, ActorRuntime};
+use acton_reactive::prelude::{acton_actor, ActorHandle, Reply, ActorRuntime};
 use handlebars::Handlebars;
 use crate::messages::InitProject;
 use tracing::{error, info};
@@ -90,7 +90,7 @@ impl ScaffoldActor {
                 error!("Error writing messages/my_message.rs: {}", e);
             }
 
-            info!("Project '{}' created successfully!", project_name);            ActorReply::immediate()
+            info!("Project '{}' created successfully!", project_name);            Reply::ready()
         });
 
         actor.start().await

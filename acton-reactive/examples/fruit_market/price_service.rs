@@ -57,8 +57,8 @@ impl PriceService {
             // Get a handle to the message broker for broadcasting the response.
             let broker_handle = actor.broker().clone();
 
-            // Use ActorReply::from_async to handle the asynchronous price lookup and broadcast.
-            ActorReply::from_async(async move {
+            // Use Reply::from_async to handle the asynchronous price lookup and broadcast.
+            Reply::pending(async move {
                 let mut item = item;
                 // Simulate getting the price (includes an artificial delay).
                 // Calls the `get_price` method on the cloned model state.

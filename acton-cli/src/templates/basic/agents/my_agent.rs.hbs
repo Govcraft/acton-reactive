@@ -13,7 +13,7 @@ let mut actor = runtime.new_actor::
     <MyMessage>(|actor, context| {
         info!("MyMessage received by MyActor.");
 
-        ActorReply::immediate()
+        Reply::ready()
         });
 
         actor.start().await

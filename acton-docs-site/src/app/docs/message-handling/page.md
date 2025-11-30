@@ -18,8 +18,8 @@ This guide provides an in-depth look at message handling in `acton-reactive`, in
 |---------|-------------|----------|-------------|
 | `mutate_on` | Mutable | No | Sequential |
 | `act_on` | Read-only | No | Concurrent |
-| `mutate_on_fallible` | Mutable | Yes | Sequential |
-| `act_on_fallible` | Read-only | Yes | Concurrent |
+| `try_mutate_on` | Mutable | Yes | Sequential |
+| `try_act_on` | Read-only | Yes | Concurrent |
 
 ### mutate_on
 
@@ -31,7 +31,7 @@ actor.mutate_on::<UpdateCounter>(|actor, ctx| {
     actor.model.counter += ctx.message().increment;
 
     // Return type is a future
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -51,7 +51,7 @@ actor.act_on::<GetStatus>(|actor, ctx| {
     let status = actor.model.status.clone();
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         reply.send(StatusResponse(status)).await;
     })
 });
@@ -63,20 +63,37 @@ actor.act_on::<GetStatus>(|actor, ctx| {
 - Cannot return errors (infallible)
 - Use for queries and notifications
 
-### mutate_on_fallible
+### try_mutate_on
 
 Use when state mutation can fail.
 
 ```rust
-actor.mutate_on_fallible::<ProcessPayment>(|actor, ctx| {
+actor.try_mutate_on::<ProcessPayment>(|actor, ctx| {
     let amount = ctx.message().amount;
+    let balance = actor.model.balance;
 
-    Box::pin(async move {
-        if actor.model.balance < amount {
-            Err(Box::new(InsufficientFunds) as Box<dyn std::error::Error>)
+    if balance < amount {
+        // Immediate error - no async needed
+        Reply::try_err(InsufficientFunds { balance, required: amount })
+    } else {
+        actor.model.balance -= amount;
+        // Immediate success - no async needed
+        Reply::try_ok(PaymentSuccess { remaining: balance - amount })
+    }
+});
+
+// Or with async operations:
+actor.try_mutate_on::<ProcessPayment>(|actor, ctx| {
+    let amount = ctx.message().amount;
+    let balance = actor.model.balance;
+    let payment_service = actor.model.payment_service.clone();
+
+    Reply::try_pending(async move {
+        if balance < amount {
+            Err(InsufficientFunds { balance, required: amount })
         } else {
-            actor.model.balance -= amount;
-            Ok(Box::new(PaymentSuccess) as Box<dyn ActonMessageReply>)
+            payment_service.charge(amount).await?;
+            Ok(PaymentSuccess { remaining: balance - amount })
         }
     })
 });
@@ -88,18 +105,29 @@ actor.mutate_on_fallible::<ProcessPayment>(|actor, ctx| {
 - Requires error handler registration
 - Use for operations that can fail
 
-### act_on_fallible
+### try_act_on
 
-Use for concurrent operations that can fail.
+Use for concurrent read-only operations that can fail.
 
 ```rust
-actor.act_on_fallible::<ValidateToken>(|actor, ctx| {
+actor.try_act_on::<ValidateToken>(|actor, ctx| {
     let token = ctx.message().token.clone();
+    let validator = actor.model.validator.clone();
 
-    Box::pin(async move {
-        let is_valid = validate(&token).await?;
-        Ok(Box::new(ValidationResult(is_valid)) as Box<dyn ActonMessageReply>)
+    Reply::try_pending(async move {
+        let is_valid = validator.validate(&token).await?;
+        Ok(ValidationResult { valid: is_valid })
     })
+});
+
+// Or with immediate result:
+actor.try_act_on::<CheckCache>(|actor, ctx| {
+    let key = ctx.message().key.clone();
+
+    match actor.model.cache.get(&key) {
+        Some(value) => Reply::try_ok(CacheHit { value: value.clone() }),
+        None => Reply::try_err(CacheMiss { key }),
+    }
 });
 ```
 
@@ -134,7 +162,7 @@ actor.mutate_on::<MyMessage>(|actor, ctx| {
     // Convenience method to reply
     ctx.reply(ResponseMessage { data: 42 });
 
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -146,7 +174,7 @@ The reply envelope is pre-addressed to the sender:
 actor.mutate_on::<Request>(|actor, ctx| {
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         // Async send
         reply.send(Response { success: true }).await;
 
@@ -223,23 +251,21 @@ impl std::fmt::Display for ValidationError {
 }
 
 // Register fallible handler
-actor.mutate_on_fallible::<ProcessData>(|actor, ctx| {
+actor.try_mutate_on::<ProcessData>(|actor, ctx| {
     let data = ctx.message().data.clone();
 
-    Box::pin(async move {
-        if data.is_empty() {
-            Err(Box::new(ValidationError("Empty data".into())) as Box<dyn std::error::Error>)
-        } else {
-            Ok(Box::new(Success) as Box<dyn ActonMessageReply>)
-        }
-    })
+    if data.is_empty() {
+        Reply::try_err(ValidationError("Empty data".into()))
+    } else {
+        Reply::try_ok(Success)
+    }
 });
 
 // Register error handler for specific error type
 actor.on_error::<ProcessData, ValidationError>(|actor, ctx, error| {
     println!("Validation failed: {}", error.0);
     // Optionally update state, send notifications, etc.
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -270,7 +296,7 @@ actor.mutate_on::<GetBalance>(|actor, ctx| {
     let balance = actor.model.balance;
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         reply.send(BalanceResponse(balance)).await;
     })
 });
@@ -284,7 +310,7 @@ For fire-and-forget messages:
 actor.mutate_on::<LogEvent>(|actor, ctx| {
     actor.model.events.push(ctx.message().clone());
     // No reply needed
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -297,7 +323,7 @@ actor.mutate_on::<StreamRequest>(|actor, ctx| {
     let items = actor.model.items.clone();
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         for item in items {
             reply.send(StreamItem(item)).await;
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -319,7 +345,7 @@ Actors can send messages to themselves:
 actor.mutate_on::<StartProcess>(|actor, ctx| {
     let self_handle = actor.handle().clone();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         // Process step 1
         // ...
 
@@ -339,7 +365,7 @@ actor.mutate_on::<ScheduleTask>(|actor, ctx| {
     let self_handle = actor.handle().clone();
     let task = ctx.message().task.clone();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         tokio::time::sleep(delay).await;
         self_handle.send(ExecuteTask(task)).await;
     })
@@ -356,7 +382,7 @@ actor.mutate_on::<InitiateProcess>(|actor, ctx| {
     let service = actor.model.service_handle.clone();
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         // Create envelope that routes response back to us
         let envelope = service.create_envelope(reply.return_address());
         envelope.send(ServiceRequest { /* ... */ }).await;
@@ -367,7 +393,7 @@ actor.mutate_on::<InitiateProcess>(|actor, ctx| {
 actor.mutate_on::<ServiceResponse>(|actor, ctx| {
     // Handle the response
     actor.model.last_result = Some(ctx.message().result.clone());
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -391,7 +417,7 @@ actor.mutate_on::<AggregateRequest>(|actor, ctx| {
     actor.model.results.clear();
     actor.model.requester = Some(ctx.reply_envelope().return_address().clone());
 
-    Box::pin(async move {
+    Reply::pending(async move {
         for worker in workers {
             let envelope = worker.create_envelope(&self_handle.reply_address());
             envelope.send(WorkRequest { /* ... */ }).await;
@@ -409,13 +435,13 @@ actor.mutate_on::<WorkResult>(|actor, ctx| {
             let results = actor.model.results.clone();
             let envelope = actor.handle().create_envelope(requester);
 
-            return Box::pin(async move {
+            return Reply::pending(async move {
                 envelope.send(AggregatedResults(results)).await;
             });
         }
     }
 
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -423,32 +449,45 @@ actor.mutate_on::<WorkResult>(|actor, ctx| {
 
 ## Handler Return Types
 
-### ActorReply Helpers
+The `Reply` struct provides convenient helpers for creating handler return types.
+
+### Infallible Handlers (`mutate_on`, `act_on`)
 
 ```rust
 // For synchronous handlers (no async work)
-ActorReply::immediate()
+Reply::ready()
 
 // For async handlers
-ActorReply::from_async(async move {
-    // async work
-})
-
-// Using Box::pin directly
-Box::pin(async move {
+Reply::pending(async move {
     // async work
 })
 ```
 
-### Fallible Handler Returns
+### Fallible Handlers (`try_mutate_on`, `try_act_on`)
 
 ```rust
-// Success case
-Ok(Box::new(SuccessResponse { data }) as Box<dyn ActonMessageReply>)
+// Async handler returning Result
+Reply::try_pending(async move {
+    if condition {
+        Ok(SuccessResponse { data })
+    } else {
+        Err(MyError::new("reason"))
+    }
+})
 
-// Error case
-Err(Box::new(MyError::new("reason")) as Box<dyn std::error::Error>)
+// Immediate success (no async work)
+Reply::try_ok(SuccessResponse { data })
+
+// Immediate error (no async work)
+Reply::try_err(MyError::new("reason"))
 ```
+
+### Summary Table
+
+| Handler Type | Sync Return | Async Return |
+|-------------|-------------|--------------|
+| `mutate_on` / `act_on` | `Reply::ready()` | `Reply::pending(async { })` |
+| `try_mutate_on` / `try_act_on` | `Reply::try_ok(val)` or `Reply::try_err(err)` | `Reply::try_pending(async { Ok/Err })` |
 
 ---
 

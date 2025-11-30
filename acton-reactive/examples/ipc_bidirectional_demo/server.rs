@@ -156,7 +156,7 @@ async fn create_calculator_actor(runtime: &mut ActorRuntime) -> ActorHandle {
 
         // Send the response back to the IPC client via reply_envelope
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(response).await;
         })
     });
@@ -179,7 +179,7 @@ async fn create_calculator_actor(runtime: &mut ActorRuntime) -> ActorHandle {
 
         // Send the response back to the IPC client
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(response).await;
         })
     });
@@ -207,7 +207,7 @@ async fn create_kv_store_actor(runtime: &mut ActorRuntime) -> ActorHandle {
         println!("  [KV Store] Set: {key} = \"{value}\"");
 
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(response).await;
         })
     });
@@ -231,7 +231,7 @@ async fn create_kv_store_actor(runtime: &mut ActorRuntime) -> ActorHandle {
         );
 
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(response).await;
         })
     });

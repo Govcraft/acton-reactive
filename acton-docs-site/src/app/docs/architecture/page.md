@@ -293,8 +293,8 @@ graph TB
     subgraph HandlerReg["Handler Registration"]
         MutateOn["mutate_on"]
         ActOn["act_on"]
-        MutateOnFallible["mutate_on_fallible"]
-        ActOnFallible["act_on_fallible"]
+        MutateOnFallible["try_mutate_on"]
+        ActOnFallible["try_act_on"]
     end
 
     subgraph HandlerStore["Handler Storage"]
@@ -572,7 +572,7 @@ acton-reactive/src/
 │   ├── actor_runtime.rs      # ActorRuntime
 │   ├── actor_handle.rs       # ActorHandle
 │   ├── actor_broker.rs       # ActorBroker
-│   ├── actor_reply.rs        # ActorReply utility
+│   ├── actor_reply.rs        # Reply utility
 │   ├── config.rs             # ActonConfig
 │   └── ipc/                   # IPC module (feature-gated)
 ├── message/

@@ -23,7 +23,7 @@ async fn main() {
     let mut actor = app.new_actor::<Counter>();
     actor.mutate_on::<Increment>(|actor, ctx| {
         actor.model.count += ctx.message().0;
-        ActorReply::immediate()
+        Reply::ready()
     });
     let handle = actor.start().await;
     handle.send(Increment(1)).await;

@@ -20,7 +20,7 @@ use std::fmt::Debug;
 /// A trait for message handler return values that can be downcast.
 ///
 /// This trait is used to enable type-safe handling of the `Ok` variant
-/// from a fallible message handler (`act_on_fallible`). By requiring `Any`,
+/// from a fallible message handler (`try_act_on`). By requiring `Any`,
 /// we can downcast the trait object back to its concrete type.
 pub trait ActonMessageReply: Any + Debug + Send {
     /// Returns self as `Any` so that it can be downcast.

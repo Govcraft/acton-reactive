@@ -204,13 +204,15 @@ impl Printer {
                 // Check if an item with the same name already exists (regardless of state).
                 let item_exists = actor.model.items.iter().any(|entry| match entry.value() {
                     DisplayItem::Item(existing_item) => existing_item.name() == item.name(),
-                    DisplayItem::Loader(existing_name) => existing_name.as_str() == item.name().as_str(),
+                    DisplayItem::Loader(existing_name) => {
+                        existing_name.as_str() == item.name().as_str()
+                    }
                     DisplayItem::Startup => false,
                 });
 
                 if item_exists {
                     trace!("Item already exists or is loading: {}", item.name());
-                    ActorReply::immediate() // No change, no repaint needed from here
+                    Reply::ready() // No change, no repaint needed from here
                 } else {
                     // If item doesn't exist, insert a Loader entry.
                     actor.model.items.insert(
@@ -221,7 +223,7 @@ impl Printer {
                     actor.model.loaded = false;
                     // Trigger a repaint asynchronously by sending a message to self.
                     let self_handle = actor.handle().clone();
-                    ActorReply::from_async(async move {
+                    Reply::pending(async move {
                         // Send repaint message instead of calling directly
                         self_handle.send(PrinterMessage::Repaint).await;
                     })
@@ -273,7 +275,7 @@ impl Printer {
 
                 // Trigger repaint after update.
                 let self_handle = actor.handle().clone();
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     self_handle.send(PrinterMessage::Repaint).await;
                 })
             })
@@ -282,7 +284,7 @@ impl Printer {
                 actor.model.show_help = !actor.model.show_help;
                 // Trigger repaint
                 let self_handle = actor.handle().clone();
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     self_handle.send(PrinterMessage::Repaint).await;
                 })
             })
@@ -300,7 +302,7 @@ impl Printer {
                 if let Err(e) = Self::repaint(&actor.model) {
                     error!("Failed to repaint UI: {}", e);
                 }
-                ActorReply::immediate()
+                Reply::ready()
             })
             // After start: Hide cursor and send initial repaint message.
             .after_start(|actor| {
@@ -308,7 +310,7 @@ impl Printer {
                 let _ = execute!(stdout, cursor::Hide);
                 // Send initial repaint message to self.
                 let self_handle = actor.handle().clone();
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     self_handle.send(PrinterMessage::Repaint).await;
                 })
             });

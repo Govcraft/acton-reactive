@@ -127,7 +127,7 @@ async fn test_backward_compatibility() -> Result<(), anyhow::Error> {
     let mut actor_builder = app.new_actor::<CounterActor>();
     actor_builder.mutate_on::<Increment>(|actor, _| {
         actor.model.count += 1;
-        ActorReply::immediate()
+        Reply::ready()
     });
 
     let handle = actor_builder.start().await;
@@ -160,7 +160,7 @@ async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
     let mut actor_builder = app.new_actor::<CounterActor>();
     actor_builder.mutate_on::<Increment>(|actor, _| {
         actor.model.count += 1;
-        ActorReply::immediate()
+        Reply::ready()
     });
 
     let handle = actor_builder.start().await;

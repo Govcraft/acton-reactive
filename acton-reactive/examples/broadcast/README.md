@@ -62,11 +62,11 @@ actor.model.data_points.push(envelope.message().0);
 
 let broker = actor.broker().clone();
 let message = format ! ("DataCollector received new data: {}", envelope.message().0.clone());
-ActorReply::from_async(async move { broker.broadcast(PrintMessage(message)).await })
+Reply::pending(async move { broker.broadcast(PrintMessage(message)).await })
 })
 .after_start( | actor| {
 let broker = actor.broker().clone();
-ActorReply::from_async(async move {
+Reply::pending(async move {
 broker.broadcast(PrintMessage("DataCollector is ready to collect data!".to_string())).await;
 })
 });
@@ -85,20 +85,20 @@ let broker = actor.broker().clone();
 let sum = actor.model.sum;
 let message = format! ("Aggregator updated sum: {}", sum);
 
-ActorReply::from_async(async move {
+Reply::pending(async move {
 broker.broadcast(PrintMessage(message)).await;
 })
 })
 .after_start( | actor| {
 let broker = actor.broker().clone();
-ActorReply::from_async(async move {
+Reply::pending(async move {
 broker.broadcast(PrintMessage("Aggregator is ready to sum data!".to_string())).await;
 })
 })
 .before_stop( | actor| {
 let broker = actor.broker().clone();
 let sum = actor.model.sum;
-ActorReply::from_async(async move {
+Reply::pending(async move {
 broker.broadcast(PrintMessage(format ! ("Final sum: {sum}"))).await;
 })
 });
@@ -112,11 +112,11 @@ The `Printer` handles all output:
 printer
 .act_on::<PrintMessage>( | _actor, envelope| {
 println ! ("Printer received: {}", envelope.message().0);
-ActorReply::immediate()
+Reply::ready()
 })
 .after_start( | actor| {
 let broker = actor.broker().clone();
-ActorReply::from_async(async move {
+Reply::pending(async move {
 broker.broadcast(PrintMessage("Printer is ready to display messages!".to_string())).await;
 })
 });

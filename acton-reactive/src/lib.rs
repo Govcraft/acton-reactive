@@ -78,9 +78,9 @@ pub(crate) mod traits;
 #[cfg(feature = "ipc")]
 pub mod ipc {
     pub use crate::common::ipc::{
-        socket_exists, socket_is_alive, start_listener, ActorInfo, IpcConfig,
-        IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcListenerHandle,
-        IpcListenerStats, IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
+        socket_exists, socket_is_alive, start_listener, ActorInfo, IpcConfig, IpcDiscoverRequest,
+        IpcDiscoverResponse, IpcEnvelope, IpcError, IpcListenerHandle, IpcListenerStats,
+        IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
         IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest, ProtocolCapabilities,
         ProtocolVersionInfo, ShutdownResult,
     };
@@ -98,11 +98,11 @@ pub mod ipc {
             write_response, write_response_with_format, write_stream_frame,
             write_stream_frame_with_format, write_subscribe_with_format,
             write_subscription_response, write_subscription_response_with_format,
-            write_unsubscribe_with_format, Format, HEADER_SIZE, HEADER_SIZE_V1, HEADER_SIZE_V2,
-            MAX_FRAME_SIZE, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION, MSG_TYPE_DISCOVER,
-            MSG_TYPE_ERROR, MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE,
-            MSG_TYPE_STREAM, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE, PROTOCOL_VERSION,
-            ProtocolVersion,
+            write_unsubscribe_with_format, Format, ProtocolVersion, HEADER_SIZE, HEADER_SIZE_V1,
+            HEADER_SIZE_V2, MAX_FRAME_SIZE, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION,
+            MSG_TYPE_DISCOVER, MSG_TYPE_ERROR, MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST,
+            MSG_TYPE_RESPONSE, MSG_TYPE_STREAM, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
+            PROTOCOL_VERSION,
         };
     }
 }
@@ -131,7 +131,7 @@ pub mod ipc {
 /// *   [`crate::common::ActonApp`]: Entry point for initializing the Acton system.
 /// *   [`crate::common::Broker`]: The central message broker implementation.
 /// *   [`crate::common::ActorHandle`]: Handle for interacting with an actor.
-/// *   [`crate::common::ActorReply`]: Utility for creating standard message handler return types.
+/// *   [`crate::common::Reply`]: Utility for creating standard message handler return types.
 /// *   [`crate::common::ActorRuntime`]: Represents the initialized Acton runtime.
 /// *   [`crate::message::BrokerRequest`]: Wrapper for messages intended for broadcast.
 /// *   [`crate::message::BrokerRequestEnvelope`]: Specialized envelope for broadcast messages.
@@ -162,9 +162,13 @@ pub mod prelude {
 
     // Core types
     pub use crate::actor::{ActorConfig, Idle, ManagedActor, Started};
-    pub use crate::common::{ActonApp, Broker, ActorHandle, ActorReply, ActorRuntime};
-    pub use crate::message::{BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope};
-    pub use crate::traits::{ActonMessage, ActorHandleInterface, Broadcaster, Subscribable, Subscriber};
+    pub use crate::common::{ActonApp, ActorHandle, ActorRuntime, Broker, Reply};
+    pub use crate::message::{
+        BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope,
+    };
+    pub use crate::traits::{
+        ActonMessage, ActorHandleInterface, Broadcaster, Subscribable, Subscriber,
+    };
 
     // IPC types (feature-gated)
     #[cfg(feature = "ipc")]

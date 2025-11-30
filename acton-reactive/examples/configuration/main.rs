@@ -44,24 +44,24 @@ async fn main() {
                 "Current config: count={}, value={}",
                 actor.model.message_count, actor.model.custom_value
             );
-            ActorReply::immediate()
+            Reply::ready()
         })
         .mutate_on::<Increment>(|actor, _| {
             actor.model.message_count += 1;
             println!("Processed message #{}", actor.model.message_count);
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_start(|_actor| {
             println!("Actor started with configuration loaded");
             println!("Check ~/.config/acton/config.toml to customize settings");
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             println!(
                 "Actor stopped after processing {} messages",
                 actor.model.message_count
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the actor

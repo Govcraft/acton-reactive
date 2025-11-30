@@ -5,7 +5,7 @@ members = ["acton-macro", "acton-test", "acton-reactive", "acton-test-macro"]
 
 # Shared package metadata
 [workspace.package]
-version = "7.0.0"
+version = "0.7.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 homepage = "https://github.com/Govcraft/acton-reactive"
@@ -14,10 +14,10 @@ repository = "https://github.com/Govcraft/acton-reactive"
 # Centralized dependencies
 [workspace.dependencies]
 # Internal crates
-acton-macro = { path = "acton-macro", version = "7.0.0" }
-acton-reactive = { path = "acton-reactive", version = "7.0.0" }
-acton_test = { path = "acton-test", version = "7.0.0" }
-acton_test_macro = { path = "acton-test-macro", version = "7.0.0" }
+acton-macro = { path = "acton-macro", version = "0.7.0" }
+acton-reactive = { path = "acton-reactive", version = "0.7.0" }
+acton_test = { path = "acton-test", version = "0.7.0" }
+acton_test_macro = { path = "acton-test-macro", version = "0.7.0" }
 
 # Async runtime
 tokio = { version = "1.37.0", features = ["rt-multi-thread", "sync", "time", "macros"] }

@@ -54,17 +54,15 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
     // Result-based handler for Ping
     actor_builder
-        .mutate_on_fallible::<Ping, (), TestErr>(|_actor, _msg_ctx| {
-            Box::pin(async { Err(TestErr) })
-        })
+        .try_mutate_on::<Ping, (), TestErr>(|_actor, _msg_ctx| Box::pin(async { Err(TestErr) }))
         .on_error::<Ping, TestErr>(|actor, _env, _err| {
             actor.model.errored = Some(true);
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Result-based handler for Tally triggers TestErr2
     actor_builder
-        .mutate_on_fallible::<Tally, (), TestErr2>(|_actor, _msg_ctx| {
+        .try_mutate_on::<Tally, (), TestErr2>(|_actor, _msg_ctx| {
             println!("Ping handler for Tally fired!");
             Box::pin(async { Err(TestErr2) })
         })
@@ -74,7 +72,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
                 "TestErr2 error handler called more than once!"
             );
             actor.model.errored2 = Some(true);
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             assert!(
@@ -85,7 +83,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
                 actor.model.errored2.is_some(),
                 "Error handler for TestErr2 was not called as expected (model.errored2 was not set)"
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let actor_handle = actor_builder.start().await;
@@ -107,7 +105,7 @@ async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
 
     // A fallible handler that returns a value on success
     actor_builder
-        .mutate_on_fallible::<Increment, usize, TestErr>(|actor, _msg_ctx| {
+        .try_mutate_on::<Increment, usize, TestErr>(|actor, _msg_ctx| {
             actor.model.count += 1;
             let current_count = actor.model.count;
             Box::pin(async move { Ok(current_count) })
@@ -121,7 +119,7 @@ async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
                 actor.model.count, 1,
                 "The counter should have been incremented."
             );
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let actor_handle = actor_builder.start().await;

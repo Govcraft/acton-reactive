@@ -78,7 +78,7 @@ async fn test_initial_state() {
     // Verify initial state via after_stop hook
     counter.after_stop(|actor| {
         assert_eq!(actor.model.count, 0);
-        ActorReply::immediate()
+        Reply::ready()
     });
 
     let _handle = counter.start().await;
@@ -101,12 +101,12 @@ async fn test_increment_handler() {
     counter
         .mutate_on::<Increment>(|actor, ctx| {
             actor.model.count += ctx.message().0;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             // Verify final state
             assert_eq!(actor.model.count, 15);
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     let handle = counter.start().await;
@@ -143,7 +143,7 @@ async fn test_with_channel_verification() {
         let count = actor.model.count;
         let tx = tx.clone();
 
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send(count).await.ok();
         })
     });
@@ -181,7 +181,7 @@ async fn test_actor_communication() {
     actor_b.mutate_on::<Greeting>(|_actor, ctx| {
         let greeting = ctx.message().0.clone();
         let tx = tx.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send(greeting).await.ok();
         })
     });
@@ -192,7 +192,7 @@ async fn test_actor_communication() {
     actor_a.mutate_on::<SendGreeting>(|_actor, ctx| {
         let target = handle_b_clone.clone();
         let message = ctx.message().0.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             target.send(Greeting(message)).await;
         })
     });
@@ -260,7 +260,7 @@ async fn test_request_response() {
     service.mutate_on::<Query>(|actor, ctx| {
         let query = ctx.message().0.clone();
         let reply = ctx.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply.send(QueryResponse(format!("Response to: {}", query))).await;
         })
     });
@@ -271,7 +271,7 @@ async fn test_request_response() {
     client.mutate_on::<QueryResponse>(|_actor, ctx| {
         let response = ctx.message().0.clone();
         let tx = tx.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send(response).await.ok();
         })
     });
@@ -310,20 +310,17 @@ async fn test_error_handling() {
     let mut actor = runtime.new_actor::<TestState>();
 
     actor
-        .mutate_on_fallible::<RiskyOperation>(|_actor, ctx| {
-            Box::pin(async move {
-                if ctx.message().should_fail {
-                    Err(Box::new(TestError("Intentional failure".to_string()))
-                        as Box<dyn std::error::Error>)
-                } else {
-                    Ok(Box::new(Success) as Box<dyn ActonMessageReply>)
-                }
-            })
+        .try_mutate_on::<RiskyOperation>(|_actor, ctx| {
+            if ctx.message().should_fail {
+                Reply::try_err(TestError("Intentional failure".to_string()))
+            } else {
+                Reply::try_ok(Success)
+            }
         })
         .on_error::<RiskyOperation, TestError>(|_actor, _ctx, error| {
             let msg = error.0.clone();
             let tx = tx.clone();
-            Box::pin(async move {
+            Reply::pending(async move {
                 tx.send(msg).await.ok();
             })
         });
@@ -361,7 +358,7 @@ async fn test_broadcast_delivery() {
     sub1.mutate_on::<DataUpdate>(|_actor, ctx| {
         let value = ctx.message().value;
         let tx = tx1.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send(value).await.ok();
         })
     });
@@ -373,7 +370,7 @@ async fn test_broadcast_delivery() {
     sub2.mutate_on::<DataUpdate>(|_actor, ctx| {
         let value = ctx.message().value;
         let tx = tx2.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send(value).await.ok();
         })
     });
@@ -405,7 +402,7 @@ async fn test_unsubscribe() {
     subscriber.mutate_on::<DataUpdate>(|_actor, ctx| {
         let value = ctx.message().value;
         let tx = tx.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send(value).await.ok();
         })
     });
@@ -508,7 +505,7 @@ async fn test_ipc_round_trip() {
     actor.mutate_on::<EchoRequest>(|_actor, ctx| {
         let msg = ctx.message().message.clone();
         let reply = ctx.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply.send(EchoResponse { message: msg }).await;
         })
     });
@@ -572,7 +569,7 @@ tokio::time::sleep(Duration::from_millis(100)).await;
 let (tx, rx) = oneshot::channel();
 actor.after_stop(|_| {
     tx.send(()).ok();
-    ActorReply::immediate()
+    Reply::ready()
 });
 // ... start and use actor
 rx.await.expect("Actor should have stopped");
@@ -659,7 +656,7 @@ mod test_helpers {
         actor.mutate_on::<Echo>(|_actor, ctx| {
             let reply = ctx.reply_envelope();
             let msg = ctx.message().clone();
-            Box::pin(async move {
+            Reply::pending(async move {
                 reply.send(msg).await;
             })
         });
@@ -681,7 +678,7 @@ async fn test_lifecycle_order() {
     let tx1 = tx.clone();
     actor.before_start(|_| {
         let tx = tx1.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send("before_start").await.ok();
         })
     });
@@ -689,7 +686,7 @@ async fn test_lifecycle_order() {
     let tx2 = tx.clone();
     actor.after_start(|_| {
         let tx = tx2.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send("after_start").await.ok();
         })
     });
@@ -697,7 +694,7 @@ async fn test_lifecycle_order() {
     let tx3 = tx.clone();
     actor.before_stop(|_| {
         let tx = tx3.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send("before_stop").await.ok();
         })
     });
@@ -705,7 +702,7 @@ async fn test_lifecycle_order() {
     let tx4 = tx.clone();
     actor.after_stop(|_| {
         let tx = tx4.clone();
-        Box::pin(async move {
+        Reply::pending(async move {
             tx.send("after_stop").await.ok();
         })
     });

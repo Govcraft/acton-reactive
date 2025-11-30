@@ -60,9 +60,8 @@ async fn main() {
             // Get an envelope pre-addressed to reply to the sender of the incoming `PingMsg`.
             let reply_envelope = envelope.reply_envelope();
 
-            // Handlers must return a future (specifically `ActorReply`, which wraps a `Pin<Box<dyn Future>>`).
-            // This allows handlers to perform asynchronous operations.
-            Box::pin(async move {
+            // Handlers must return an Reply. For async work, use `from_async`.
+            Reply::pending(async move {
                 // Send the `PongMsg` back to the original sender.
                 reply_envelope.send(PongMsg).await;
             })
@@ -76,8 +75,8 @@ async fn main() {
             // Cloning is necessary to move the handle into the async block.
             let self_handle = actor.handle().clone();
 
-            // `ActorReply::from_async` is a helper to wrap a future in the required type.
-            ActorReply::from_async(async move {
+            // `Reply::from_async` is a helper to wrap a future in the required type.
+            Reply::pending(async move {
                 // Send `BuhByeMsg` to self.
                 self_handle.send(BuhByeMsg).await;
             })
@@ -86,15 +85,15 @@ async fn main() {
         .mutate_on::<BuhByeMsg>(|_actor, _envelope| {
             println!("Thanks for all the fish! Buh Bye!");
             // If a handler doesn't need to perform async work or reply,
-            // `ActorReply::immediate()` signifies immediate completion.
-            ActorReply::immediate()
+            // `Reply::ready()` signifies immediate completion.
+            Reply::ready()
         })
         // Define a callback that runs after the actor stops.
         .after_stop(|actor| {
             println!("Actor stopped with state value: {}", actor.model.some_state);
             // Assert the final state after all messages are processed.
             debug_assert_eq!(actor.model.some_state, 2);
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // 4. Start the actor.

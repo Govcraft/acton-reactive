@@ -21,7 +21,7 @@ Before diving into code, let's understand the main building blocks:
 3.  **Handler:** A piece of code you define for an actor that specifies *how* it should react when it receives a particular type of message. There are two types:
     *   **`mutate_on`**: For operations that need to modify the actor's internal state (`&mut actor.model`). These run sequentially to ensure state consistency.
     *   **`act_on`**: For read-only operations that only need to inspect the actor's state (`&actor.model`). These run concurrently for better performance.
-    Both types return an `ActorReply`.
+    Both types return an `Reply`.
 4.  **Handle (`ActorHandle`):** An inexpensive, cloneable reference to an actor. You use an actor's handle to send messages *to* it from outside, or from other actors.
 5.  **Runtime (`ActonApp` / `ActorRuntime`):** The Acton system environment. You launch it using `ActonApp::launch()`. It manages the actors, their communication channels, and the central message broker.
 
@@ -38,7 +38,7 @@ Before diving into code, let's understand the main building blocks:
 ```rust
 builder.act_on::<MyMessage>(|actor, _| {
     actor.model.value += 1;  // mutation
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -47,13 +47,13 @@ builder.act_on::<MyMessage>(|actor, _| {
 // For mutations
 builder.mutate_on::<MyMessage>(|actor, _| {
     actor.model.value += 1;  // mutation
-    ActorReply::immediate()
+    Reply::ready()
 });
 
 // For read-only operations
 builder.act_on::<QueryMessage>(|actor, _| {
     let value = actor.model.value;  // read-only
-    ActorReply::immediate()
+    Reply::ready()
 });
 ```
 
@@ -113,7 +113,7 @@ Let's build a simple counter actor.
                 actor.model.count += 1;
                 println!("Actor {}: Incremented count to {}", actor.id(), actor.model.count);
                 // No async work needed here, return immediately.
-                ActorReply::immediate()
+                Reply::ready()
             })
             // For read-only operations, use act_on (concurrent execution)
             .act_on::<PrintMsg>(|actor, _context| {
@@ -121,7 +121,7 @@ Let's build a simple counter actor.
                 // This is a read-only operation - we only read the state
                 println!("Actor {}: Current count is {}", actor.id(), actor.model.count);
                 // We can also perform async operations within a handler.
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     // Example: Simulate some async work
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     println!("Actor {}: Finished async work in PrintMsg handler.", actor.id());
@@ -131,7 +131,7 @@ Let's build a simple counter actor.
             // Optional: Define lifecycle hooks
             .after_stop(|actor| {
                  println!("Actor {}: Final count is {}. Stopping.", actor.id(), actor.model.count);
-                 ActorReply::immediate()
+                 Reply::ready()
             });
 
         // 7. Start the Actor
@@ -172,7 +172,7 @@ While the example above covers the basics, Acton Reactive supports more patterns
 
 *   **Replying to Messages:** Inside a handler, use `context.reply_envelope()` to get an envelope addressed back to the original sender, then use `.send(YourReplyMessage).await`.
 *   **Sending to Specific Actors:** If an actor has the `ActorHandle` of another actor, it can create a new envelope using `context.new_envelope(&target_handle.reply_address())` and then `.send(YourMessage).await`.
-*   **Asynchronous Operations:** As shown in the `PrintMsg` handler, use `ActorReply::from_async(async move { ... })` to perform non-blocking tasks (like I/O) within your handlers.
+*   **Asynchronous Operations:** As shown in the `PrintMsg` handler, use `Reply::pending(async move { ... })` to perform non-blocking tasks (like I/O) within your handlers.
 *   **Lifecycle Hooks:** Use `.before_start()`, `.after_start()`, `.before_stop()`, and `.after_stop()` on the actor builder to run code during actor initialization or shutdown.
 *   **Publish/Subscribe (Broadcasting):** Actors can subscribe to specific message types using `actor_handle.subscribe::<MyMessageType>().await`. Anyone (often the central `ActorBroker` obtained via `app.broker()` or `actor.broker()`) can then `broadcast(MyMessageType)` to notify all subscribers. This is great for system-wide events.
 *   **Supervision (Parent/Child Actors):** Actors can create and manage child actors using `actor_handle.supervise(child_builder).await`. Stopping the parent will automatically stop its children.

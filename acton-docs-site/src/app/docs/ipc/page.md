@@ -261,7 +261,7 @@ calculator.mutate_on::<AddRequest>(|_actor, ctx| {
     let b = ctx.message().b;
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         reply.send(AddResult { sum: a + b }).await;
     })
 });
@@ -306,7 +306,7 @@ actor.mutate_on::<ListRequest>(|actor, ctx| {
     let items = actor.model.items.clone();
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         for chunk in items.chunks(page_size) {
             for item in chunk {
                 reply.send(ListItem {
@@ -789,7 +789,7 @@ registry.register::<HealthStatus>("HealthStatus");
 
 actor.act_on::<HealthCheck>(|_, ctx| {
     let reply = ctx.reply_envelope();
-    Box::pin(async move {
+    Reply::pending(async move {
         reply.send(HealthStatus { status: "ok".to_string() }).await;
     })
 });

@@ -23,7 +23,7 @@ This guide provides detailed walkthroughs of all example applications in the `ac
 - Defining message types
 - Registering message handlers with `mutate_on`
 - Sending replies to message senders
-- Using `ActorReply` helpers
+- Using `Reply` helpers
 
 **Code Walkthrough:**
 
@@ -50,7 +50,7 @@ actor_builder
     .mutate_on::<PingMsg>(|actor, envelope| {
         actor.model.some_state += 1;
         let reply_envelope = envelope.reply_envelope();
-        Box::pin(async move {
+        Reply::pending(async move {
             reply_envelope.send(PongMsg).await;
         })
     })
@@ -58,19 +58,19 @@ actor_builder
     .mutate_on::<PongMsg>(|actor, _envelope| {
         actor.model.some_state += 1;
         let self_handle = actor.handle().clone();
-        ActorReply::from_async(async move {
+        Reply::pending(async move {
             self_handle.send(BuhByeMsg).await;
         })
     })
     // Handle BuhBye: just log
     .mutate_on::<BuhByeMsg>(|_actor, _envelope| {
         println!("Thanks for all the fish! Buh Bye!");
-        ActorReply::immediate()
+        Reply::ready()
     })
     // Verify final state
     .after_stop(|actor| {
         assert_eq!(actor.model.some_state, 2);
-        ActorReply::immediate()
+        Reply::ready()
     });
 ```
 
@@ -119,31 +119,31 @@ cargo run --example basic
 tracker_actor_builder
     .before_start(|_| {
         println!("Actor is preparing to track items... Here we go!");
-        ActorReply::immediate()
+        Reply::ready()
     })
     .after_start(|_| {
         println!("Actor is now tracking items!");
-        ActorReply::immediate()
+        Reply::ready()
     })
     .mutate_on::<AddItem>(|actor, envelope| {
         actor.model.items.push(envelope.message().0.clone());
-        ActorReply::immediate()
+        Reply::ready()
     })
     .mutate_on::<GetItems>(|actor, _| {
         let items = actor.model.items.clone();
         // Demonstrate async work in handler
-        ActorReply::from_async(async move {
+        Reply::pending(async move {
             sleep(Duration::from_secs(2)).await;
             println!("Current items: {items:?}");
         })
     })
     .before_stop(|_| {
         println!("Actor is stopping... finishing up!");
-        ActorReply::immediate()
+        Reply::ready()
     })
     .after_stop(|actor| {
         println!("Actor stopped! Final items: {:?}", actor.model.items);
-        ActorReply::immediate()
+        Reply::ready()
     });
 ```
 
@@ -195,7 +195,7 @@ data_collector_builder
         actor.model.data_points.push(envelope.message().0);
         let broker = actor.broker().clone();
         let value = envelope.message().0;
-        Box::pin(async move {
+        Reply::pending(async move {
             broker.broadcast(StatusUpdate::Updated("DataCollector".into(), value)).await
         })
     });
@@ -452,7 +452,7 @@ actor.mutate_on::<CountdownRequest>(|_actor, ctx| {
     let delay = ctx.message().delay_ms;
     let reply = ctx.reply_envelope();
 
-    Box::pin(async move {
+    Reply::pending(async move {
         for i in (1..=start).rev() {
             // Send multiple responses
             reply.send(CountdownTick { value: i }).await;

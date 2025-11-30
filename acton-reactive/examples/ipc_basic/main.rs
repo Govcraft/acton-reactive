@@ -112,11 +112,11 @@ async fn create_printer_actor(runtime: &mut ActorRuntime) -> ActorHandle {
     printer_actor
         .act_on::<Print>(|_actor, envelope| {
             println!("{}", envelope.message().0);
-            ActorReply::immediate()
+            Reply::ready()
         })
         .act_on::<PrintSection>(|_actor, envelope| {
             println!("\n--- {} ---\n", envelope.message().0);
-            ActorReply::immediate()
+            Reply::ready()
         });
     printer_actor.start().await
 }
@@ -129,7 +129,7 @@ async fn create_price_service(runtime: &mut ActorRuntime, printer: &ActorHandle)
     price_service
         .mutate_on::<InitPrinter>(|actor, envelope| {
             actor.model.printer = Some(envelope.message().0.clone());
-            ActorReply::immediate()
+            Reply::ready()
         })
         .mutate_on::<PriceUpdate>(|actor, envelope| {
             let msg = envelope.message().clone();
@@ -137,7 +137,7 @@ async fn create_price_service(runtime: &mut ActorRuntime, printer: &ActorHandle)
             actor.model.prices.insert(msg.symbol.clone(), msg.price);
             actor.model.update_count += 1;
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 if let Some(p) = printer {
                     p.send(Print(format!(
                         "[PriceService] Received update: {} = ${:.2} (ts: {})",
@@ -153,7 +153,7 @@ async fn create_price_service(runtime: &mut ActorRuntime, printer: &ActorHandle)
             let price = actor.model.prices.get(&msg.symbol).copied();
             let reply_envelope = envelope.reply_envelope();
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 if let Some(p) = &printer {
                     p.send(Print(format!("[PriceService] Query for: {}", msg.symbol)))
                         .await;
@@ -171,7 +171,7 @@ async fn create_price_service(runtime: &mut ActorRuntime, printer: &ActorHandle)
             let update_count = actor.model.update_count;
             let prices = actor.model.prices.clone();
 
-            Box::pin(async move {
+            Reply::pending(async move {
                 if let Some(p) = printer {
                     p.send(Print(format!(
                         "\n[PriceService] Shutting down. Processed {update_count} updates."

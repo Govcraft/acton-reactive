@@ -51,7 +51,7 @@ async fn main() {
     actor.mutate_on::<Ping>(|actor, _ctx| {
         actor.model.ready = true;
         println!("Pong! acton-reactive is working.");
-        ActorReply::immediate()
+        Reply::ready()
     });
 
     let handle = actor.start().await;
@@ -312,7 +312,7 @@ use acton_reactive::prelude::*;  // Includes acton_actor, acton_message, etc.
    ```rust
    actor.mutate_on::<MyMessage>(|actor, ctx| {
        // Handler must be registered!
-       ActorReply::immediate()
+       Reply::ready()
    });
    ```
 

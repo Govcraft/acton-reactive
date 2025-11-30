@@ -112,7 +112,7 @@ impl PriceService {
                 // Get an envelope pre-addressed to reply to the sender of the incoming `Pong` message.
                 let reply_envelope = envelope.reply_envelope();
                 // Perform the reply asynchronously.
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     trace!("Sending PriceResponse");
                     // Send the PongResponse back to the original sender (ShoppingCart).
                     reply_envelope.send(PongResponse(100)).await;
@@ -146,7 +146,7 @@ impl ShoppingCart {
                     envelope.new_envelope(&price_service_handle_ref.reply_address());
                 let target_name = price_service_handle_ref.name();
                 // Send the `Pong` message asynchronously.
-                ActorReply::from_async(async move {
+                Reply::pending(async move {
                     trace!("Sending Pong to price_service id: {:?}", target_name);
                     // Send the Pong message directly to the PriceService.
                     request_envelope.send(Pong).await;
@@ -159,7 +159,7 @@ impl ShoppingCart {
                 // Assert that the received price is correct.
                 assert_eq!(price, 100);
                 info!("fin. price: {}", price);
-                ActorReply::immediate()
+                Reply::ready()
             });
 
         // Set the PriceService handle in the actor's state before starting.

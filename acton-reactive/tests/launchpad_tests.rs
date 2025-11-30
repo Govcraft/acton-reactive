@@ -98,7 +98,7 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
                             // Configure child's Pong handler.
                             child_builder.mutate_on::<Pong>(|_actor, _envelope| {
                                 info!("CHILD SUCCESS! PONG!");
-                                ActorReply::immediate()
+                                Reply::ready()
                             });
 
                             // Subscribe child to Pong messages using its builder handle.
@@ -115,12 +115,10 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
                 parent_builder
                     .mutate_on::<Ping>(|_actor, _envelope| {
                         info!("SUCCESS! PING!");
-                        ActorReply::immediate()
+                        Reply::ready()
                     })
                     // Pong handler includes an async delay.
-                    .mutate_on::<Pong>(|_actor, _envelope| {
-                        ActorReply::from_async(wait_and_respond())
-                    });
+                    .mutate_on::<Pong>(|_actor, _envelope| Reply::pending(wait_and_respond()));
 
                 // Subscribe parent to messages using its builder handle.
                 let parent_builder_handle = &parent_builder.handle().clone();
@@ -185,10 +183,10 @@ async fn test_launchpad() -> anyhow::Result<()> {
                 actor_builder
                     .mutate_on::<Ping>(|_actor, _envelope| {
                         info!("SUCCESS! PING!");
-                        ActorReply::immediate()
+                        Reply::ready()
                     })
                     .mutate_on::<Pong>(|_actor, _envelope| {
-                        Box::pin(async move {
+                        Reply::pending(async move {
                             info!("SUCCESS! PONG!");
                         })
                     });
@@ -206,7 +204,7 @@ async fn test_launchpad() -> anyhow::Result<()> {
             // Setup closure for Counter.
             Box::pin(async move {
                 actor_builder.mutate_on::<Pong>(|_actor, _envelope| {
-                    Box::pin(async move {
+                    Reply::pending(async move {
                         info!("SUCCESS! PONG!");
                     })
                 });

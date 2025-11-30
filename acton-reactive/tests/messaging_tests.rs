@@ -60,14 +60,14 @@ async fn test_messaging_behavior() -> anyhow::Result<()> {
             info!(type_name = type_name, "Received in sync handler");
             // Mutate the actor's internal state.
             actor.model.receive_count += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler executed after the actor stops.
         .after_stop(|actor| {
             assert_eq!(actor.model.receive_count, 1, "expected one Ping");
             info!("Processed {} Pings", actor.model.receive_count);
             // Implicitly verifies count is 1 based on the log message.
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the actor and get its handle.
@@ -105,12 +105,12 @@ async fn test_basic_messenger() -> anyhow::Result<()> {
         .mutate_on::<Ping>(|_actor, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in Messenger handler");
-            ActorReply::immediate()
+            Reply::ready()
         })
         // Handler executed after the actor stops.
         .after_stop(|_actor| {
             info!("Stopping");
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the actor.
@@ -122,7 +122,7 @@ async fn test_basic_messenger() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests basic message handling, seemingly intended to test async handlers but uses `ActorReply::immediate`.
+/// Tests basic message handling, seemingly intended to test async handlers but uses `Reply::immediate`.
 /// Functionally similar to `test_messaging_behavior`.
 ///
 /// **Scenario:**
@@ -145,18 +145,18 @@ async fn test_async_messaging_behavior() -> anyhow::Result<()> {
 
     pool_item_actor_builder
         // Handler for `Ping` messages. Although the test name suggests async,
-        // this handler currently returns `ActorReply::immediate()`.
+        // this handler currently returns `Reply::ready()`.
         .mutate_on::<Ping>(|actor, _envelope| {
             let type_name = std::any::type_name::<Ping>();
             info!(type_name = type_name, "Received in async handler");
             actor.model.receive_count += 1;
-            ActorReply::immediate()
+            Reply::ready()
         })
         .after_stop(|actor| {
             assert_eq!(actor.model.receive_count, 1, "expected one Ping");
             info!("Processed {} Pings", actor.model.receive_count);
             // Implicitly verifies count is 1.
-            ActorReply::immediate()
+            Reply::ready()
         });
 
     // Start the actor.
