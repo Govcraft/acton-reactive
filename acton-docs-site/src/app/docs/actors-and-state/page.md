@@ -96,22 +96,19 @@ let cart_handle = cart.start().await;
 Actors exist in two states, enforced at compile time:
 
 ```mermaid
-stateDiagram-v2
-    direction TB
-    state "ManagedActor&lt;Idle&gt;" as Idle {
-        note left of Idle
-            Available: mutate_on, act_on,
-            try_mutate_on, try_act_on,
-            lifecycle hooks, handle()
-        end note
-    }
-    state "ManagedActor&lt;Started&gt;" as Started {
-        note left of Started
-            Available: send(), stop(),
-            supervise()
-        end note
-    }
-    Idle --> Started : start().await
+flowchart TD
+    subgraph Idle["ManagedActor&lt;Idle&gt;"]
+        I1["mutate_on, act_on"]
+        I2["try_mutate_on, try_act_on"]
+        I3["lifecycle hooks, handle()"]
+    end
+
+    subgraph Started["ManagedActor&lt;Started&gt;"]
+        S1["send(), stop()"]
+        S2["supervise()"]
+    end
+
+    Idle -->|"start().await"| Started
 ```
 
 **Why this matters:** If you try to register a handler after starting, or send a message before starting, the compiler stops you. No runtime surprises.
