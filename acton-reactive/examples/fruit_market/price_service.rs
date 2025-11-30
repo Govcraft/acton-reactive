@@ -51,18 +51,15 @@ impl PriceService {
         price_service_builder.mutate_on::<ItemScanned>(|actor, envelope| {
             // Clone the item from the incoming message envelope.
             let item = envelope.message().0.clone();
-            // Clone the actor's state (PriceService is a unit struct, but this pattern is common).
-            // Cloning the model allows moving it into the async block if needed, though not strictly necessary here.
-            let model = actor.model.clone();
             // Get a handle to the message broker for broadcasting the response.
             let broker_handle = actor.broker().clone();
 
-            // Use Reply::from_async to handle the asynchronous price lookup and broadcast.
+            // Use Reply::pending to handle the asynchronous price lookup and broadcast.
+            // Note: get_price is a free function since PriceService has no state.
             Reply::pending(async move {
                 let mut item = item;
                 // Simulate getting the price (includes an artificial delay).
-                // Calls the `get_price` method on the cloned model state.
-                item.set_cost(model.get_price(item.clone()).await);
+                item.set_cost(get_price(&item).await);
                 // Create the response message containing the updated item (now with cost).
                 let response_message = PriceResponse { item };
                 // Broadcast the response message via the broker. Any actor subscribed
@@ -74,14 +71,15 @@ impl PriceService {
         // Start the actor and return its handle.
         Ok(price_service_builder.start().await)
     }
+}
 
-    /// Simulates looking up the price for a given `CartItem`.
-    /// Includes an artificial delay to mimic real-world latency.
-    async fn get_price(&self, item: CartItem) -> i32 {
-        trace!("Getting price for {}", item.name());
-        // Simulate network/database latency.
-        tokio::time::sleep(Duration::from_millis(MOCK_DELAY_MS)).await;
-        // Generate a random price within the defined range (in cents).
-        rand::rng().random_range(PRICE_MIN..=PRICE_MAX)
-    }
+/// Simulates looking up the price for a given `CartItem`.
+/// Includes an artificial delay to mimic real-world latency.
+/// This is a free function since it doesn't require any actor state.
+async fn get_price(item: &CartItem) -> i32 {
+    trace!("Getting price for {}", item.name());
+    // Simulate network/database latency.
+    tokio::time::sleep(Duration::from_millis(MOCK_DELAY_MS)).await;
+    // Generate a random price within the defined range (in cents).
+    rand::rng().random_range(PRICE_MIN..=PRICE_MAX)
 }
