@@ -254,10 +254,9 @@ sequenceDiagram
     participant Ch as Children
     participant C as Channel
     U->>A: stop() or shutdown_all()
-    opt Has Children
-        A->>Ch: Propagate stop
-        Ch-->>A: Children stopped
-    end
+    Note over A,Ch: Children stop first (if any)
+    A->>Ch: Propagate stop
+    Ch-->>A: Children stopped
     A->>A: Exit message loop
     A->>A: before_stop()
     A->>C: Close channel
