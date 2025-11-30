@@ -78,9 +78,22 @@
 pub use config::IpcConfig;
 pub use listener::{
     run as start_listener, socket_exists, socket_is_alive, IpcListenerHandle, IpcListenerStats,
+    ShutdownResult,
 };
 pub use registry::IpcTypeRegistry;
 pub use types::{IpcEnvelope, IpcError, IpcResponse};
+
+// Re-export config types for users who want to customize defaults
+pub use config::{RateLimitConfig, ShutdownConfig};
+
+// Use config types in a const to prevent unused import warnings
+// These are public API types for library consumers
+const _: () = {
+    fn _assert_config_types_usable() {
+        let _rate_limit = RateLimitConfig::default();
+        let _shutdown = ShutdownConfig::default();
+    }
+};
 
 // --- Submodules ---
 
@@ -92,6 +105,9 @@ mod listener;
 
 /// Wire protocol implementation for IPC message framing.
 pub mod protocol;
+
+/// Token bucket rate limiter for IPC connections.
+mod rate_limiter;
 
 /// Defines the [`IpcTypeRegistry`] for message type registration.
 mod registry;

@@ -388,4 +388,70 @@ impl AgentHandleInterface for AgentHandle {
             Ok(())
         }
     }
+
+    /// Tries to send a boxed message without blocking (backpressure-aware).
+    ///
+    /// This method attempts to send a message but returns immediately with an error
+    /// if the target agent's inbox is full.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message implementing `ActonMessage + Send + Sync`.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the message was successfully queued, or an `IpcError` if
+    /// the agent's inbox is full (`TargetBusy`) or the channel is closed.
+    #[cfg(feature = "ipc")]
+    #[instrument(skip(self, message))]
+    fn try_send_boxed(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+    ) -> Result<(), crate::common::ipc::IpcError> {
+        use std::sync::Arc;
+        let envelope = self.create_envelope(Some(self.reply_address()));
+        trace!(recipient = %self.id, "Trying to send boxed message via IPC (backpressure-aware)");
+        // Convert Box to Arc for the internal send mechanism
+        let arc_message: Arc<dyn ActonMessage + Send + Sync> = Arc::from(message);
+        envelope.try_send_arc(arc_message)
+    }
+
+    /// Tries to send a boxed message with a custom reply-to address without blocking.
+    ///
+    /// This method is the backpressure-aware variant of `send_boxed_with_reply_to`.
+    /// It returns immediately with an error if the target agent's inbox is full.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message implementing `ActonMessage + Send + Sync`.
+    /// * `reply_to`: The [`MessageAddress`] where responses should be sent.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the message was successfully queued, or an `IpcError` if
+    /// the agent's inbox is full (`TargetBusy`) or the channel is closed.
+    #[cfg(feature = "ipc")]
+    #[instrument(skip(self, message, reply_to))]
+    fn try_send_boxed_with_reply_to(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+        reply_to: MessageAddress,
+    ) -> Result<(), crate::common::ipc::IpcError> {
+        use std::sync::Arc;
+        // Create envelope with the custom reply-to address as sender
+        // and self (target agent) as recipient
+        let envelope = OutboundEnvelope::new_with_recipient(
+            reply_to,                  // The reply-to address (IPC proxy)
+            self.reply_address(),       // The recipient (target agent)
+            self.cancellation_token.clone(),
+        );
+        trace!(
+            recipient = %self.id,
+            reply_to = ?envelope.return_address.sender.root.as_str(),
+            "Trying to send boxed message with custom reply-to via IPC (backpressure-aware)"
+        );
+        // Convert Box to Arc for the internal send mechanism
+        let arc_message: Arc<dyn ActonMessage + Send + Sync> = Arc::from(message);
+        envelope.try_send_arc(arc_message)
+    }
 }

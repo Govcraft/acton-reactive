@@ -79,7 +79,7 @@ pub(crate) mod traits;
 pub mod ipc {
     pub use crate::common::ipc::{
         socket_exists, socket_is_alive, start_listener, IpcConfig, IpcEnvelope, IpcError,
-        IpcListenerHandle, IpcListenerStats, IpcResponse, IpcTypeRegistry,
+        IpcListenerHandle, IpcListenerStats, IpcResponse, IpcTypeRegistry, ShutdownResult,
     };
 
     /// Wire protocol for IPC message framing.
@@ -157,6 +157,6 @@ pub mod prelude {
     #[cfg(feature = "ipc")]
     pub use crate::common::ipc::{
         IpcConfig, IpcEnvelope, IpcError, IpcListenerHandle, IpcListenerStats, IpcResponse,
-        IpcTypeRegistry,
+        IpcTypeRegistry, ShutdownResult,
     };
 }

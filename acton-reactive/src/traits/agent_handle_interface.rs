@@ -185,4 +185,45 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static {
         message: Box<dyn ActonMessage + Send + Sync>,
         reply_to: MessageAddress,
     ) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_;
+
+    /// Tries to send a boxed message without blocking (backpressure-aware).
+    ///
+    /// This method attempts to send a message but returns immediately with an error
+    /// if the target agent's inbox is full. This is useful for IPC scenarios where
+    /// backpressure feedback is needed rather than blocking.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message payload to send.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IpcError::TargetBusy`] if the agent's inbox is full, or
+    /// [`IpcError::IoError`] if the channel is closed.
+    #[cfg(feature = "ipc")]
+    fn try_send_boxed(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+    ) -> Result<(), crate::common::ipc::IpcError>;
+
+    /// Tries to send a boxed message with a custom reply-to address without blocking.
+    ///
+    /// This method is the backpressure-aware variant of [`send_boxed_with_reply_to`].
+    /// It returns immediately with an error if the target agent's inbox is full.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message payload to send.
+    /// * `reply_to`: The [`MessageAddress`] where responses should be sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IpcError::TargetBusy`] if the agent's inbox is full, or
+    /// [`IpcError::IoError`] if the channel is closed.
+    #[cfg(feature = "ipc")]
+    fn try_send_boxed_with_reply_to(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+        reply_to: MessageAddress,
+    ) -> Result<(), crate::common::ipc::IpcError>;
 }

@@ -60,6 +60,20 @@ pub enum IpcError {
 
     /// Request timeout exceeded.
     Timeout,
+
+    /// Rate limit exceeded for connection.
+    ///
+    /// The connection has exceeded its allowed request rate. The client should
+    /// implement backoff and retry logic or reduce request frequency.
+    RateLimited {
+        /// Time in milliseconds until the rate limit resets.
+        retry_after_ms: u64,
+    },
+
+    /// Server is shutting down.
+    ///
+    /// The server is gracefully shutting down and not accepting new requests.
+    ShuttingDown,
 }
 
 impl fmt::Display for IpcError {
@@ -73,6 +87,10 @@ impl fmt::Display for IpcError {
             Self::ProtocolError(e) => write!(f, "Protocol error: {e}"),
             Self::IoError(e) => write!(f, "I/O error: {e}"),
             Self::Timeout => write!(f, "Request timeout"),
+            Self::RateLimited { retry_after_ms } => {
+                write!(f, "Rate limit exceeded, retry after {retry_after_ms}ms")
+            }
+            Self::ShuttingDown => write!(f, "Server is shutting down"),
         }
     }
 }
@@ -412,6 +430,8 @@ impl IpcResponse {
             IpcError::ProtocolError(_) => ("PROTOCOL_ERROR", err.to_string()),
             IpcError::IoError(_) => ("IO_ERROR", err.to_string()),
             IpcError::Timeout => ("TIMEOUT", err.to_string()),
+            IpcError::RateLimited { .. } => ("RATE_LIMITED", err.to_string()),
+            IpcError::ShuttingDown => ("SHUTTING_DOWN", err.to_string()),
         };
 
         Self {

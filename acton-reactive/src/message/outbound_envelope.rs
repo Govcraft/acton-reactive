@@ -250,4 +250,69 @@ impl OutboundEnvelope {
     pub async fn send_arc(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
         self.send_message_inner(message).await;
     }
+
+    /// Tries to send an Arc-wrapped message without blocking.
+    ///
+    /// This method is similar to [`send_arc`](OutboundEnvelope::send_arc), but uses
+    /// `try_reserve()` instead of `reserve()`. It returns immediately with an error
+    /// if the recipient's channel is full, rather than waiting for capacity.
+    ///
+    /// This is useful for IPC scenarios where backpressure feedback is needed
+    /// rather than blocking the IPC listener.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: An Arc-wrapped message payload to send.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The recipient's channel is closed
+    /// - The recipient's channel is full (backpressure)
+    #[cfg(feature = "ipc")]
+    #[instrument(skip(self, message), level = "trace")]
+    pub fn try_send_arc(
+        &self,
+        message: Arc<dyn ActonMessage + Send + Sync>,
+    ) -> Result<(), crate::common::ipc::IpcError> {
+        use crate::common::ipc::IpcError;
+        use tokio::sync::mpsc::error::TrySendError;
+
+        // Determine the target address
+        let target_address = self
+            .recipient_address
+            .as_ref()
+            .unwrap_or(&self.return_address);
+        let target_id = &target_address.sender;
+        let channel_sender = target_address.address.clone();
+
+        trace!(sender = %self.return_address.sender, recipient = %target_id, "Attempting try_send_arc");
+
+        if channel_sender.is_closed() {
+            tracing::error!(sender = %self.return_address.sender, recipient = %target_id, "Recipient channel is closed");
+            return Err(IpcError::IoError("Recipient channel is closed".to_string()));
+        }
+
+        // Try to reserve a send permit without blocking
+        let permit = match channel_sender.try_reserve() {
+            Ok(permit) => permit,
+            Err(TrySendError::Full(())) => {
+                tracing::warn!(sender = %self.return_address.sender, recipient = %target_id, "Target agent inbox is full");
+                return Err(IpcError::TargetBusy);
+            }
+            Err(TrySendError::Closed(())) => {
+                tracing::error!(sender = %self.return_address.sender, recipient = %target_id, "Recipient channel is closed");
+                return Err(IpcError::IoError("Recipient channel is closed".to_string()));
+            }
+        };
+
+        let internal_envelope = Envelope::new(
+            message,
+            self.return_address.clone(),
+            target_address.clone(),
+        );
+        trace!(sender = %self.return_address.sender, recipient = %target_id, "Sending message via try_reserve permit");
+        permit.send(internal_envelope);
+        Ok(())
+    }
 }

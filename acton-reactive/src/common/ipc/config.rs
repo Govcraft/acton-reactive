@@ -23,7 +23,7 @@ use tracing::{info, warn};
 /// Configuration for IPC (Inter-Process Communication).
 ///
 /// This struct contains all configurable values for the IPC subsystem,
-/// including socket location, connection limits, and timeouts.
+/// including socket location, connection limits, rate limiting, and timeouts.
 ///
 /// # XDG Compliance
 ///
@@ -43,8 +43,16 @@ use tracing::{info, warn};
 /// max_connections = 100
 /// max_message_size = 1048576  # 1 MiB
 ///
+/// [rate_limit]
+/// enabled = true
+/// requests_per_second = 100
+/// burst_size = 50
+///
 /// [timeouts]
 /// request_timeout_ms = 30000
+///
+/// [shutdown]
+/// drain_timeout_ms = 5000
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -53,8 +61,12 @@ pub struct IpcConfig {
     pub socket: SocketConfig,
     /// Connection and message limits.
     pub limits: IpcLimitsConfig,
+    /// Rate limiting configuration.
+    pub rate_limit: RateLimitConfig,
     /// Timeout configuration.
     pub timeouts: IpcTimeoutsConfig,
+    /// Graceful shutdown configuration.
+    pub shutdown: ShutdownConfig,
 }
 
 /// Socket-specific configuration.
@@ -109,6 +121,36 @@ pub struct IpcTimeoutsConfig {
     pub write: u64,
 }
 
+/// Rate limiting configuration for IPC connections.
+///
+/// Uses a token bucket algorithm: tokens are replenished at `requests_per_second`
+/// rate up to `burst_size` maximum. Each request consumes one token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RateLimitConfig {
+    /// Whether rate limiting is enabled.
+    pub enabled: bool,
+
+    /// Maximum requests per second per connection.
+    ///
+    /// This is the sustained rate at which tokens are replenished.
+    pub requests_per_second: u32,
+
+    /// Maximum burst size (token bucket capacity).
+    ///
+    /// Allows short bursts of requests above the sustained rate.
+    pub burst_size: u32,
+}
+
+/// Graceful shutdown configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShutdownConfig {
+    /// Maximum time in milliseconds to wait for in-flight requests to complete.
+    #[serde(rename = "drain_timeout_ms")]
+    pub drain_timeout: u64,
+}
+
 impl Default for SocketConfig {
     fn default() -> Self {
         Self {
@@ -135,6 +177,24 @@ impl Default for IpcTimeoutsConfig {
             request: 30_000,
             read: 60_000,
             write: 30_000,
+        }
+    }
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            requests_per_second: 100,
+            burst_size: 50,
+        }
+    }
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self {
+            drain_timeout: 5_000, // 5 seconds
         }
     }
 }
@@ -259,6 +319,20 @@ impl IpcConfig {
     pub const fn write_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeouts.write)
     }
+
+    /// Get the drain timeout as a `Duration`.
+    ///
+    /// This is the maximum time to wait for in-flight requests during shutdown.
+    #[must_use]
+    pub const fn drain_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.shutdown.drain_timeout)
+    }
+
+    /// Check if rate limiting is enabled.
+    #[must_use]
+    pub const fn is_rate_limited(&self) -> bool {
+        self.rate_limit.enabled
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +410,30 @@ mod tests {
         // Verify the config can be round-tripped
         let parsed: IpcConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.limits.max_connections, config.limits.max_connections);
+    }
+
+    #[test]
+    fn test_rate_limit_defaults() {
+        let config = IpcConfig::default();
+        assert!(config.is_rate_limited());
+        assert_eq!(config.rate_limit.requests_per_second, 100);
+        assert_eq!(config.rate_limit.burst_size, 50);
+    }
+
+    #[test]
+    fn test_shutdown_defaults() {
+        let config = IpcConfig::default();
+        assert_eq!(config.shutdown.drain_timeout, 5_000);
+        assert_eq!(
+            config.drain_timeout(),
+            std::time::Duration::from_millis(5_000)
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_disabled() {
+        let mut config = IpcConfig::default();
+        config.rate_limit.enabled = false;
+        assert!(!config.is_rate_limited());
     }
 }
