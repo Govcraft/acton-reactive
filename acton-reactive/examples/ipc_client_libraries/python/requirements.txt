@@ -1,0 +1,6 @@
+# Acton IPC Python Client Requirements
+#
+# Core dependencies (none - uses Python standard library)
+#
+# Optional dependencies:
+msgpack>=1.0.0  # For MessagePack serialization support

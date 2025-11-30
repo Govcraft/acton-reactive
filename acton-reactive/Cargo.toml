@@ -119,3 +119,9 @@ required-features = ["ipc"]
 name = "ipc_streaming_client"
 path = "examples/ipc_streaming/client.rs"
 required-features = ["ipc"]
+
+# IPC Client Libraries Demo (Python/Node.js client example server)
+[[example]]
+name = "ipc_client_libraries_server"
+path = "examples/ipc_client_libraries/server/main.rs"
+required-features = ["ipc"]

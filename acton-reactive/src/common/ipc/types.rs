@@ -1248,14 +1248,20 @@ impl ProtocolVersionInfo {
             MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION, PROTOCOL_VERSION, ProtocolCapability,
         };
 
-        let mut capabilities = ProtocolCapabilities::with_capabilities([
+        #[cfg(not(feature = "ipc-messagepack"))]
+        let capabilities = ProtocolCapabilities::with_capabilities([
             ProtocolCapability::Streaming,
             ProtocolCapability::Push,
             ProtocolCapability::Discovery,
         ]);
 
         #[cfg(feature = "ipc-messagepack")]
-        capabilities.insert(ProtocolCapability::MessagePack);
+        let capabilities = ProtocolCapabilities::with_capabilities([
+            ProtocolCapability::Streaming,
+            ProtocolCapability::Push,
+            ProtocolCapability::Discovery,
+            ProtocolCapability::MessagePack,
+        ]);
 
         Self {
             current: PROTOCOL_VERSION,

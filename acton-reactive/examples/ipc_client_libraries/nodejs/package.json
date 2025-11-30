@@ -1,0 +1,30 @@
+{
+  "name": "acton-ipc-client",
+  "version": "1.0.0",
+  "description": "Node.js client for acton-reactive IPC servers",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "example": "ts-node src/example-client.ts",
+    "example:js": "node dist/example-client.js"
+  },
+  "keywords": [
+    "acton",
+    "ipc",
+    "actor",
+    "reactive"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "optionalDependencies": {
+    "@msgpack/msgpack": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

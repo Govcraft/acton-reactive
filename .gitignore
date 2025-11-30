@@ -31,3 +31,6 @@ logs/
 *.old
 *.log
 *.env
+
+# Allow Python requirements files
+!**/requirements.txt

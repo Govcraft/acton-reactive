@@ -1,0 +1,469 @@
+/*
+ * Copyright (c) 2024. Govcraft
+ *
+ * Licensed under either of
+ *   * Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+ *   * MIT license: http://opensource.org/licenses/MIT
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the applicable License for the specific language governing permissions and
+ * limitations under that License.
+ */
+
+//! IPC Client Libraries Example Server
+//!
+//! A comprehensive example server that demonstrates all IPC features
+//! for testing with the Python and Node.js client libraries.
+//!
+//! # Features
+//!
+//! - **Calculator Service**: Request-response arithmetic operations
+//! - **Search Service**: Streaming search results
+//! - **Logger Service**: Fire-and-forget logging
+//! - **Price Publisher**: Push notifications via broker subscriptions
+//!
+//! # Running This Example
+//!
+//! Start the server:
+//! ```bash
+//! cargo run --example ipc_client_libraries_server --features ipc
+//! ```
+//!
+//! Then test with the client libraries:
+//! ```bash
+//! # Python
+//! cd examples/ipc_client_libraries/python
+//! python example_client.py
+//!
+//! # Node.js
+//! cd examples/ipc_client_libraries/nodejs
+//! npm install && npm run example
+//! ```
+
+use std::time::Duration;
+
+use acton_macro::acton_actor;
+use acton_reactive::ipc::{socket_exists, IpcConfig};
+use acton_reactive::prelude::*;
+use serde::{Deserialize, Serialize};
+use tracing_subscriber::EnvFilter;
+
+// ============================================================================
+// Message Definitions - Calculator Service
+// ============================================================================
+
+/// Request to add two numbers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Add {
+    a: i64,
+    b: i64,
+}
+
+/// Request to multiply two numbers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Multiply {
+    a: i64,
+    b: i64,
+}
+
+/// Response containing a calculation result.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CalcResult {
+    result: i64,
+    operation: String,
+}
+
+// ============================================================================
+// Message Definitions - Search Service
+// ============================================================================
+
+/// Request to search with streaming results.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SearchQuery {
+    query: String,
+    limit: usize,
+}
+
+/// A single search result in the stream.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SearchResult {
+    id: usize,
+    title: String,
+    score: f64,
+}
+
+// ============================================================================
+// Message Definitions - Logger Service
+// ============================================================================
+
+/// Log event (fire-and-forget).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LogEvent {
+    level: String,
+    message: String,
+}
+
+// ============================================================================
+// Message Definitions - Price Publisher (Push Notifications)
+// ============================================================================
+
+/// Price update notification (pushed to subscribers).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PriceUpdate {
+    symbol: String,
+    price: f64,
+    change: f64,
+}
+
+/// Status change notification (pushed to subscribers).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StatusChange {
+    service: String,
+    status: String,
+    timestamp_ms: u64,
+}
+
+// ============================================================================
+// Agent States
+// ============================================================================
+
+/// Calculator service - stateless arithmetic operations.
+#[acton_actor]
+struct CalculatorState {
+    operations_performed: usize,
+}
+
+/// Search service - simulated search with streaming results.
+#[acton_actor]
+struct SearchState {
+    searches_performed: usize,
+}
+
+/// Logger service - collects log events.
+#[acton_actor]
+struct LoggerState {
+    log_count: usize,
+}
+
+/// Price publisher - periodically publishes price updates.
+#[acton_actor]
+struct PricePublisherState {
+    tick_count: usize,
+}
+
+/// Internal message to trigger price publication.
+#[derive(Clone, Debug)]
+struct PublishTick;
+
+// ============================================================================
+// Agent Creation Functions
+// ============================================================================
+
+/// Creates the calculator service agent.
+async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
+    let mut calculator = runtime.new_agent_with_name::<CalculatorState>("calculator".to_string());
+
+    // Handle addition requests
+    calculator.mutate_on::<Add>(|agent, envelope| {
+        let msg = envelope.message();
+        let result = msg.a + msg.b;
+        agent.model.operations_performed += 1;
+
+        let response = CalcResult {
+            result,
+            operation: format!("{} + {}", msg.a, msg.b),
+        };
+
+        println!(
+            "  [Calculator] Add: {} + {} = {} (op #{})",
+            msg.a, msg.b, result, agent.model.operations_performed
+        );
+
+        let reply_envelope = envelope.reply_envelope();
+        Box::pin(async move {
+            reply_envelope.send(response).await;
+        })
+    });
+
+    // Handle multiplication requests
+    calculator.mutate_on::<Multiply>(|agent, envelope| {
+        let msg = envelope.message();
+        let result = msg.a * msg.b;
+        agent.model.operations_performed += 1;
+
+        let response = CalcResult {
+            result,
+            operation: format!("{} × {}", msg.a, msg.b),
+        };
+
+        println!(
+            "  [Calculator] Multiply: {} × {} = {} (op #{})",
+            msg.a, msg.b, result, agent.model.operations_performed
+        );
+
+        let reply_envelope = envelope.reply_envelope();
+        Box::pin(async move {
+            reply_envelope.send(response).await;
+        })
+    });
+
+    calculator.start().await
+}
+
+/// Creates the search service agent with streaming results.
+async fn create_search_agent(runtime: &mut AgentRuntime) -> AgentHandle {
+    let mut search = runtime.new_agent_with_name::<SearchState>("search".to_string());
+
+    // Handle search requests - stream multiple results
+    search.mutate_on::<SearchQuery>(|agent, envelope| {
+        let msg = envelope.message();
+        let query = msg.query.clone();
+        let limit = msg.limit.min(10).max(1); // 1-10 results
+        agent.model.searches_performed += 1;
+
+        println!(
+            "  [Search] Query: \"{}\" (limit: {}, search #{})",
+            query, limit, agent.model.searches_performed
+        );
+
+        let reply_envelope = envelope.reply_envelope();
+
+        Box::pin(async move {
+            // Simulate search results
+            let sample_items = vec![
+                "Getting Started Guide",
+                "API Reference",
+                "Tutorial: Building Agents",
+                "Configuration Options",
+                "Performance Tuning",
+                "Troubleshooting FAQ",
+                "Architecture Overview",
+                "Migration Guide",
+                "Security Best Practices",
+                "Release Notes",
+            ];
+
+            for (idx, title) in sample_items.iter().take(limit).enumerate() {
+                let result = SearchResult {
+                    id: idx + 1,
+                    title: format!("{} (matches: {})", title, query),
+                    score: 1.0 - (idx as f64 * 0.1),
+                };
+
+                println!("  [Search] Sending result {}/{}", idx + 1, limit);
+                reply_envelope.send(result).await;
+
+                // Small delay to demonstrate streaming
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            println!("  [Search] Stream complete");
+        })
+    });
+
+    search.start().await
+}
+
+/// Creates the logger service agent (fire-and-forget).
+async fn create_logger_agent(runtime: &mut AgentRuntime) -> AgentHandle {
+    let mut logger = runtime.new_agent_with_name::<LoggerState>("logger".to_string());
+
+    // Handle log events - no response needed
+    logger.mutate_on::<LogEvent>(|agent, envelope| {
+        let msg = envelope.message();
+        agent.model.log_count += 1;
+
+        println!(
+            "  [Logger] #{} [{}] {}",
+            agent.model.log_count, msg.level.to_uppercase(), msg.message
+        );
+
+        Box::pin(async {})
+    });
+
+    logger.start().await
+}
+
+/// Creates the price publisher agent that publishes notifications.
+async fn create_price_publisher(runtime: &mut AgentRuntime) -> AgentHandle {
+    let mut publisher =
+        runtime.new_agent_with_name::<PricePublisherState>("price_publisher".to_string());
+
+    // Handle publish ticks - publish price updates
+    publisher.mutate_on::<PublishTick>(|agent, _envelope| {
+        agent.model.tick_count += 1;
+        let tick = agent.model.tick_count;
+
+        // Simulate price movements
+        let symbols = ["AAPL", "GOOGL", "MSFT", "AMZN"];
+        let symbol = symbols[tick % symbols.len()];
+        let base_price = match symbol {
+            "AAPL" => 150.0,
+            "GOOGL" => 140.0,
+            "MSFT" => 370.0,
+            "AMZN" => 180.0,
+            _ => 100.0,
+        };
+        let change = ((tick as f64 * 0.7).sin() * 2.0 * 100.0).round() / 100.0;
+        let price = base_price + change;
+
+        let update = PriceUpdate {
+            symbol: symbol.to_string(),
+            price,
+            change,
+        };
+
+        println!(
+            "  [Publisher] Publishing: {} @ ${:.2} ({:+.2})",
+            symbol, price, change
+        );
+
+        let broker = agent.broker().clone();
+        Box::pin(async move {
+            broker.broadcast(update).await;
+        })
+    });
+
+    publisher.start().await
+}
+
+/// Spawns a task that periodically triggers price publication.
+fn spawn_price_ticker(publisher: AgentHandle) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+
+        loop {
+            interval.tick().await;
+            publisher.send(PublishTick).await;
+        }
+    });
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env().add_directive("acton=info".parse()?))
+        .init();
+
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║      IPC Client Libraries Example Server                     ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+
+    let mut runtime = ActonApp::launch();
+
+    // Register all IPC message types
+    let registry = runtime.ipc_registry();
+
+    // Calculator messages
+    registry.register::<Add>("Add");
+    registry.register::<Multiply>("Multiply");
+    registry.register::<CalcResult>("CalcResult");
+
+    // Search messages
+    registry.register::<SearchQuery>("SearchQuery");
+    registry.register::<SearchResult>("SearchResult");
+
+    // Logger messages
+    registry.register::<LogEvent>("LogEvent");
+
+    // Push notification messages
+    registry.register::<PriceUpdate>("PriceUpdate");
+    registry.register::<StatusChange>("StatusChange");
+
+    println!("📝 Registered {} IPC message types", registry.len());
+
+    // Create service agents
+    let calculator = create_calculator_agent(&mut runtime).await;
+    println!("🧮 Calculator service started");
+
+    let search = create_search_agent(&mut runtime).await;
+    println!("🔍 Search service started");
+
+    let logger = create_logger_agent(&mut runtime).await;
+    println!("📋 Logger service started");
+
+    let price_publisher = create_price_publisher(&mut runtime).await;
+    println!("💰 Price publisher started");
+
+    // Expose agents for IPC access
+    runtime.ipc_expose("calculator", calculator.clone());
+    runtime.ipc_expose("search", search.clone());
+    runtime.ipc_expose("logger", logger.clone());
+    runtime.ipc_expose("price_publisher", price_publisher.clone());
+    println!("🔗 Exposed agents: calculator, search, logger, price_publisher");
+
+    // Start price ticker for push notifications
+    spawn_price_ticker(price_publisher);
+    println!("⏰ Price ticker started (every 5 seconds)");
+
+    // Configure IPC for this example
+    let mut ipc_config = IpcConfig::load();
+    ipc_config.socket.app_name = Some("ipc_client_example".to_string());
+    let socket_path = ipc_config.socket_path();
+
+    // Ensure parent directory exists
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Start the IPC listener
+    let listener_handle = runtime.start_ipc_listener_with_config(ipc_config).await?;
+    println!("🚀 IPC listener started");
+
+    // Verify socket is ready
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    if socket_exists(&socket_path) {
+        println!("📡 Socket ready: {}", socket_path.display());
+    }
+
+    println!();
+    println!("════════════════════════════════════════════════════════════════");
+    println!("  Server is ready! Test with the client libraries:");
+    println!();
+    println!("  Python:");
+    println!("    cd examples/ipc_client_libraries/python");
+    println!("    python example_client.py");
+    println!();
+    println!("  Node.js:");
+    println!("    cd examples/ipc_client_libraries/nodejs");
+    println!("    npm install && npx ts-node src/example-client.ts");
+    println!();
+    println!("  Available services:");
+    println!("    - calculator: Add {{ a, b }}, Multiply {{ a, b }}");
+    println!("    - search: SearchQuery {{ query, limit }} (streaming)");
+    println!("    - logger: LogEvent {{ level, message }} (fire-and-forget)");
+    println!("    - Subscribe to: PriceUpdate, StatusChange");
+    println!("════════════════════════════════════════════════════════════════");
+    println!();
+    println!("Press Ctrl+C to shutdown...");
+    println!();
+
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c().await?;
+
+    println!();
+    println!("Shutting down...");
+
+    // Stop the listener
+    listener_handle.stop();
+
+    // Brief delay for cleanup
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Shutdown the runtime
+    runtime.shutdown_all().await?;
+
+    println!("Server shutdown complete.");
+
+    Ok(())
+}
