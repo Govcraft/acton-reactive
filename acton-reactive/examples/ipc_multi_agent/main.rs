@@ -239,7 +239,7 @@ mod render {
                 SetForegroundColor(status_color),
                 Print(status_char),
                 ResetColor,
-                Print(format!("  {:<10}{:<24}{:<22}", service.name, service.col1, service.col2)),
+                Print(format!("{:>8}  {:<24}{:<24}", service.name, service.col1, service.col2)),
                 Print("│\r\n")
             )?;
         }
