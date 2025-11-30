@@ -112,9 +112,9 @@ async fn send_stream_request(
         let result = timeout(frame_timeout, read_frame(reader, MAX_FRAME_SIZE)).await;
 
         match result {
-            Ok(Ok((msg_type, payload))) => {
+            Ok(Ok((msg_type, _format, payload))) => {
                 if !is_stream(msg_type) {
-                    println!("⚠️  Unexpected message type: 0x{:02X}", msg_type);
+                    println!("⚠️  Unexpected message type: 0x{msg_type:02X}");
                     continue;
                 }
 
@@ -133,7 +133,7 @@ async fn send_stream_request(
                 }
             }
             Ok(Err(e)) => {
-                return Err(format!("Error reading frame: {}", e).into());
+                return Err(format!("Error reading frame: {e}").into());
             }
             Err(_) => {
                 return Err("Frame timeout: no response received".into());
@@ -155,7 +155,7 @@ fn display_stream_frame(frame: &IpcStreamFrame) {
         if let Some(obj) = payload.as_object() {
             println!("   📥 Frame #{}:{}", frame.sequence, final_marker);
             for (key, value) in obj {
-                println!("      {}: {}", key, value);
+                println!("      {key}: {value}");
             }
         } else {
             println!(
@@ -279,7 +279,7 @@ async fn demo_error_handling(
             }
         }
         Err(e) => {
-            println!("   Error: {}", e);
+            println!("   Error: {e}");
         }
     }
 

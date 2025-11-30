@@ -75,9 +75,9 @@ type SerializerFn = Arc<
 pub struct IpcTypeRegistry {
     /// Maps type names to deserializer functions.
     deserializers: DashMap<String, DeserializerFn>,
-    /// Maps TypeId to type names for reverse lookup during broadcast forwarding.
+    /// Maps `TypeId` to type names for reverse lookup during broadcast forwarding.
     type_id_to_name: DashMap<std::any::TypeId, String>,
-    /// Maps TypeId to serializer functions for broadcast forwarding.
+    /// Maps `TypeId` to serializer functions for broadcast forwarding.
     serializers: DashMap<std::any::TypeId, SerializerFn>,
 }
 

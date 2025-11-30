@@ -91,9 +91,13 @@ pub mod ipc {
     pub mod protocol {
         pub use crate::common::ipc::protocol::{
             is_discover, is_heartbeat, is_stream, is_subscribe, is_unsubscribe, read_envelope,
-            read_frame, read_response, write_discover, write_discovery_response, write_envelope,
-            write_frame, write_heartbeat, write_response, write_stream_frame,
-            write_subscription_response, HEADER_SIZE, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER,
+            read_frame, read_response, write_discover, write_discover_with_format,
+            write_discovery_response, write_discovery_response_with_format, write_envelope,
+            write_envelope_with_format, write_frame, write_heartbeat, write_push_with_format,
+            write_response, write_response_with_format, write_stream_frame,
+            write_stream_frame_with_format, write_subscribe_with_format,
+            write_subscription_response, write_subscription_response_with_format,
+            write_unsubscribe_with_format, Format, HEADER_SIZE, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER,
             MSG_TYPE_ERROR, MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE,
             MSG_TYPE_STREAM, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE, PROTOCOL_VERSION,
         };

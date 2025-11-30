@@ -33,9 +33,10 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::config::IpcConfig;
 use super::protocol::{
-    is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame, write_discovery_response,
-    write_heartbeat, write_push, write_response, write_stream_frame, write_subscription_response,
-    MSG_TYPE_REQUEST,
+    is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame,
+    write_discovery_response_with_format, write_heartbeat, write_push,
+    write_response_with_format, write_stream_frame_with_format,
+    write_subscription_response_with_format, Format, MSG_TYPE_REQUEST,
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
@@ -541,6 +542,7 @@ enum RequestResult {
 async fn handle_request_frame(
     conn_id: usize,
     payload: &[u8],
+    format: Format,
     rate_limiter: &mut RateLimiter,
     ctx: &ConnectionContext,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
@@ -551,14 +553,15 @@ async fn handle_request_frame(
     if ctx.shutdown_state.is_draining() {
         ctx.stats.shutdown_rejections.fetch_add(1, Ordering::Relaxed);
 
-        let correlation_id = serde_json::from_slice::<IpcEnvelope>(payload)
+        let correlation_id = format
+            .deserialize::<IpcEnvelope>(payload)
             .map_or_else(|_| "unknown".to_string(), |e| e.correlation_id);
 
         let response = IpcResponse::error(&correlation_id, &IpcError::ShuttingDown);
 
         trace!(conn_id, "Rejecting request during shutdown drain");
 
-        if let Err(e) = write_response(writer, &response).await {
+        if let Err(e) = write_response_with_format(writer, &response, format).await {
             error!(conn_id, error = %e, "Failed to send shutdown response");
             return RequestResult::Break;
         }
@@ -571,7 +574,8 @@ async fn handle_request_frame(
             u64::try_from(rate_limiter.time_until_available().as_millis()).unwrap_or(u64::MAX);
         ctx.stats.rate_limited.fetch_add(1, Ordering::Relaxed);
 
-        let correlation_id = serde_json::from_slice::<IpcEnvelope>(payload)
+        let correlation_id = format
+            .deserialize::<IpcEnvelope>(payload)
             .map_or_else(|_| "unknown".to_string(), |e| e.correlation_id);
 
         let err = IpcError::RateLimited { retry_after_ms };
@@ -579,7 +583,7 @@ async fn handle_request_frame(
 
         trace!(conn_id, retry_after_ms, "Rate limited");
 
-        if let Err(e) = write_response(writer, &response).await {
+        if let Err(e) = write_response_with_format(writer, &response, format).await {
             error!(conn_id, error = %e, "Failed to send rate limit response");
             return RequestResult::Break;
         }
@@ -590,7 +594,7 @@ async fn handle_request_frame(
     ctx.stats.increment_in_flight();
 
     // Parse envelope
-    let envelope: IpcEnvelope = match serde_json::from_slice(payload) {
+    let envelope: IpcEnvelope = match format.deserialize(payload) {
         Ok(env) => env,
         Err(e) => {
             ctx.stats.decrement_in_flight();
@@ -599,7 +603,7 @@ async fn handle_request_frame(
                 "SERIALIZATION_ERROR",
                 format!("Failed to parse envelope: {e}"),
             );
-            if let Err(e) = write_response(writer, &response).await {
+            if let Err(e) = write_response_with_format(writer, &response, format).await {
                 error!(conn_id, error = %e, "Failed to send error response");
                 return RequestResult::Break;
             }
@@ -619,7 +623,7 @@ async fn handle_request_frame(
 
     // Handle streaming requests differently
     if envelope.expects_stream {
-        let result = process_stream_request(&envelope, ctx, writer).await;
+        let result = process_stream_request(&envelope, format, ctx, writer).await;
         ctx.stats.decrement_in_flight();
         return result;
     }
@@ -631,7 +635,7 @@ async fn handle_request_frame(
     // Done processing - decrement in-flight counter
     ctx.stats.decrement_in_flight();
 
-    if let Err(e) = write_response(writer, &response).await {
+    if let Err(e) = write_response_with_format(writer, &response, format).await {
         error!(conn_id, error = %e, "Failed to send response");
         return RequestResult::Break;
     }
@@ -680,7 +684,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 
             frame_result = read_frame(&mut reader, max_message_size) => {
                 match frame_result {
-                    Ok((msg_type, payload)) => {
+                    Ok((msg_type, format, payload)) => {
                         if is_heartbeat(msg_type) {
                             trace!(conn_id, "Received heartbeat");
                             if let Err(e) = write_heartbeat(&mut *writer.lock().await).await {
@@ -692,18 +696,18 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 
                         // Handle subscription requests
                         if is_subscribe(msg_type) {
-                            handle_subscribe_frame(conn_id, &payload, &ctx, &mut *writer.lock().await).await;
+                            handle_subscribe_frame(conn_id, &payload, format, &ctx, &mut *writer.lock().await).await;
                             continue;
                         }
 
                         if is_unsubscribe(msg_type) {
-                            handle_unsubscribe_frame(conn_id, &payload, &ctx, &mut *writer.lock().await).await;
+                            handle_unsubscribe_frame(conn_id, &payload, format, &ctx, &mut *writer.lock().await).await;
                             continue;
                         }
 
                         // Handle discovery requests
                         if is_discover(msg_type) {
-                            handle_discover_frame(conn_id, &payload, &ctx, &mut *writer.lock().await).await;
+                            handle_discover_frame(conn_id, &payload, format, &ctx, &mut *writer.lock().await).await;
                             continue;
                         }
 
@@ -714,7 +718,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 
                         if matches!(
                             handle_request_frame(
-                                conn_id, &payload, &mut rate_limiter, &ctx, &mut *writer.lock().await,
+                                conn_id, &payload, format, &mut rate_limiter, &ctx, &mut *writer.lock().await,
                             ).await,
                             RequestResult::Break
                         ) {
@@ -803,15 +807,16 @@ async fn run_push_forwarder(
 async fn handle_subscribe_frame(
     conn_id: usize,
     payload: &[u8],
+    format: Format,
     ctx: &ConnectionContext,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) {
-    let request: IpcSubscribeRequest = match serde_json::from_slice(payload) {
+    let request: IpcSubscribeRequest = match format.deserialize(payload) {
         Ok(req) => req,
         Err(e) => {
             error!(conn_id, error = %e, "Failed to parse subscribe request");
             let response = IpcSubscriptionResponse::error("unknown", format!("Parse error: {e}"));
-            let _ = write_subscription_response(writer, &response).await;
+            let _ = write_subscription_response_with_format(writer, &response, format).await;
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -835,7 +840,7 @@ async fn handle_subscribe_frame(
 
     let response = IpcSubscriptionResponse::success(&request.correlation_id, subscribed_types);
 
-    if let Err(e) = write_subscription_response(writer, &response).await {
+    if let Err(e) = write_subscription_response_with_format(writer, &response, format).await {
         error!(conn_id, error = %e, "Failed to send subscribe response");
     }
 }
@@ -844,15 +849,16 @@ async fn handle_subscribe_frame(
 async fn handle_unsubscribe_frame(
     conn_id: usize,
     payload: &[u8],
+    format: Format,
     ctx: &ConnectionContext,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) {
-    let request: IpcUnsubscribeRequest = match serde_json::from_slice(payload) {
+    let request: IpcUnsubscribeRequest = match format.deserialize(payload) {
         Ok(req) => req,
         Err(e) => {
             error!(conn_id, error = %e, "Failed to parse unsubscribe request");
             let response = IpcSubscriptionResponse::error("unknown", format!("Parse error: {e}"));
-            let _ = write_subscription_response(writer, &response).await;
+            let _ = write_subscription_response_with_format(writer, &response, format).await;
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -876,7 +882,7 @@ async fn handle_unsubscribe_frame(
 
     let response = IpcSubscriptionResponse::success(&request.correlation_id, remaining_types);
 
-    if let Err(e) = write_subscription_response(writer, &response).await {
+    if let Err(e) = write_subscription_response_with_format(writer, &response, format).await {
         error!(conn_id, error = %e, "Failed to send unsubscribe response");
     }
 }
@@ -885,15 +891,16 @@ async fn handle_unsubscribe_frame(
 async fn handle_discover_frame(
     conn_id: usize,
     payload: &[u8],
+    format: Format,
     ctx: &ConnectionContext,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) {
-    let request: IpcDiscoverRequest = match serde_json::from_slice(payload) {
+    let request: IpcDiscoverRequest = match format.deserialize(payload) {
         Ok(req) => req,
         Err(e) => {
             error!(conn_id, error = %e, "Failed to parse discover request");
             let response = IpcDiscoverResponse::error("unknown", format!("Parse error: {e}"));
-            let _ = write_discovery_response(writer, &response).await;
+            let _ = write_discovery_response_with_format(writer, &response, format).await;
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -931,7 +938,7 @@ async fn handle_discover_frame(
 
     let response = IpcDiscoverResponse::success(&request.correlation_id, agents, message_types);
 
-    if let Err(e) = write_discovery_response(writer, &response).await {
+    if let Err(e) = write_discovery_response_with_format(writer, &response, format).await {
         error!(conn_id, error = %e, "Failed to send discover response");
     }
 
@@ -1076,6 +1083,7 @@ fn process_fire_and_forget(
 /// ends when the channel is closed or the timeout expires.
 async fn process_stream_request(
     envelope: &IpcEnvelope,
+    format: Format,
     ctx: &ConnectionContext,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) -> RequestResult {
@@ -1085,7 +1093,7 @@ async fn process_stream_request(
     // Look up the target agent
     let Some(entry) = ctx.agent_registry.get(&envelope.target) else {
         let frame = IpcStreamFrame::error(correlation_id, 0, format!("Agent not found: {}", envelope.target));
-        if let Err(e) = write_stream_frame(writer, &frame).await {
+        if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
             error!(error = %e, "Failed to send stream error frame");
             return RequestResult::Break;
         }
@@ -1105,7 +1113,7 @@ async fn process_stream_request(
                 "SERIALIZATION_ERROR",
                 e.to_string(),
             );
-            if let Err(e) = write_stream_frame(writer, &frame).await {
+            if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
                 error!(error = %e, "Failed to send stream error frame");
                 return RequestResult::Break;
             }
@@ -1119,17 +1127,14 @@ async fn process_stream_request(
 
     // Send the message to the agent
     if let Err(e) = agent_handle.try_send_boxed_with_reply_to(message, reply_to_address) {
-        let frame = match e {
-            IpcError::TargetBusy => {
-                ctx.stats.backpressure_rejections.fetch_add(1, Ordering::Relaxed);
-                IpcStreamFrame::error_with_code(correlation_id, 0, "TARGET_BUSY", "Agent inbox is full")
-            }
-            _ => {
-                ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-                IpcStreamFrame::error(correlation_id, 0, e.to_string())
-            }
+        let frame = if let IpcError::TargetBusy = e {
+            ctx.stats.backpressure_rejections.fetch_add(1, Ordering::Relaxed);
+            IpcStreamFrame::error_with_code(correlation_id, 0, "TARGET_BUSY", "Agent inbox is full")
+        } else {
+            ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+            IpcStreamFrame::error(correlation_id, 0, e.to_string())
         };
-        if let Err(e) = write_stream_frame(writer, &frame).await {
+        if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
             error!(error = %e, "Failed to send stream error frame");
             return RequestResult::Break;
         }
@@ -1152,7 +1157,7 @@ async fn process_stream_request(
                 "TIMEOUT",
                 format!("Stream timed out after {} ms", timeout.as_millis()),
             );
-            if let Err(e) = write_stream_frame(writer, &frame).await {
+            if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
                 error!(error = %e, "Failed to send stream timeout frame");
                 return RequestResult::Break;
             }
@@ -1172,7 +1177,7 @@ async fn process_stream_request(
                     "Sending stream frame"
                 );
 
-                if let Err(e) = write_stream_frame(writer, &frame).await {
+                if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
                     error!(error = %e, "Failed to send stream frame");
                     return RequestResult::Break;
                 }
@@ -1189,7 +1194,7 @@ async fn process_stream_request(
                     "Stream completed"
                 );
 
-                if let Err(e) = write_stream_frame(writer, &frame).await {
+                if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
                     error!(error = %e, "Failed to send final stream frame");
                     return RequestResult::Break;
                 }
@@ -1203,7 +1208,7 @@ async fn process_stream_request(
                     "TIMEOUT",
                     format!("Stream timed out after {} ms", timeout.as_millis()),
                 );
-                if let Err(e) = write_stream_frame(writer, &frame).await {
+                if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
                     error!(error = %e, "Failed to send stream timeout frame");
                     return RequestResult::Break;
                 }

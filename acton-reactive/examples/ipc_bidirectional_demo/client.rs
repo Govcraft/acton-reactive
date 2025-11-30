@@ -113,7 +113,7 @@ fn display_response(response: &IpcResponse) {
             // Try to pretty-print the payload
             if let Some(obj) = payload.as_object() {
                 for (key, value) in obj {
-                    println!("   {}: {}", key, value);
+                    println!("   {key}: {value}");
                 }
             } else {
                 println!("   {}", serde_json::to_string_pretty(payload).unwrap_or_default());

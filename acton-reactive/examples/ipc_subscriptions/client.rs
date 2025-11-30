@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use acton_reactive::ipc::protocol::{
-    read_frame, write_frame, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_PUSH, MSG_TYPE_RESPONSE,
+    read_frame, write_frame, Format, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_PUSH, MSG_TYPE_RESPONSE,
     MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
 };
 use acton_reactive::ipc::{
@@ -126,7 +126,7 @@ async fn send_subscribe(
     let correlation_id = request.correlation_id.clone();
 
     let payload = serde_json::to_vec(&request)?;
-    write_frame(writer, MSG_TYPE_SUBSCRIBE, &payload).await?;
+    write_frame(writer, MSG_TYPE_SUBSCRIBE, Format::Json, &payload).await?;
 
     Ok(correlation_id)
 }
@@ -140,7 +140,7 @@ async fn send_unsubscribe(
     let correlation_id = request.correlation_id.clone();
 
     let payload = serde_json::to_vec(&request)?;
-    write_frame(writer, MSG_TYPE_UNSUBSCRIBE, &payload).await?;
+    write_frame(writer, MSG_TYPE_UNSUBSCRIBE, Format::Json, &payload).await?;
 
     Ok(correlation_id)
 }
@@ -153,7 +153,7 @@ async fn send_discover_all(
     let correlation_id = request.correlation_id.clone();
 
     let payload = serde_json::to_vec(&request)?;
-    write_frame(writer, MSG_TYPE_DISCOVER, &payload).await?;
+    write_frame(writer, MSG_TYPE_DISCOVER, Format::Json, &payload).await?;
 
     Ok(correlation_id)
 }
@@ -166,7 +166,7 @@ async fn send_discover_agents(
     let correlation_id = request.correlation_id.clone();
 
     let payload = serde_json::to_vec(&request)?;
-    write_frame(writer, MSG_TYPE_DISCOVER, &payload).await?;
+    write_frame(writer, MSG_TYPE_DISCOVER, Format::Json, &payload).await?;
 
     Ok(correlation_id)
 }
@@ -244,7 +244,7 @@ async fn demo_discovery(
     let _corr_id = send_discover_all(writer).await?;
 
     // Wait for discovery response
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -277,7 +277,7 @@ async fn demo_discovery(
     println!("\n\nSending discovery request (agents only)...");
     let _corr_id = send_discover_agents(writer).await?;
 
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -316,7 +316,7 @@ async fn demo_subscribe_all(
     let _corr_id = send_subscribe(writer, types).await?;
 
     // Wait for subscription response
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -330,7 +330,7 @@ async fn demo_subscribe_all(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_secs(1), read_frame(reader, MAX_FRAME_SIZE)).await {
-            Ok(Ok((msg_type, payload))) => {
+            Ok(Ok((msg_type, _format, payload))) => {
                 if msg_type == MSG_TYPE_PUSH {
                     let notification: IpcPushNotification = serde_json::from_slice(&payload)?;
                     display_push_notification(&notification);
@@ -364,7 +364,7 @@ async fn demo_prices_only(
     let _corr_id = send_unsubscribe(writer, vec![]).await?;
 
     // Read unsubscribe response
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -377,7 +377,7 @@ async fn demo_prices_only(
     let _corr_id = send_subscribe(writer, vec!["PriceUpdate".to_string()]).await?;
 
     // Wait for subscription response
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -392,7 +392,7 @@ async fn demo_prices_only(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_secs(1), read_frame(reader, MAX_FRAME_SIZE)).await {
-            Ok(Ok((msg_type, payload))) => {
+            Ok(Ok((msg_type, _format, payload))) => {
                 if msg_type == MSG_TYPE_PUSH {
                     let notification: IpcPushNotification = serde_json::from_slice(&payload)?;
                     display_push_notification(&notification);
@@ -426,7 +426,7 @@ async fn demo_trades_only(
     let _corr_id = send_unsubscribe(writer, vec!["PriceUpdate".to_string()]).await?;
 
     // Read unsubscribe response
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -439,7 +439,7 @@ async fn demo_trades_only(
     let _corr_id = send_subscribe(writer, vec!["TradeExecuted".to_string()]).await?;
 
     // Wait for subscription response
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
@@ -454,7 +454,7 @@ async fn demo_trades_only(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_secs(1), read_frame(reader, MAX_FRAME_SIZE)).await {
-            Ok(Ok((msg_type, payload))) => {
+            Ok(Ok((msg_type, _format, payload))) => {
                 if msg_type == MSG_TYPE_PUSH {
                     let notification: IpcPushNotification = serde_json::from_slice(&payload)?;
                     display_push_notification(&notification);
@@ -522,7 +522,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("====================================================================");
 
     let _corr_id = send_unsubscribe(&mut writer, vec![]).await?;
-    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(&mut reader, MAX_FRAME_SIZE))
+    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(&mut reader, MAX_FRAME_SIZE))
         .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {

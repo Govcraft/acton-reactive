@@ -160,7 +160,7 @@ async fn create_countdown_agent(runtime: &mut AgentRuntime) -> AgentHandle {
                     number: i,
                     is_final: i == 0,
                 };
-                println!("  [Countdown] Sending tick: {}", i);
+                println!("  [Countdown] Sending tick: {i}");
                 reply_envelope.send(tick).await;
 
                 if i > 0 {

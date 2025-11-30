@@ -206,7 +206,7 @@ async fn create_kv_store_agent(runtime: &mut AgentRuntime) -> AgentHandle {
             success: true,
         };
 
-        println!("  [KV Store] Set: {} = \"{}\"", key, value);
+        println!("  [KV Store] Set: {key} = \"{value}\"");
 
         let reply_envelope = envelope.reply_envelope();
         Box::pin(async move {

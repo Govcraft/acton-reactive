@@ -75,7 +75,7 @@ async fn send_heartbeat(
     write_heartbeat(writer).await?;
     println!("Sent heartbeat...");
 
-    let (msg_type, _payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
+    let (msg_type, _format, _payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if is_heartbeat(msg_type) {
         println!("Received heartbeat response - connection is healthy!");
