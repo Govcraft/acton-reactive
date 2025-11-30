@@ -205,7 +205,7 @@ impl Printer {
                 // Check if an item with the same name already exists (regardless of state).
                 let item_exists = actor.model.items.iter().any(|entry| match entry.value() {
                     DisplayItem::Item(existing_item) => existing_item.name() == item.name(),
-                    DisplayItem::Loader(existing_name) => existing_name == item.name(),
+                    DisplayItem::Loader(existing_name) => existing_name.as_str() == item.name().as_str(),
                     DisplayItem::Startup => false,
                 });
 
