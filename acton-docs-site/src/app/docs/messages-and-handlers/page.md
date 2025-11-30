@@ -286,24 +286,27 @@ Within a single actor:
 - **Read-only handlers**: Can run concurrently
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Inbox["Actor Inbox"]
-        direction LR
-        M1["M1<br/>(mutate)"] ~~~ M2["M2<br/>(mutate)"] ~~~ M3["M3<br/>(mutate)"] ~~~ Q1["Q1<br/>(act)"] ~~~ Q2["Q2<br/>(act)"] ~~~ M4["M4<br/>(mutate)"]
+        IM1["M1 mutate"]
+        IM2["M2 mutate"]
+        IM3["M3 mutate"]
+        IQ1["Q1 act"]
+        IQ2["Q2 act"]
+        IM4["M4 mutate"]
     end
 
-    subgraph MutExec["mutate_on: Sequential"]
-        direction LR
-        ME1["M1"] --> ME2["M2"] --> ME3["M3"] --> ME4["M4"]
+    subgraph Seq["mutate_on: Sequential"]
+        M1["M1"] --> M2["M2"] --> M3["M3"] --> M4["M4"]
     end
 
-    subgraph ActExec["act_on: Concurrent"]
-        AE1["Q1"]
-        AE2["Q2"]
+    subgraph Con["act_on: Concurrent"]
+        Q1["Q1"]
+        Q2["Q2"]
     end
 
-    Inbox --> MutExec
-    Inbox --> ActExec
+    Inbox --> Seq
+    Inbox --> Con
 ```
 
 ---
