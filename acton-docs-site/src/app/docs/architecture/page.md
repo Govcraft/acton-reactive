@@ -229,8 +229,8 @@ stateDiagram-v2
 sequenceDiagram
     participant User
     participant Agent as ManagedAgent
-    participant Runtime as Tokio Runtime
-    participant Loop as Message Loop
+    participant Runtime as TokioRuntime
+    participant Loop as MessageLoop
 
     User->>Agent: start await
     Agent->>Runtime: spawn task
@@ -238,7 +238,7 @@ sequenceDiagram
     Agent->>Loop: Enter message loop
     Runtime->>Agent: after_start
 
-    Note over Loop: Processing messages...
+    Note over Loop: Processing messages
 
     User->>Agent: stop
     Loop->>Agent: Exit message loop
