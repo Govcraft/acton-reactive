@@ -110,7 +110,8 @@ struct GetConfig {
 struct ServiceState {
     name: String,
     running: bool,
-    details: String,
+    col1: String,
+    col2: String,
 }
 
 /// Activity log entry.
@@ -140,17 +141,20 @@ impl DashboardState {
                 ServiceState {
                     name: "Counter".to_string(),
                     running: true,
-                    details: "Value: 0, Ops: 0".to_string(),
+                    col1: "Value: 0".to_string(),
+                    col2: "Ops: 0".to_string(),
                 },
                 ServiceState {
                     name: "Logger".to_string(),
                     running: true,
-                    details: "Entries: 0".to_string(),
+                    col1: "Entries: 0".to_string(),
+                    col2: String::new(),
                 },
                 ServiceState {
                     name: "Config".to_string(),
                     running: true,
-                    details: "Keys: 0".to_string(),
+                    col1: "Keys: 0".to_string(),
+                    col2: String::new(),
                 },
             ],
             ..Default::default()
@@ -168,19 +172,20 @@ impl DashboardState {
 
     fn update_counter(&mut self, value: i64, ops: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Counter") {
-            service.details = format!("Value: {value}, Ops: {ops}");
+            service.col1 = format!("Value: {value}");
+            service.col2 = format!("Ops: {ops}");
         }
     }
 
     fn update_logger(&mut self, entries: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Logger") {
-            service.details = format!("Entries: {entries}");
+            service.col1 = format!("Entries: {entries}");
         }
     }
 
     fn update_config(&mut self, keys: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Config") {
-            service.details = format!("Keys: {keys}");
+            service.col1 = format!("Keys: {keys}");
         }
     }
 }
@@ -232,12 +237,9 @@ mod render {
                 stdout,
                 Print("│ "),
                 SetForegroundColor(status_color),
-                Print(format!("{status_char} ")),
+                Print(status_char),
                 ResetColor,
-                Print(format!("{:<10}", service.name)),
-                SetForegroundColor(Color::White),
-                Print(format!("{:<45}", service.details)),
-                ResetColor,
+                Print(format!(" {:<10}{:<24}{:<23}", service.name, service.col1, service.col2)),
                 Print("│\r\n")
             )?;
         }
