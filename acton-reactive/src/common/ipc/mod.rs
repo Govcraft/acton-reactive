@@ -95,8 +95,8 @@ pub use subscription_manager::{
 #[allow(unused_imports)]
 pub use types::{
     AgentInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
-    IpcPushNotification, IpcResponse, IpcSubscribeRequest, IpcSubscriptionResponse,
-    IpcUnsubscribeRequest,
+    IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
+    IpcSubscriptionResponse, IpcUnsubscribeRequest,
 };
 
 // Re-export config types for users who want to customize defaults

@@ -102,3 +102,14 @@ required-features = ["ipc"]
 name = "ipc_subscriptions_client"
 path = "examples/ipc_subscriptions/client.rs"
 required-features = ["ipc"]
+
+# IPC Streaming Demo (request-stream pattern with multiple responses)
+[[example]]
+name = "ipc_streaming_server"
+path = "examples/ipc_streaming/server.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "ipc_streaming_client"
+path = "examples/ipc_streaming/client.rs"
+required-features = ["ipc"]

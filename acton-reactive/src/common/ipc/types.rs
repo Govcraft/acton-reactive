@@ -176,9 +176,26 @@ pub struct IpcEnvelope {
     #[serde(default)]
     pub expects_reply: bool,
 
-    /// Maximum time in milliseconds to wait for a response.
+    /// Whether the client expects a streaming response (multiple messages).
     ///
-    /// Only used when `expects_reply` is `true`. Defaults to 30000 (30 seconds).
+    /// When `true`, the IPC listener creates a channel to receive multiple
+    /// responses from the agent, forwarding each as a stream frame. The stream
+    /// ends when the agent sends a message with `is_final: true` or the
+    /// timeout expires.
+    ///
+    /// Mutually exclusive with `expects_reply` - if both are set, `expects_stream`
+    /// takes precedence.
+    ///
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub expects_stream: bool,
+
+    /// Maximum time in milliseconds to wait for a response or stream completion.
+    ///
+    /// For `expects_reply`: time to wait for a single response.
+    /// For `expects_stream`: time to wait for the stream to complete (all frames).
+    ///
+    /// Defaults to 30000 (30 seconds).
     #[serde(default = "default_response_timeout")]
     pub response_timeout_ms: u64,
 }
@@ -219,6 +236,7 @@ impl IpcEnvelope {
             message_type: message_type.into(),
             payload,
             expects_reply: false,
+            expects_stream: false,
             response_timeout_ms: default_response_timeout(),
         }
     }
@@ -261,6 +279,7 @@ impl IpcEnvelope {
             message_type: message_type.into(),
             payload,
             expects_reply: true,
+            expects_stream: false,
             response_timeout_ms: default_response_timeout(),
         }
     }
@@ -298,6 +317,73 @@ impl IpcEnvelope {
             message_type: message_type.into(),
             payload,
             expects_reply: true,
+            expects_stream: false,
+            response_timeout_ms: timeout_ms,
+        }
+    }
+
+    /// Creates a new streaming request IPC envelope.
+    ///
+    /// The agent can send multiple responses, each forwarded as a stream frame.
+    /// The stream ends when the agent completes or the timeout expires.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The logical name or ERN of the target agent.
+    /// * `message_type` - The registered type name of the message.
+    /// * `payload` - The serialized message payload.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let envelope = IpcEnvelope::new_stream_request(
+    ///     "search_service",
+    ///     "SearchQuery",
+    ///     serde_json::json!({ "query": "rust async" }),
+    /// );
+    /// // The client will receive multiple stream frames
+    /// ```
+    #[must_use]
+    pub fn new_stream_request(
+        target: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: serde_json::Value,
+    ) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "str".create_type_id::<V7>().to_string(),
+            target: target.into(),
+            message_type: message_type.into(),
+            payload,
+            expects_reply: false,
+            expects_stream: true,
+            response_timeout_ms: default_response_timeout(),
+        }
+    }
+
+    /// Creates a new streaming request IPC envelope with a custom timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The logical name or ERN of the target agent.
+    /// * `message_type` - The registered type name of the message.
+    /// * `payload` - The serialized message payload.
+    /// * `timeout_ms` - Maximum time in milliseconds to wait for stream completion.
+    #[must_use]
+    pub fn new_stream_request_with_timeout(
+        target: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: serde_json::Value,
+        timeout_ms: u64,
+    ) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "str".create_type_id::<V7>().to_string(),
+            target: target.into(),
+            message_type: message_type.into(),
+            payload,
+            expects_reply: false,
+            expects_stream: true,
             response_timeout_ms: timeout_ms,
         }
     }
@@ -319,6 +405,7 @@ impl IpcEnvelope {
             message_type: message_type.into(),
             payload,
             expects_reply: false,
+            expects_stream: false,
             response_timeout_ms: default_response_timeout(),
         }
     }
@@ -341,6 +428,7 @@ impl IpcEnvelope {
             message_type: message_type.into(),
             payload,
             expects_reply: true,
+            expects_stream: false,
             response_timeout_ms: timeout_ms,
         }
     }
@@ -349,6 +437,12 @@ impl IpcEnvelope {
     #[must_use]
     pub const fn expects_reply(&self) -> bool {
         self.expects_reply
+    }
+
+    /// Returns `true` if this envelope expects a streaming response.
+    #[must_use]
+    pub const fn expects_stream(&self) -> bool {
+        self.expects_stream
     }
 
     /// Returns the response timeout as a `Duration`.
@@ -403,6 +497,134 @@ pub struct IpcResponse {
     /// Response payload (if `success` is `true`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
+}
+
+// ============================================================================
+// Streaming Response Types
+// ============================================================================
+
+/// A single frame in a streaming response.
+///
+/// When a client sends a request with `expects_stream: true`, the server
+/// responds with a sequence of stream frames. Each frame contains:
+/// - A sequence number for ordering
+/// - Optional payload data
+/// - A flag indicating if this is the final frame
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "correlation_id": "str_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "sequence": 0,
+///   "payload": { "result": "item 1" },
+///   "is_final": false
+/// }
+/// ```
+///
+/// Final frame with no data:
+/// ```json
+/// {
+///   "correlation_id": "str_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "sequence": 3,
+///   "is_final": true
+/// }
+/// ```
+///
+/// Error frame:
+/// ```json
+/// {
+///   "correlation_id": "str_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "sequence": 2,
+///   "error": "Stream processing failed",
+///   "error_code": "STREAM_ERROR",
+///   "is_final": true
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcStreamFrame {
+    /// Correlation ID matching the original stream request.
+    pub correlation_id: String,
+
+    /// Sequence number (0-indexed) for ordering frames.
+    pub sequence: u32,
+
+    /// Whether this is the final frame in the stream.
+    ///
+    /// When `true`, no more frames will be sent for this correlation ID.
+    #[serde(default)]
+    pub is_final: bool,
+
+    /// Error message (if stream encountered an error).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+
+    /// Machine-readable error code (if error occurred).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+
+    /// Stream frame payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+}
+
+impl IpcStreamFrame {
+    /// Creates a new stream frame with data.
+    #[must_use]
+    pub fn data(correlation_id: impl Into<String>, sequence: u32, payload: serde_json::Value) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            sequence,
+            is_final: false,
+            error: None,
+            error_code: None,
+            payload: Some(payload),
+        }
+    }
+
+    /// Creates the final frame in a stream (with optional payload).
+    #[must_use]
+    pub fn final_frame(correlation_id: impl Into<String>, sequence: u32, payload: Option<serde_json::Value>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            sequence,
+            is_final: true,
+            error: None,
+            error_code: None,
+            payload,
+        }
+    }
+
+    /// Creates an error frame that terminates the stream.
+    #[must_use]
+    pub fn error(correlation_id: impl Into<String>, sequence: u32, error: impl Into<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            sequence,
+            is_final: true,
+            error: Some(error.into()),
+            error_code: Some("STREAM_ERROR".to_string()),
+            payload: None,
+        }
+    }
+
+    /// Creates an error frame with a custom error code.
+    #[must_use]
+    pub fn error_with_code(
+        correlation_id: impl Into<String>,
+        sequence: u32,
+        error_code: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            sequence,
+            is_final: true,
+            error: Some(error.into()),
+            error_code: Some(error_code.into()),
+            payload: None,
+        }
+    }
 }
 
 // ============================================================================

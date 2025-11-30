@@ -34,14 +34,15 @@ use tracing::{debug, error, info, trace, warn};
 use super::config::IpcConfig;
 use super::protocol::{
     is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame, write_discovery_response,
-    write_heartbeat, write_push, write_response, write_subscription_response, MSG_TYPE_REQUEST,
+    write_heartbeat, write_push, write_response, write_stream_frame, write_subscription_response,
+    MSG_TYPE_REQUEST,
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
 use super::subscription_manager::{create_push_channel, PushReceiver, SubscriptionManager};
 use super::types::{
     AgentInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcResponse,
-    IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
+    IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
 };
 use crate::common::{AgentHandle, Envelope};
 use crate::message::MessageAddress;
@@ -612,8 +613,16 @@ async fn handle_request_frame(
         correlation_id = %envelope.correlation_id,
         target = %envelope.target,
         message_type = %envelope.message_type,
+        expects_stream = envelope.expects_stream,
         "Received request"
     );
+
+    // Handle streaming requests differently
+    if envelope.expects_stream {
+        let result = process_stream_request(&envelope, ctx, writer).await;
+        ctx.stats.decrement_in_flight();
+        return result;
+    }
 
     // Process the envelope and send response
     let response =
@@ -1058,6 +1067,153 @@ fn process_fire_and_forget(
             IpcResponse::error(correlation_id, &e)
         }
     }
+}
+
+/// Process a streaming request (multiple responses from agent).
+///
+/// The agent can send multiple responses through the reply-to channel.
+/// Each response is serialized and sent as a stream frame. The stream
+/// ends when the channel is closed or the timeout expires.
+async fn process_stream_request(
+    envelope: &IpcEnvelope,
+    ctx: &ConnectionContext,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) -> RequestResult {
+    let correlation_id = &envelope.correlation_id;
+    let timeout = envelope.response_timeout();
+
+    // Look up the target agent
+    let Some(entry) = ctx.agent_registry.get(&envelope.target) else {
+        let frame = IpcStreamFrame::error(correlation_id, 0, format!("Agent not found: {}", envelope.target));
+        if let Err(e) = write_stream_frame(writer, &frame).await {
+            error!(error = %e, "Failed to send stream error frame");
+            return RequestResult::Break;
+        }
+        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+        return RequestResult::Continue;
+    };
+    let agent_handle = entry.value().clone();
+    drop(entry); // Release the lock early
+
+    // Deserialize the message
+    let message = match ctx.type_registry.deserialize_value(&envelope.message_type, &envelope.payload) {
+        Ok(msg) => msg,
+        Err(e) => {
+            let frame = IpcStreamFrame::error_with_code(
+                correlation_id,
+                0,
+                "SERIALIZATION_ERROR",
+                e.to_string(),
+            );
+            if let Err(e) = write_stream_frame(writer, &frame).await {
+                error!(error = %e, "Failed to send stream error frame");
+                return RequestResult::Break;
+            }
+            ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+            return RequestResult::Continue;
+        }
+    };
+
+    // Create a response channel for receiving multiple responses
+    let (mut response_receiver, reply_to_address) = create_ipc_response_proxy(correlation_id);
+
+    // Send the message to the agent
+    if let Err(e) = agent_handle.try_send_boxed_with_reply_to(message, reply_to_address) {
+        let frame = match e {
+            IpcError::TargetBusy => {
+                ctx.stats.backpressure_rejections.fetch_add(1, Ordering::Relaxed);
+                IpcStreamFrame::error_with_code(correlation_id, 0, "TARGET_BUSY", "Agent inbox is full")
+            }
+            _ => {
+                ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                IpcStreamFrame::error(correlation_id, 0, e.to_string())
+            }
+        };
+        if let Err(e) = write_stream_frame(writer, &frame).await {
+            error!(error = %e, "Failed to send stream error frame");
+            return RequestResult::Break;
+        }
+        return RequestResult::Continue;
+    }
+
+    ctx.stats.messages_routed.fetch_add(1, Ordering::Relaxed);
+
+    // Stream responses until channel closes or timeout
+    let mut sequence: u32 = 0;
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            // Timeout - send final frame with timeout error
+            let frame = IpcStreamFrame::error_with_code(
+                correlation_id,
+                sequence,
+                "TIMEOUT",
+                format!("Stream timed out after {} ms", timeout.as_millis()),
+            );
+            if let Err(e) = write_stream_frame(writer, &frame).await {
+                error!(error = %e, "Failed to send stream timeout frame");
+                return RequestResult::Break;
+            }
+            ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+            break;
+        }
+
+        match tokio::time::timeout(remaining, response_receiver.recv()).await {
+            Ok(Some(response_envelope)) => {
+                // Serialize and send the stream frame
+                let payload = serialize_response(response_envelope.message.as_ref(), &ctx.type_registry);
+                let frame = IpcStreamFrame::data(correlation_id, sequence, payload);
+
+                trace!(
+                    correlation_id,
+                    sequence,
+                    "Sending stream frame"
+                );
+
+                if let Err(e) = write_stream_frame(writer, &frame).await {
+                    error!(error = %e, "Failed to send stream frame");
+                    return RequestResult::Break;
+                }
+
+                sequence += 1;
+            }
+            Ok(None) => {
+                // Channel closed - stream complete, send final frame
+                let frame = IpcStreamFrame::final_frame(correlation_id, sequence, None);
+
+                debug!(
+                    correlation_id,
+                    total_frames = sequence,
+                    "Stream completed"
+                );
+
+                if let Err(e) = write_stream_frame(writer, &frame).await {
+                    error!(error = %e, "Failed to send final stream frame");
+                    return RequestResult::Break;
+                }
+                break;
+            }
+            Err(_) => {
+                // Timeout while waiting for next frame
+                let frame = IpcStreamFrame::error_with_code(
+                    correlation_id,
+                    sequence,
+                    "TIMEOUT",
+                    format!("Stream timed out after {} ms", timeout.as_millis()),
+                );
+                if let Err(e) = write_stream_frame(writer, &frame).await {
+                    error!(error = %e, "Failed to send stream timeout frame");
+                    return RequestResult::Break;
+                }
+                ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                break;
+            }
+        }
+    }
+
+    RequestResult::Continue
 }
 
 /// Process a request-response message (wait for agent's reply).

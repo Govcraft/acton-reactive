@@ -68,6 +68,9 @@ pub const MSG_TYPE_UNSUBSCRIBE: u8 = 0x07;
 /// Message type: Discovery request (client → server, for agent/type discovery).
 pub const MSG_TYPE_DISCOVER: u8 = 0x08;
 
+/// Message type: Stream frame (server → client, for streaming responses).
+pub const MSG_TYPE_STREAM: u8 = 0x09;
+
 /// Frame header size: 4 bytes length + 1 byte version + 1 byte type.
 pub const HEADER_SIZE: usize = 6;
 
@@ -112,6 +115,7 @@ where
             | MSG_TYPE_SUBSCRIBE
             | MSG_TYPE_UNSUBSCRIBE
             | MSG_TYPE_DISCOVER
+            | MSG_TYPE_STREAM
     ) {
         return Err(IpcError::ProtocolError(format!(
             "Unknown message type: {msg_type:#04x}"
@@ -430,6 +434,31 @@ where
     };
     let payload = serde_json::to_vec(response)?;
     write_frame(writer, msg_type, &payload).await
+}
+
+// ============================================================================
+// Stream Frame Functions
+// ============================================================================
+
+/// Check if a message type is a stream frame.
+#[must_use]
+pub const fn is_stream(msg_type: u8) -> bool {
+    msg_type == MSG_TYPE_STREAM
+}
+
+/// Write a stream frame to the stream.
+///
+/// Stream frames are used for streaming responses where a single request
+/// results in multiple response messages.
+pub async fn write_stream_frame<W>(
+    writer: &mut W,
+    frame: &super::types::IpcStreamFrame,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_vec(frame)?;
+    write_frame(writer, MSG_TYPE_STREAM, &payload).await
 }
 
 #[cfg(test)]
