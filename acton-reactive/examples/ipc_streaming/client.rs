@@ -85,7 +85,8 @@ async fn send_stream_request(
     timeout_ms: u64,
 ) -> Result<Vec<IpcStreamFrame>, Box<dyn std::error::Error>> {
     // Create envelope with expects_stream = true
-    let envelope = IpcEnvelope::new_stream_request_with_timeout(target, message_type, payload, timeout_ms);
+    let envelope =
+        IpcEnvelope::new_stream_request_with_timeout(target, message_type, payload, timeout_ms);
 
     println!("📤 Stream request to {target}::{message_type}");
     println!("   correlation_id: {}", envelope.correlation_id);
@@ -258,8 +259,8 @@ async fn demo_error_handling(
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
 
-    // Test: Send stream request to non-existent agent
-    println!("❌ Test: Stream request to non-existent agent 'nonexistent'");
+    // Test: Send stream request to non-existent actor
+    println!("❌ Test: Stream request to non-existent actor 'nonexistent'");
     let result = send_stream_request(
         reader,
         writer,
@@ -299,7 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if socket is available
     if !socket_exists(&socket_path) {
-        eprintln!("\n❌ Error: Socket does not exist at {}", socket_path.display());
+        eprintln!(
+            "\n❌ Error: Socket does not exist at {}",
+            socket_path.display()
+        );
         eprintln!("   Make sure the ipc_streaming server is running:");
         eprintln!("   cargo run --example ipc_streaming_server --features ipc");
         std::process::exit(1);

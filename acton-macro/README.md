@@ -1,12 +1,12 @@
 # Acton Macro
 
-`acton-macro` provides procedural macros that simplify the creation of messages and agents in the [Acton Reactive Application Framework](https://github.com/Govcraft/acton-reactive). These macros reduce boilerplate and make your code more concise, allowing you to focus on building reactive, event-driven applications.
+`acton-macro` provides procedural macros that simplify the creation of messages and actors in the [Acton Reactive Application Framework](https://github.com/Govcraft/acton-reactive). These macros reduce boilerplate and make your code more concise, allowing you to focus on building reactive, event-driven applications.
 
 ## Key Features
 
 - **Simplified Message Creation**: The `acton_message` macro helps you quickly define messages that are compatible with the Acton framework.
-- **Agent Macro Support**: Procedural macros allow for cleaner and more expressive agent definitions.
-- **Integration with Acton**: `acton-macro` is designed to be used with the [Acton Reactive Application Framework](https://github.com/Govcraft/acton-reactive), a Rust framework for building reactive and scalable applications using an agent-based model.
+- **Actor Macro Support**: Procedural macros allow for cleaner and more expressive actor definitions.
+- **Integration with Acton**: `acton-macro` is designed to be used with the [Acton Reactive Application Framework](https://github.com/Govcraft/acton-reactive), a Rust framework for building reactive and scalable applications using an actor-based model.
 
 ## Usage
 
@@ -19,13 +19,13 @@ For example:
 struct MyMessage;
 ```
 
-This macro automatically generates the necessary traits for messages to be used with agents in the Acton framework.
+This macro automatically generates the necessary traits for messages to be used with actors in the Acton framework.
 or
 ```rust
 #[acton_actor]
 struct MyActor;
 ```
-This macro automatically generates the necessary traits for structs to be used as agents in the Acton framework.
+This macro automatically generates the necessary traits for structs to be used as actors in the Acton framework.
 
 ## Learn More
 

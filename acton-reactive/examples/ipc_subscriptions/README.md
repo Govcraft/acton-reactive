@@ -30,7 +30,7 @@ This example demonstrates **subscription-based push notifications** in acton-rea
        │<─────────────────────────────────────│
        │                                      │
        │                        ┌─────────────┴────────────┐
-       │                        │ Internal agent broadcasts │
+       │                        │ Internal actor broadcasts │
        │                        │ PriceUpdate via broker    │
        │                        └─────────────┬────────────┘
        │                                      │
@@ -89,7 +89,7 @@ Registered 3 IPC message types for subscriptions
   - SystemStatus: System status notifications
 
 Price feed service started
-Exposed agents: price_feed
+Exposed actors: price_feed
 IPC listener started
 Socket ready: /run/user/1000/acton/ipc_subscriptions_server/ipc.sock
 
@@ -165,7 +165,7 @@ The subscription system uses three message types in the IPC wire protocol:
 {
   "notification_id": "push_01h9xz...",
   "message_type": "PriceUpdate",
-  "source_agent": "price_feed",
+  "source_actor": "price_feed",
   "payload": {
     "symbol": "AAPL",
     "price": 175.50,

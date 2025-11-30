@@ -42,8 +42,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use acton_reactive::ipc::protocol::{
-    read_frame, write_frame, Format, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_PUSH, MSG_TYPE_RESPONSE,
-    MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
+    read_frame, write_frame, Format, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_PUSH,
+    MSG_TYPE_RESPONSE, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
 };
 use acton_reactive::ipc::{
     socket_exists, socket_is_alive, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse,
@@ -145,7 +145,7 @@ async fn send_unsubscribe(
     Ok(correlation_id)
 }
 
-/// Sends a discovery request for both agents and message types.
+/// Sends a discovery request for both actors and message types.
 async fn send_discover_all(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -158,11 +158,11 @@ async fn send_discover_all(
     Ok(correlation_id)
 }
 
-/// Sends a discovery request for agents only.
-async fn send_discover_agents(
+/// Sends a discovery request for actors only.
+async fn send_discover_actors(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let request = IpcDiscoverRequest::agents_only();
+    let request = IpcDiscoverRequest::actors_only();
     let correlation_id = request.correlation_id.clone();
 
     let payload = serde_json::to_vec(&request)?;
@@ -229,33 +229,33 @@ fn handle_subscription_response(response: &IpcSubscriptionResponse) {
 // Demo Scenarios
 // ============================================================================
 
-/// Demo 0: Discover available agents and message types before subscribing.
+/// Demo 0: Discover available actors and message types before subscribing.
 async fn demo_discovery(
     reader: &mut tokio::net::unix::OwnedReadHalf,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("====================================================================");
-    println!("  Demo 0: Discover Available Agents and Message Types");
+    println!("  Demo 0: Discover Available Actors and Message Types");
     println!("====================================================================");
 
-    // Discover both agents and message types
-    println!("\nSending discovery request (agents + message types)...");
+    // Discover both actors and message types
+    println!("\nSending discovery request (actors + message types)...");
     let _corr_id = send_discover_all(writer).await?;
 
     // Wait for discovery response
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcDiscoverResponse = serde_json::from_slice(&payload)?;
         if response.success {
             println!("\n  \x1b[32mDiscovery successful!\x1b[0m");
 
-            if let Some(agents) = &response.agents {
-                println!("\n  Available agents ({}):", agents.len());
-                for agent in agents {
-                    println!("    - {} (ERN: {})", agent.name, agent.ern);
+            if let Some(actors) = &response.actors {
+                println!("\n  Available actors ({}):", actors.len());
+                for actor in actors {
+                    println!("    - {} (ERN: {})", actor.name, actor.ern);
                 }
             }
 
@@ -273,18 +273,18 @@ async fn demo_discovery(
         }
     }
 
-    // Also demonstrate agents-only discovery
-    println!("\n\nSending discovery request (agents only)...");
-    let _corr_id = send_discover_agents(writer).await?;
+    // Also demonstrate actors-only discovery
+    println!("\n\nSending discovery request (actors only)...");
+    let _corr_id = send_discover_actors(writer).await?;
 
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcDiscoverResponse = serde_json::from_slice(&payload)?;
         if response.success {
-            if let Some(agents) = &response.agents {
-                println!("  Found {} agent(s)", agents.len());
+            if let Some(actors) = &response.actors {
+                println!("  Found {} actor(s)", actors.len());
             }
             if response.message_types.is_none() {
                 println!("  (message types not requested - as expected)");
@@ -316,8 +316,8 @@ async fn demo_subscribe_all(
     let _corr_id = send_subscribe(writer, types).await?;
 
     // Wait for subscription response
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -364,8 +364,8 @@ async fn demo_prices_only(
     let _corr_id = send_unsubscribe(writer, vec![]).await?;
 
     // Read unsubscribe response
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -377,8 +377,8 @@ async fn demo_prices_only(
     let _corr_id = send_subscribe(writer, vec!["PriceUpdate".to_string()]).await?;
 
     // Wait for subscription response
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -426,8 +426,8 @@ async fn demo_trades_only(
     let _corr_id = send_unsubscribe(writer, vec!["PriceUpdate".to_string()]).await?;
 
     // Read unsubscribe response
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -439,8 +439,8 @@ async fn demo_trades_only(
     let _corr_id = send_subscribe(writer, vec!["TradeExecuted".to_string()]).await?;
 
     // Wait for subscription response
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -490,7 +490,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if socket is available
     if !socket_exists(&socket_path) {
-        eprintln!("\nError: Socket does not exist at {}", socket_path.display());
+        eprintln!(
+            "\nError: Socket does not exist at {}",
+            socket_path.display()
+        );
         eprintln!("Make sure the ipc_subscriptions server is running:");
         eprintln!("  cargo run --example ipc_subscriptions_server --features ipc");
         std::process::exit(1);
@@ -522,8 +525,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("====================================================================");
 
     let _corr_id = send_unsubscribe(&mut writer, vec![]).await?;
-    let (msg_type, _format, payload) = timeout(Duration::from_secs(5), read_frame(&mut reader, MAX_FRAME_SIZE))
-        .await??;
+    let (msg_type, _format, payload) = timeout(
+        Duration::from_secs(5),
+        read_frame(&mut reader, MAX_FRAME_SIZE),
+    )
+    .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;

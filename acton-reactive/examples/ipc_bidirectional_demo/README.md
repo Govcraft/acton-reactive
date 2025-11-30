@@ -1,6 +1,6 @@
 # IPC Bidirectional Communication Example
 
-This example demonstrates the **request-response pattern** in acton-reactive IPC, where external clients can send queries and receive responses from agents.
+This example demonstrates the **request-response pattern** in acton-reactive IPC, where external clients can send queries and receive responses from actors.
 
 ## Components
 
@@ -9,7 +9,7 @@ This example demonstrates the **request-response pattern** in acton-reactive IPC
 
 ## Features
 
-- **Request-Response Pattern**: External process sends a query, agent processes it, and returns a response via the IPC proxy channel
+- **Request-Response Pattern**: External process sends a query, actor processes it, and returns a response via the IPC proxy channel
 - **Calculator Service**: A simple arithmetic service demonstrating synchronous response generation
 - **Key-Value Store**: A stateful service demonstrating queries that may or may not have results
 
@@ -17,8 +17,8 @@ This example demonstrates the **request-response pattern** in acton-reactive IPC
 
 1. IPC client sends `IpcEnvelope` with `expects_reply: true`
 2. IPC listener creates a temporary MPSC channel (proxy)
-3. Message is sent to agent with proxy as `reply_to` address
-4. Agent handler uses `envelope.reply_envelope().send(response)` to reply
+3. Message is sent to actor with proxy as `reply_to` address
+4. Actor handler uses `envelope.reply_envelope().send(response)` to reply
 5. Listener receives response on proxy channel and serializes it back to client
 
 ## Running the Example

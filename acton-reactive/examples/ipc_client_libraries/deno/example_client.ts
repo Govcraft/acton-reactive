@@ -100,14 +100,12 @@ async function demoStreaming(client: ActonIpcClient): Promise<void> {
   try {
     let frameCount = 0;
 
-    for await (
-      const frame of client.stream(
-        "search",
-        "SearchQuery",
-        { query: "deno", limit: 5 },
-        10000,
-      )
-    ) {
+    for await (const frame of client.stream(
+      "search",
+      "SearchQuery",
+      { query: "deno", limit: 5 },
+      10000,
+    )) {
       frameCount++;
 
       if (frame.error) {
@@ -115,7 +113,9 @@ async function demoStreaming(client: ActonIpcClient): Promise<void> {
         break;
       }
 
-      console.log(`  Frame ${frame.sequence}: ${JSON.stringify(frame.payload)}`);
+      console.log(
+        `  Frame ${frame.sequence}: ${JSON.stringify(frame.payload)}`,
+      );
 
       if (frame.is_final) {
         console.log(`  Stream complete (${frameCount} frames)`);
@@ -137,14 +137,12 @@ async function demoDiscovery(client: ActonIpcClient): Promise<void> {
   try {
     const discovery = await client.discover();
 
-    console.log(
-      `  Protocol: v${discovery.protocol_version?.current ?? "?"}`,
-    );
+    console.log(`  Protocol: v${discovery.protocol_version?.current ?? "?"}`);
     console.log(
       `  Capabilities: ${JSON.stringify(discovery.protocol_version?.capabilities ?? {})}`,
     );
     console.log(
-      `  Agents: ${discovery.agents?.map((a) => a.name).join(", ") || "none"}`,
+      `  Actors: ${discovery.actors?.map((a) => a.name).join(", ") || "none"}`,
     );
     console.log(
       `  Message Types: ${discovery.message_types?.join(", ") || "none"}`,
@@ -203,7 +201,9 @@ async function main(): Promise<void> {
   if (!(await socketExists(socketPath))) {
     console.log(`\nError: Socket not found at ${socketPath}`);
     console.log("\nMake sure the example server is running:");
-    console.log("  cargo run --example ipc_client_libraries_server --features ipc");
+    console.log(
+      "  cargo run --example ipc_client_libraries_server --features ipc",
+    );
     Deno.exit(1);
   }
 

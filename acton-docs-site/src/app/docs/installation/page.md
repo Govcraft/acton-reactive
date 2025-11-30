@@ -3,64 +3,156 @@ title: Installation
 nextjs:
   metadata:
     title: Installation - acton-reactive
-    description: Add acton-reactive to your Rust project and configure dependencies.
+    description: Get acton-reactive set up in your Rust project in under 5 minutes.
 ---
 
-Add `acton-reactive` to your Rust project and start building agent-based systems.
+Get `acton-reactive` set up in your Rust project in under 5 minutes.
 
 ---
 
-## Basic Installation
+## Quick Start
 
-Add `acton-reactive` to your `Cargo.toml`:
+Add these to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-reactive = "0.1"  # Check crates.io for latest version
-acton-macro = "0.1"     # Optional: Convenience macros
-tokio = { version = "1", features = ["full"] }
+acton-reactive = "0.1"       # Core framework
+acton-macro = "0.1"           # Convenience macros (optional but recommended)
+tokio = { version = "1", features = ["full"] }  # Required async runtime
 ```
 
-{% callout type="note" title="Tokio Runtime" %}
-`acton-reactive` requires the Tokio async runtime. Make sure to include it with the `full` feature set for complete functionality.
+That's it! You're ready to build actors.
+
+{% callout type="note" title="Why Tokio?" %}
+`acton-reactive` is built on top of [Tokio](https://tokio.rs/), Rust's most widely-used async runtime. The `full` feature set is recommended for complete functionality, though you can use a minimal set if binary size is critical.
 {% /callout %}
 
 ---
 
-## Optional Features
+## Verify It Works
+
+Create a quick test to make sure everything is wired up correctly:
+
+```rust
+use acton_reactive::prelude::*;
+use acton_macro::acton_actor;
+
+#[acton_actor]
+struct TestActor {
+    ready: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Ping;
+
+#[tokio::main]
+async fn main() {
+    let mut runtime = ActonApp::launch();
+
+    let mut actor = runtime.new_actor::<TestActor>();
+
+    actor.mutate_on::<Ping>(|actor, _ctx| {
+        actor.model.ready = true;
+        println!("Pong! acton-reactive is working.");
+        ActorReply::immediate()
+    });
+
+    let handle = actor.start().await;
+    handle.send(Ping).await;
+
+    runtime.shutdown_all().await.expect("Shutdown failed");
+}
+```
+
+Run it:
+
+```shell
+cargo run
+```
+
+You should see:
+
+```text
+Pong! acton-reactive is working.
+```
+
+---
+
+## Feature Flags
 
 ### IPC Support
 
-For inter-process communication support, enable the `ipc` feature:
+Need external processes (Python, Node.js, etc.) to talk to your actors? Enable IPC:
 
 ```toml
 [dependencies]
 acton-reactive = { version = "0.1", features = ["ipc"] }
 ```
 
-This enables:
-- Unix socket communication
-- JSON and MessagePack serialization
+This adds:
+- Unix Domain Socket communication
+- JSON serialization for messages
+- Rate limiting and connection management
 - External process integration
-- Rate limiting and security features
+
+### MessagePack Serialization
+
+For smaller, faster IPC messages:
+
+```toml
+[dependencies]
+acton-reactive = { version = "0.1", features = ["ipc-messagepack"] }
+```
+
+### Feature Comparison
+
+| Feature | What It Adds | Use When |
+|---------|--------------|----------|
+| *(default)* | Core actors, messaging, broker | Basic actor-based applications |
+| `ipc` | Unix socket IPC, JSON serialization | External process integration |
+| `ipc-messagepack` | `ipc` + MessagePack serialization | High-throughput IPC, smaller messages |
 
 ---
 
 ## Crate Overview
 
-| Crate | Purpose |
-|-------|---------|
-| `acton-reactive` | Core framework for agents, messaging, and runtime |
-| `acton-macro` | Procedural macros for deriving agent traits |
-| `acton-ern` | Entity Resource Naming for agent identification |
+| Crate | What It Does | Required? |
+|-------|-------------|-----------|
+| `acton-reactive` | Core framework: actors, messaging, runtime | Yes |
+| `acton-macro` | Procedural macros (`#[acton_actor]`, `#[acton_message]`) | Recommended |
+| `acton-ern` | Entity Resource Names for actor identification | Included with core |
+
+### Without the Macros
+
+You can use `acton-reactive` without `acton-macro`, but you'll need to derive traits manually:
+
+```rust
+// With acton-macro (recommended)
+#[acton_actor]
+struct MyState {
+    value: u32,
+}
+
+// Without macros (equivalent)
+#[derive(Default, Clone, Debug)]
+struct MyState {
+    value: u32,
+}
+```
+
+The macro just saves boilerplate - there's no magic.
 
 ---
 
 ## Minimum Rust Version
 
-`acton-reactive` requires Rust 1.75 or later for async trait support and other modern features.
+`acton-reactive` requires **Rust 1.75** or later.
 
-Check your Rust version:
+This is needed for:
+- Native async trait support (no more `#[async_trait]` everywhere)
+- Other modern Rust features
+
+Check your version:
 
 ```shell
 rustc --version
@@ -74,57 +166,244 @@ rustup update stable
 
 ---
 
-## Verifying Installation
+## Common Project Structures
 
-Create a simple test file to verify everything works:
-
-```rust
-use acton_reactive::prelude::*;
-use acton_macro::acton_actor;
-
-#[acton_actor]
-struct TestAgent {
-    initialized: bool,
-}
-
-#[derive(Clone, Debug)]
-struct Ping;
-
-#[tokio::main]
-async fn main() {
-    let mut runtime = ActonApp::launch();
-
-    let mut agent = runtime.new_agent::<TestAgent>();
-
-    agent.mutate_on::<Ping>(|agent, _ctx| {
-        agent.model.initialized = true;
-        println!("Pong! Agent is working.");
-        AgentReply::immediate()
-    });
-
-    let handle = agent.start().await;
-    handle.send(Ping).await;
-
-    runtime.shutdown_all().await.expect("Shutdown failed");
-}
-```
-
-Run with:
-
-```shell
-cargo run
-```
-
-You should see:
+### Simple Single-Binary
 
 ```text
-Pong! Agent is working.
+my-app/
+├── Cargo.toml
+└── src/
+    └── main.rs         # Runtime, actors, handlers all in one file
+```
+
+Good for: Learning, small tools, prototypes.
+
+### Modular Application
+
+```text
+my-app/
+├── Cargo.toml
+└── src/
+    ├── main.rs         # Runtime setup and coordination
+    ├── actors/
+    │   ├── mod.rs
+    │   ├── counter.rs  # Counter actor
+    │   └── logger.rs   # Logger actor
+    └── messages/
+        ├── mod.rs
+        └── events.rs   # Shared message types
+```
+
+Good for: Larger applications with multiple actors.
+
+### Library + Binary
+
+```text
+my-app/
+├── Cargo.toml
+├── src/
+│   └── lib.rs          # Actor definitions, reusable logic
+└── examples/
+    └── demo.rs         # Example usage
+```
+
+Good for: Reusable actor libraries.
+
+---
+
+## IDE Setup
+
+### VS Code
+
+Install the [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer) extension. It works well with `acton-reactive` out of the box.
+
+### IntelliJ / CLion
+
+The [Rust plugin](https://www.jetbrains.com/rust/) provides full support, including macro expansion previews.
+
+### Neovim
+
+Use `nvim-lspconfig` with `rust-analyzer`. No special configuration needed.
+
+---
+
+## Troubleshooting
+
+### "unresolved import `acton_reactive`"
+
+**Cause:** Cargo can't find the crate.
+
+**Fix:** Make sure your `Cargo.toml` has the dependency:
+
+```toml
+[dependencies]
+acton-reactive = "0.1"
+```
+
+Then run `cargo build` to fetch it.
+
+---
+
+### "the trait `Default` is not implemented"
+
+**Cause:** Your actor state struct doesn't implement `Default`.
+
+**Fix:** Add `#[acton_actor]` macro or derive `Default` manually:
+
+```rust
+// Option 1: Use the macro
+#[acton_actor]
+struct MyState {
+    count: u32,
+}
+
+// Option 2: Derive manually
+#[derive(Default, Clone, Debug)]
+struct MyState {
+    count: u32,
+}
+```
+
+---
+
+### "tokio runtime not available"
+
+**Cause:** You're missing the tokio runtime or `#[tokio::main]`.
+
+**Fix:** Make sure your main function is async with tokio:
+
+```rust
+#[tokio::main]  // This is required!
+async fn main() {
+    let mut runtime = ActonApp::launch();
+    // ...
+}
+```
+
+And check your `Cargo.toml`:
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+```
+
+---
+
+### "cannot find macro `acton_actor`"
+
+**Cause:** The `acton-macro` crate isn't in your dependencies.
+
+**Fix:** Add it:
+
+```toml
+[dependencies]
+acton-macro = "0.1"
+```
+
+Then import it:
+
+```rust
+use acton_macro::acton_actor;
+```
+
+---
+
+### Messages aren't being received
+
+**Common causes:**
+
+1. **Handler not registered:** Did you call `mutate_on` or `act_on` for that message type?
+
+   ```rust
+   actor.mutate_on::<MyMessage>(|actor, ctx| {
+       // Handler must be registered!
+       ActorReply::immediate()
+   });
+   ```
+
+2. **Actor not started:** Handlers only work after `start()`:
+
+   ```rust
+   let handle = actor.start().await;  // Start first!
+   handle.send(MyMessage).await;      // Then send
+   ```
+
+3. **Wrong message type:** Rust's type system is strict. `MyMessage` and `my_message::MyMessage` are different types.
+
+4. **Shutdown too fast:** If your program exits immediately after sending, messages might not process:
+
+   ```rust
+   handle.send(MyMessage).await;
+   tokio::time::sleep(Duration::from_millis(100)).await;  // Give it time
+   runtime.shutdown_all().await?;
+   ```
+
+---
+
+### Broadcasts aren't received
+
+**Cause:** Actor didn't subscribe, or subscribed after the broadcast.
+
+**Fix:** Subscribe *before* starting the actor:
+
+```rust
+// Good order
+actor.handle().subscribe::<MyEvent>().await;
+let handle = actor.start().await;
+
+// Bad order - might miss messages
+let handle = actor.start().await;
+handle.subscribe::<MyEvent>().await;  // Too late for early broadcasts
+```
+
+---
+
+### Compilation is slow
+
+**Cause:** Probably building all of tokio's features every time.
+
+**Fix:** Use incremental compilation and consider a workspace:
+
+```toml
+# Cargo.toml
+[profile.dev]
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2  # Optimize deps, not your code
+```
+
+---
+
+### IPC socket already in use
+
+**Cause:** A previous process left the socket file behind.
+
+**Fix:** Delete the stale socket:
+
+```shell
+rm /tmp/acton.sock
+```
+
+Or handle it in your code:
+
+```rust
+use std::path::Path;
+
+let socket_path = Path::new("/tmp/acton.sock");
+if socket_path.exists() {
+    std::fs::remove_file(socket_path)?;
+}
 ```
 
 ---
 
 ## Next Steps
 
-- [Getting Started](/) - Build your first agent
-- [Architecture](/docs/architecture) - Understand the system design
-- [Configuration](/docs/configuration) - Configure the runtime
+Now that you're set up:
+
+- [Getting Started](/) - Build your first real actor
+- [Architecture](/docs/architecture) - Understand how it all works
+- [Examples](/docs/examples) - Learn from working code
+- [FAQ & Troubleshooting](/docs/faq) - More common issues and answers

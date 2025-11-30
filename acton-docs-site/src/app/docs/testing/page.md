@@ -31,15 +31,15 @@ mod tests {
     use acton_reactive::prelude::*;
 
     #[tokio::test]
-    async fn test_agent_behavior() {
+    async fn test_actor_behavior() {
         // Setup
         let mut runtime = ActonApp::launch();
 
-        // Create agent
-        let mut agent = runtime.new_agent::<TestState>();
+        // Create actor
+        let mut actor = runtime.new_actor::<TestState>();
         // ... configure
 
-        let handle = agent.start().await;
+        let handle = actor.start().await;
 
         // Test
         handle.send(TestMessage).await;
@@ -54,7 +54,7 @@ mod tests {
 
 ---
 
-## Unit Testing Agents
+## Unit Testing Actors
 
 ### Testing State Initialization
 
@@ -68,12 +68,12 @@ struct CounterState {
 async fn test_initial_state() {
     let mut runtime = ActonApp::launch();
 
-    let mut counter = runtime.new_agent::<CounterState>();
+    let mut counter = runtime.new_actor::<CounterState>();
 
     // Verify initial state via after_stop hook
-    counter.after_stop(|agent| {
-        assert_eq!(agent.model.count, 0);
-        AgentReply::immediate()
+    counter.after_stop(|actor| {
+        assert_eq!(actor.model.count, 0);
+        ActorReply::immediate()
     });
 
     let _handle = counter.start().await;
@@ -91,17 +91,17 @@ struct Increment(u32);
 async fn test_increment_handler() {
     let mut runtime = ActonApp::launch();
 
-    let mut counter = runtime.new_agent::<CounterState>();
+    let mut counter = runtime.new_actor::<CounterState>();
 
     counter
-        .mutate_on::<Increment>(|agent, ctx| {
-            agent.model.count += ctx.message().0;
-            AgentReply::immediate()
+        .mutate_on::<Increment>(|actor, ctx| {
+            actor.model.count += ctx.message().0;
+            ActorReply::immediate()
         })
-        .after_stop(|agent| {
+        .after_stop(|actor| {
             // Verify final state
-            assert_eq!(agent.model.count, 15);
-            AgentReply::immediate()
+            assert_eq!(actor.model.count, 15);
+            ActorReply::immediate()
         });
 
     let handle = counter.start().await;
@@ -131,11 +131,11 @@ async fn test_with_channel_verification() {
     // Create channel for test verification
     let (tx, mut rx) = mpsc::channel::<u32>(10);
 
-    let mut agent = runtime.new_agent::<CounterState>();
+    let mut actor = runtime.new_actor::<CounterState>();
 
-    agent.mutate_on::<Increment>(|agent, ctx| {
-        agent.model.count += ctx.message().0;
-        let count = agent.model.count;
+    actor.mutate_on::<Increment>(|actor, ctx| {
+        actor.model.count += ctx.message().0;
+        let count = actor.model.count;
         let tx = tx.clone();
 
         Box::pin(async move {
@@ -143,7 +143,7 @@ async fn test_with_channel_verification() {
         })
     });
 
-    let handle = agent.start().await;
+    let handle = actor.start().await;
 
     handle.send(Increment(5)).await;
     handle.send(Increment(3)).await;
@@ -160,20 +160,20 @@ async fn test_with_channel_verification() {
 
 ## Integration Testing
 
-### Multi-Agent Tests
+### Multi-Actor Tests
 
 ```rust
 #[tokio::test]
-async fn test_agent_communication() {
+async fn test_actor_communication() {
     let mut runtime = ActonApp::launch();
 
     let (tx, mut rx) = mpsc::channel::<String>(10);
 
-    // Agent A sends to Agent B
-    let mut agent_a = runtime.new_agent::<StateA>();
-    let mut agent_b = runtime.new_agent::<StateB>();
+    // Actor A sends to Actor B
+    let mut actor_a = runtime.new_actor::<StateA>();
+    let mut actor_b = runtime.new_actor::<StateB>();
 
-    agent_b.mutate_on::<Greeting>(|_agent, ctx| {
+    actor_b.mutate_on::<Greeting>(|_actor, ctx| {
         let greeting = ctx.message().0.clone();
         let tx = tx.clone();
         Box::pin(async move {
@@ -181,10 +181,10 @@ async fn test_agent_communication() {
         })
     });
 
-    let handle_b = agent_b.start().await;
+    let handle_b = actor_b.start().await;
     let handle_b_clone = handle_b.clone();
 
-    agent_a.mutate_on::<SendGreeting>(|_agent, ctx| {
+    actor_a.mutate_on::<SendGreeting>(|_actor, ctx| {
         let target = handle_b_clone.clone();
         let message = ctx.message().0.clone();
         Box::pin(async move {
@@ -192,7 +192,7 @@ async fn test_agent_communication() {
         })
     });
 
-    let handle_a = agent_a.start().await;
+    let handle_a = actor_a.start().await;
 
     // Test communication
     handle_a.send(SendGreeting("Hello".to_string())).await;
@@ -210,11 +210,11 @@ async fn test_agent_communication() {
 async fn test_supervision_hierarchy() {
     let mut runtime = ActonApp::launch();
 
-    let mut parent = runtime.new_agent::<ParentState>();
+    let mut parent = runtime.new_actor::<ParentState>();
     let parent_handle = parent.start().await;
 
     // Create and supervise child
-    let mut child = runtime.new_agent::<ChildState>();
+    let mut child = runtime.new_actor::<ChildState>();
     let child_handle = parent_handle.supervise(child).await.expect("Supervise failed");
 
     // Verify child is registered
@@ -250,9 +250,9 @@ async fn test_request_response() {
 
     let (tx, mut rx) = mpsc::channel::<String>(1);
 
-    // Service agent
-    let mut service = runtime.new_agent::<ServiceState>();
-    service.mutate_on::<Query>(|agent, ctx| {
+    // Service actor
+    let mut service = runtime.new_actor::<ServiceState>();
+    service.mutate_on::<Query>(|actor, ctx| {
         let query = ctx.message().0.clone();
         let reply = ctx.reply_envelope();
         Box::pin(async move {
@@ -261,9 +261,9 @@ async fn test_request_response() {
     });
     let service_handle = service.start().await;
 
-    // Client agent
-    let mut client = runtime.new_agent::<ClientState>();
-    client.mutate_on::<QueryResponse>(|_agent, ctx| {
+    // Client actor
+    let mut client = runtime.new_actor::<ClientState>();
+    client.mutate_on::<QueryResponse>(|_actor, ctx| {
         let response = ctx.message().0.clone();
         let tx = tx.clone();
         Box::pin(async move {
@@ -302,10 +302,10 @@ async fn test_error_handling() {
 
     let (tx, mut rx) = mpsc::channel::<String>(1);
 
-    let mut agent = runtime.new_agent::<TestState>();
+    let mut actor = runtime.new_actor::<TestState>();
 
-    agent
-        .mutate_on_fallible::<RiskyOperation>(|_agent, ctx| {
+    actor
+        .mutate_on_fallible::<RiskyOperation>(|_actor, ctx| {
             Box::pin(async move {
                 if ctx.message().should_fail {
                     Err(Box::new(TestError("Intentional failure".to_string()))
@@ -315,7 +315,7 @@ async fn test_error_handling() {
                 }
             })
         })
-        .on_error::<RiskyOperation, TestError>(|_agent, _ctx, error| {
+        .on_error::<RiskyOperation, TestError>(|_actor, _ctx, error| {
             let msg = error.0.clone();
             let tx = tx.clone();
             Box::pin(async move {
@@ -323,7 +323,7 @@ async fn test_error_handling() {
             })
         });
 
-    let handle = agent.start().await;
+    let handle = actor.start().await;
 
     // Trigger error
     handle.send(RiskyOperation { should_fail: true }).await;
@@ -352,8 +352,8 @@ async fn test_broadcast_delivery() {
     let (tx2, mut rx2) = mpsc::channel::<i32>(10);
 
     // Subscriber 1
-    let mut sub1 = runtime.new_agent::<SubState>();
-    sub1.mutate_on::<DataUpdate>(|_agent, ctx| {
+    let mut sub1 = runtime.new_actor::<SubState>();
+    sub1.mutate_on::<DataUpdate>(|_actor, ctx| {
         let value = ctx.message().value;
         let tx = tx1.clone();
         Box::pin(async move {
@@ -364,8 +364,8 @@ async fn test_broadcast_delivery() {
     let _h1 = sub1.start().await;
 
     // Subscriber 2
-    let mut sub2 = runtime.new_agent::<SubState>();
-    sub2.mutate_on::<DataUpdate>(|_agent, ctx| {
+    let mut sub2 = runtime.new_actor::<SubState>();
+    sub2.mutate_on::<DataUpdate>(|_actor, ctx| {
         let value = ctx.message().value;
         let tx = tx2.clone();
         Box::pin(async move {
@@ -396,8 +396,8 @@ async fn test_unsubscribe() {
 
     let (tx, mut rx) = mpsc::channel::<i32>(10);
 
-    let mut subscriber = runtime.new_agent::<SubState>();
-    subscriber.mutate_on::<DataUpdate>(|_agent, ctx| {
+    let mut subscriber = runtime.new_actor::<SubState>();
+    subscriber.mutate_on::<DataUpdate>(|_actor, ctx| {
         let value = ctx.message().value;
         let tx = tx.clone();
         Box::pin(async move {
@@ -460,7 +460,7 @@ async fn test_type_registration() {
 }
 ```
 
-### Testing Agent Exposure
+### Testing Actor Exposure
 
 ```rust
 #[cfg(feature = "ipc")]
@@ -468,15 +468,15 @@ async fn test_type_registration() {
 async fn test_ipc_exposure() {
     let mut runtime = ActonApp::launch();
 
-    let agent = runtime.new_agent::<TestState>().start().await;
+    let actor = runtime.new_actor::<TestState>().start().await;
 
-    // Expose agent
-    runtime.ipc_expose("test_service", agent.clone());
+    // Expose actor
+    runtime.ipc_expose("test_service", actor.clone());
 
     // Verify exposure (implementation-specific)
     // This depends on how your IPC module exposes lookup
 
-    // Hide agent
+    // Hide actor
     runtime.ipc_hide("test_service");
 
     runtime.shutdown_all().await.expect("Shutdown failed");
@@ -499,8 +499,8 @@ async fn test_ipc_round_trip() {
     registry.register::<EchoRequest>("EchoRequest");
     registry.register::<EchoResponse>("EchoResponse");
 
-    let mut agent = runtime.new_agent::<EchoState>();
-    agent.mutate_on::<EchoRequest>(|_agent, ctx| {
+    let mut actor = runtime.new_actor::<EchoState>();
+    actor.mutate_on::<EchoRequest>(|_actor, ctx| {
         let msg = ctx.message().message.clone();
         let reply = ctx.reply_envelope();
         Box::pin(async move {
@@ -508,7 +508,7 @@ async fn test_ipc_round_trip() {
         })
     });
 
-    let handle = agent.start().await;
+    let handle = actor.start().await;
     runtime.ipc_expose("echo", handle);
 
     let listener = runtime.start_ipc_listener().await.expect("Failed to start IPC");
@@ -565,12 +565,12 @@ tokio::time::sleep(Duration::from_millis(100)).await;
 
 // Good: Use channels for synchronization
 let (tx, rx) = oneshot::channel();
-agent.after_stop(|_| {
+actor.after_stop(|_| {
     tx.send(()).ok();
-    AgentReply::immediate()
+    ActorReply::immediate()
 });
-// ... start and use agent
-rx.await.expect("Agent should have stopped");
+// ... start and use actor
+rx.await.expect("Actor should have stopped");
 ```
 
 ### 2. Isolate Tests
@@ -645,20 +645,20 @@ Create reusable test helpers:
 mod test_helpers {
     use super::*;
 
-    pub async fn setup_test_runtime() -> AgentRuntime {
+    pub async fn setup_test_runtime() -> ActorRuntime {
         ActonApp::launch()
     }
 
-    pub async fn create_echo_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-        let mut agent = runtime.new_agent::<EchoState>();
-        agent.mutate_on::<Echo>(|_agent, ctx| {
+    pub async fn create_echo_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+        let mut actor = runtime.new_actor::<EchoState>();
+        actor.mutate_on::<Echo>(|_actor, ctx| {
             let reply = ctx.reply_envelope();
             let msg = ctx.message().clone();
             Box::pin(async move {
                 reply.send(msg).await;
             })
         });
-        agent.start().await
+        actor.start().await
     }
 }
 ```
@@ -671,10 +671,10 @@ async fn test_lifecycle_order() {
     let mut runtime = ActonApp::launch();
     let (tx, mut rx) = mpsc::channel::<&'static str>(10);
 
-    let mut agent = runtime.new_agent::<TestState>();
+    let mut actor = runtime.new_actor::<TestState>();
 
     let tx1 = tx.clone();
-    agent.before_start(|_| {
+    actor.before_start(|_| {
         let tx = tx1.clone();
         Box::pin(async move {
             tx.send("before_start").await.ok();
@@ -682,7 +682,7 @@ async fn test_lifecycle_order() {
     });
 
     let tx2 = tx.clone();
-    agent.after_start(|_| {
+    actor.after_start(|_| {
         let tx = tx2.clone();
         Box::pin(async move {
             tx.send("after_start").await.ok();
@@ -690,7 +690,7 @@ async fn test_lifecycle_order() {
     });
 
     let tx3 = tx.clone();
-    agent.before_stop(|_| {
+    actor.before_stop(|_| {
         let tx = tx3.clone();
         Box::pin(async move {
             tx.send("before_stop").await.ok();
@@ -698,14 +698,14 @@ async fn test_lifecycle_order() {
     });
 
     let tx4 = tx.clone();
-    agent.after_stop(|_| {
+    actor.after_stop(|_| {
         let tx = tx4.clone();
         Box::pin(async move {
             tx.send("after_stop").await.ok();
         })
     });
 
-    let _handle = agent.start().await;
+    let _handle = actor.start().await;
     runtime.shutdown_all().await.unwrap();
 
     // Verify order

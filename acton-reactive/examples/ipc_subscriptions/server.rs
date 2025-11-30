@@ -30,7 +30,7 @@
 //!
 //! # How It Works
 //!
-//! 1. Server starts with a price feed agent that periodically broadcasts prices
+//! 1. Server starts with a price feed actor that periodically broadcasts prices
 //! 2. IPC client connects and sends a `MSG_TYPE_SUBSCRIBE` frame with message types
 //! 3. Server registers the subscription with the `SubscriptionManager`
 //! 4. When internal messages are broadcast, the IPC listener forwards them as
@@ -136,7 +136,7 @@ fn timestamp_millis() -> u64 {
 }
 
 // ============================================================================
-// Agent States
+// Actor States
 // ============================================================================
 
 /// Price feed service state - generates and broadcasts market data.
@@ -165,21 +165,21 @@ impl Default for PriceFeedState {
 }
 
 // ============================================================================
-// Agent Creation
+// Actor Creation
 // ============================================================================
 
-/// Creates the price feed agent that broadcasts market data.
-async fn create_price_feed_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut price_feed = runtime.new_agent_with_name::<PriceFeedState>("price_feed".to_string());
+/// Creates the price feed actor that broadcasts market data.
+async fn create_price_feed_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut price_feed = runtime.new_actor_with_name::<PriceFeedState>("price_feed".to_string());
 
     // Handle broadcast price requests
-    price_feed.mutate_on::<BroadcastPrices>(|agent, _envelope| {
-        let broker = agent.broker().clone();
-        agent.model.update_count += 1;
+    price_feed.mutate_on::<BroadcastPrices>(|actor, _envelope| {
+        let broker = actor.broker().clone();
+        actor.model.update_count += 1;
 
         // Generate price updates with small random-ish changes
-        let seed = agent.model.update_count;
-        let updates: Vec<PriceUpdate> = agent
+        let seed = actor.model.update_count;
+        let updates: Vec<PriceUpdate> = actor
             .model
             .prices
             .iter_mut()
@@ -187,7 +187,11 @@ async fn create_price_feed_agent(runtime: &mut AgentRuntime) -> AgentHandle {
             .map(|(i, (symbol, price))| {
                 // Deterministic "random" change based on seed and symbol index
                 let combined = seed.wrapping_add(i as u64);
-                let direction = if combined.is_multiple_of(3) { -1.0 } else { 1.0 };
+                let direction = if combined.is_multiple_of(3) {
+                    -1.0
+                } else {
+                    1.0
+                };
                 let magnitude = f64::from((combined % 100) as u32) / 100.0;
                 let change = direction * magnitude;
                 *price += change;
@@ -213,13 +217,13 @@ async fn create_price_feed_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     });
 
     // Handle trade broadcast requests
-    price_feed.mutate_on::<BroadcastTrade>(|agent, envelope| {
-        let broker = agent.broker().clone();
-        agent.model.update_count += 1;
+    price_feed.mutate_on::<BroadcastTrade>(|actor, envelope| {
+        let broker = actor.broker().clone();
+        actor.model.update_count += 1;
 
         let msg = envelope.message();
         let trade = TradeExecuted {
-            trade_id: format!("TRD{:06}", agent.model.update_count),
+            trade_id: format!("TRD{:06}", actor.model.update_count),
             symbol: msg.symbol.clone(),
             quantity: msg.quantity,
             price: msg.price,
@@ -265,18 +269,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     registry.register::<TradeExecuted>("TradeExecuted");
     registry.register::<SystemStatus>("SystemStatus");
 
-    println!("Registered {} IPC message types for subscriptions", registry.len());
+    println!(
+        "Registered {} IPC message types for subscriptions",
+        registry.len()
+    );
     println!("  - PriceUpdate: Stock price changes");
     println!("  - TradeExecuted: Trade execution events");
     println!("  - SystemStatus: System status notifications");
 
-    // Create the price feed agent
-    let price_feed = create_price_feed_agent(&mut runtime).await;
+    // Create the price feed actor
+    let price_feed = create_price_feed_actor(&mut runtime).await;
     println!("\nPrice feed service started");
 
-    // Expose agents for IPC access
+    // Expose actors for IPC access
     runtime.ipc_expose("price_feed", price_feed.clone());
-    println!("Exposed agents: price_feed");
+    println!("Exposed actors: price_feed");
 
     // Start the IPC listener
     let ipc_config = IpcConfig::load();

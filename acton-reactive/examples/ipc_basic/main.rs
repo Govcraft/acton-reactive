@@ -19,7 +19,7 @@
 //! This example demonstrates the complete IPC infrastructure for acton-reactive:
 //!
 //! 1. **Phase 1 - Serialization Foundation**: Type registration, message envelopes,
-//!    and agent exposure via logical names.
+//!    and actor exposure via logical names.
 //!
 //! 2. **Phase 2 - UDS Listener**: Unix Domain Socket communication with external
 //!    processes using length-prefixed wire protocol.
@@ -27,7 +27,7 @@
 //! # Key Concepts Demonstrated
 //!
 //! - **Type Registration**: Registering message types with `IpcTypeRegistry`
-//! - **Agent Exposure**: Exposing agents via logical names for IPC routing
+//! - **Actor Exposure**: Exposing actors via logical names for IPC routing
 //! - **UDS Listener**: Starting the IPC listener with `runtime.start_ipc_listener()`
 //! - **Wire Protocol**: Using `protocol::write_envelope` and `protocol::read_response`
 //!   for client-side communication
@@ -84,62 +84,59 @@ struct PrintSection(String);
 
 /// Message to initialize the price service with a printer handle.
 #[derive(Clone, Debug)]
-struct InitPrinter(AgentHandle);
+struct InitPrinter(ActorHandle);
 
 // ============================================================================
-// Agent States
+// Actor States
 // ============================================================================
 
-/// State for the console printer agent.
-/// All console output goes through this agent to ensure proper ordering.
+/// State for the console printer actor.
+/// All console output goes through this actor to ensure proper ordering.
 #[acton_actor]
 struct PrinterState;
 
-/// State for our price tracking agent.
+/// State for our price tracking actor.
 #[acton_actor]
 struct PriceServiceState {
     prices: std::collections::HashMap<String, f64>,
     update_count: usize,
-    printer: Option<AgentHandle>,
+    printer: Option<ActorHandle>,
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-/// Creates and starts the printer agent for coordinated console output.
-async fn create_printer_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut printer_agent = runtime.new_agent::<PrinterState>();
-    printer_agent
-        .act_on::<Print>(|_agent, envelope| {
+/// Creates and starts the printer actor for coordinated console output.
+async fn create_printer_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut printer_actor = runtime.new_actor::<PrinterState>();
+    printer_actor
+        .act_on::<Print>(|_actor, envelope| {
             println!("{}", envelope.message().0);
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
-        .act_on::<PrintSection>(|_agent, envelope| {
+        .act_on::<PrintSection>(|_actor, envelope| {
             println!("\n--- {} ---\n", envelope.message().0);
-            AgentReply::immediate()
+            ActorReply::immediate()
         });
-    printer_agent.start().await
+    printer_actor.start().await
 }
 
-/// Creates and starts the price service agent.
-async fn create_price_service(
-    runtime: &mut AgentRuntime,
-    printer: &AgentHandle,
-) -> AgentHandle {
+/// Creates and starts the price service actor.
+async fn create_price_service(runtime: &mut ActorRuntime, printer: &ActorHandle) -> ActorHandle {
     let mut price_service =
-        runtime.new_agent_with_name::<PriceServiceState>("price_service".to_string());
+        runtime.new_actor_with_name::<PriceServiceState>("price_service".to_string());
 
     price_service
-        .mutate_on::<InitPrinter>(|agent, envelope| {
-            agent.model.printer = Some(envelope.message().0.clone());
-            AgentReply::immediate()
+        .mutate_on::<InitPrinter>(|actor, envelope| {
+            actor.model.printer = Some(envelope.message().0.clone());
+            ActorReply::immediate()
         })
-        .mutate_on::<PriceUpdate>(|agent, envelope| {
+        .mutate_on::<PriceUpdate>(|actor, envelope| {
             let msg = envelope.message().clone();
-            let printer = agent.model.printer.clone();
-            agent.model.prices.insert(msg.symbol.clone(), msg.price);
-            agent.model.update_count += 1;
+            let printer = actor.model.printer.clone();
+            actor.model.prices.insert(msg.symbol.clone(), msg.price);
+            actor.model.update_count += 1;
 
             Box::pin(async move {
                 if let Some(p) = printer {
@@ -151,10 +148,10 @@ async fn create_price_service(
                 }
             })
         })
-        .mutate_on::<GetPrice>(|agent, envelope| {
+        .mutate_on::<GetPrice>(|actor, envelope| {
             let msg = envelope.message().clone();
-            let printer = agent.model.printer.clone();
-            let price = agent.model.prices.get(&msg.symbol).copied();
+            let printer = actor.model.printer.clone();
+            let price = actor.model.prices.get(&msg.symbol).copied();
             let reply_envelope = envelope.reply_envelope();
 
             Box::pin(async move {
@@ -170,10 +167,10 @@ async fn create_price_service(
                 reply_envelope.send(response).await;
             })
         })
-        .after_stop(|agent| {
-            let printer = agent.model.printer.clone();
-            let update_count = agent.model.update_count;
-            let prices = agent.model.prices.clone();
+        .after_stop(|actor| {
+            let printer = actor.model.printer.clone();
+            let update_count = actor.model.update_count;
+            let prices = actor.model.prices.clone();
 
             Box::pin(async move {
                 if let Some(p) = printer {
@@ -191,11 +188,11 @@ async fn create_price_service(
     handle
 }
 
-/// Processes an incoming IPC envelope and routes it to the target agent.
+/// Processes an incoming IPC envelope and routes it to the target actor.
 async fn process_ipc_envelope(
-    runtime: &AgentRuntime,
+    runtime: &ActorRuntime,
     registry: &Arc<IpcTypeRegistry>,
-    printer: &AgentHandle,
+    printer: &ActorHandle,
     incoming_json: &str,
 ) {
     printer
@@ -212,7 +209,7 @@ async fn process_ipc_envelope(
 
     if let Some(target_handle) = runtime.ipc_lookup(&envelope.target) {
         printer
-            .send(Print(format!("Found target agent: {}", target_handle.id())))
+            .send(Print(format!("Found target actor: {}", target_handle.id())))
             .await;
 
         match registry.deserialize_value(&envelope.message_type, &envelope.payload) {
@@ -245,7 +242,7 @@ async fn process_ipc_envelope(
     } else {
         let response = IpcResponse::error(
             &envelope.correlation_id,
-            &IpcError::AgentNotFound(envelope.target.clone()),
+            &IpcError::ActorNotFound(envelope.target.clone()),
         );
         printer
             .send(Print(format!(
@@ -257,7 +254,7 @@ async fn process_ipc_envelope(
 }
 
 /// Demonstrates programmatic envelope creation with MTI-generated correlation ID.
-async fn demonstrate_envelope_creation(printer: &AgentHandle) {
+async fn demonstrate_envelope_creation(printer: &ActorHandle) {
     let new_envelope = IpcEnvelope::new(
         "prices",
         "PriceUpdate",
@@ -280,9 +277,9 @@ async fn demonstrate_envelope_creation(printer: &AgentHandle) {
 
 /// Demonstrates error handling for various IPC failure scenarios.
 async fn demonstrate_error_handling(
-    runtime: &AgentRuntime,
+    runtime: &ActorRuntime,
     registry: &Arc<IpcTypeRegistry>,
-    printer: &AgentHandle,
+    printer: &ActorHandle,
 ) {
     // Unknown message type
     let unknown_result = registry.deserialize("UnknownType", b"{}");
@@ -299,11 +296,11 @@ async fn demonstrate_error_handling(
             .await;
     }
 
-    // Agent not found
+    // Actor not found
     if runtime.ipc_lookup("nonexistent").is_none() {
-        let err = IpcError::AgentNotFound("nonexistent".to_string());
+        let err = IpcError::ActorNotFound("nonexistent".to_string());
         printer
-            .send(Print(format!("\nError looking up agent: {err}")))
+            .send(Print(format!("\nError looking up actor: {err}")))
             .await;
         let response = IpcResponse::error("req_err_2", &err);
         printer
@@ -317,8 +314,8 @@ async fn demonstrate_error_handling(
 
 /// Demonstrates the UDS listener and client-side protocol functions.
 async fn demonstrate_uds_communication(
-    runtime: &AgentRuntime,
-    printer: &AgentHandle,
+    runtime: &ActorRuntime,
+    printer: &ActorHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use acton_reactive::ipc::{socket_exists, socket_is_alive};
 
@@ -438,8 +435,8 @@ async fn demonstrate_uds_communication(
     Ok(())
 }
 
-/// Demonstrates hiding an agent from IPC access.
-async fn demonstrate_ipc_hiding(runtime: &AgentRuntime, printer: &AgentHandle) {
+/// Demonstrates hiding an actor from IPC access.
+async fn demonstrate_ipc_hiding(runtime: &ActorRuntime, printer: &ActorHandle) {
     let hidden = runtime.ipc_hide("prices");
     printer
         .send(Print(format!(
@@ -449,8 +446,8 @@ async fn demonstrate_ipc_hiding(runtime: &AgentRuntime, printer: &AgentHandle) {
         .await;
     printer
         .send(Print(format!(
-            "Exposed agents remaining: {}",
-            runtime.ipc_agent_count()
+            "Exposed actors remaining: {}",
+            runtime.ipc_actor_count()
         )))
         .await;
 }
@@ -463,10 +460,12 @@ async fn demonstrate_ipc_hiding(runtime: &AgentRuntime, printer: &AgentHandle) {
 async fn main() {
     let mut runtime = ActonApp::launch();
 
-    // Create printer agent for coordinated console output
-    let printer = create_printer_agent(&mut runtime).await;
+    // Create printer actor for coordinated console output
+    let printer = create_printer_actor(&mut runtime).await;
     printer
-        .send(Print("=== IPC Example (Phase 1 + Phase 2) ===\n".to_string()))
+        .send(Print(
+            "=== IPC Example (Phase 1 + Phase 2) ===\n".to_string(),
+        ))
         .await;
 
     // Register IPC message types
@@ -476,7 +475,10 @@ async fn main() {
     registry.register::<PriceResponse>("PriceResponse");
 
     printer
-        .send(Print(format!("Registered {} IPC message types:", registry.len())))
+        .send(Print(format!(
+            "Registered {} IPC message types:",
+            registry.len()
+        )))
         .await;
     for type_name in registry.type_names() {
         printer.send(Print(format!("  - {type_name}"))).await;
@@ -487,7 +489,10 @@ async fn main() {
     runtime.ipc_expose("prices", price_handle.clone());
 
     printer
-        .send(Print(format!("\nExposed {} agent(s) for IPC:", runtime.ipc_agent_count())))
+        .send(Print(format!(
+            "\nExposed {} actor(s) for IPC:",
+            runtime.ipc_actor_count()
+        )))
         .await;
     printer
         .send(Print(format!("  - 'prices' -> {}", price_handle.id())))
@@ -495,7 +500,9 @@ async fn main() {
 
     // Phase 1: Simulate IPC message flow (in-process)
     printer
-        .send(PrintSection("Phase 1: In-Process IPC Simulation".to_string()))
+        .send(PrintSection(
+            "Phase 1: In-Process IPC Simulation".to_string(),
+        ))
         .await;
     let incoming_json = r#"{
         "correlation_id": "req_001",
@@ -507,7 +514,7 @@ async fn main() {
 
     // Send more updates directly
     printer
-        .send(PrintSection("Direct Agent Updates".to_string()))
+        .send(PrintSection("Direct Actor Updates".to_string()))
         .await;
     for (symbol, price, ts) in [
         ("GOOGL", 141.80, 1_700_000_001),
@@ -525,7 +532,9 @@ async fn main() {
 
     // Demonstrate envelope creation
     printer
-        .send(PrintSection("Creating IpcEnvelope Programmatically".to_string()))
+        .send(PrintSection(
+            "Creating IpcEnvelope Programmatically".to_string(),
+        ))
         .await;
     demonstrate_envelope_creation(&printer).await;
 
@@ -537,7 +546,9 @@ async fn main() {
 
     // Phase 2: UDS listener demonstration
     printer
-        .send(PrintSection("Phase 2: Unix Domain Socket Communication".to_string()))
+        .send(PrintSection(
+            "Phase 2: Unix Domain Socket Communication".to_string(),
+        ))
         .await;
     if let Err(e) = demonstrate_uds_communication(&runtime, &printer).await {
         printer
@@ -548,9 +559,9 @@ async fn main() {
     // Allow time for async message processing
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Demonstrate hiding agents
+    // Demonstrate hiding actors
     printer
-        .send(PrintSection("Hiding Agent from IPC".to_string()))
+        .send(PrintSection("Hiding Actor from IPC".to_string()))
         .await;
     demonstrate_ipc_hiding(&runtime, &printer).await;
 

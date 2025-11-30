@@ -32,10 +32,10 @@ use crate::setup::{
 };
 mod setup;
 
-/// Tests the ability of an agent to handle asynchronous operations within its message handlers (`act_on`).
+/// Tests the ability of an actor to handle asynchronous operations within its message handlers (`act_on`).
 ///
 /// **Scenario:**
-/// 1. A `Comedian` agent is created.
+/// 1. A `Comedian` actor is created.
 /// 2. It's configured to handle `FunnyJoke` messages:
 ///    - Increment its `jokes_told` counter.
 ///    - Asynchronously send a `Ping` message back to itself.
@@ -43,9 +43,9 @@ mod setup;
 ///    - Increment `funny` or `bombers` counters based on the reaction.
 /// 4. It's configured to handle `Ping` messages (just logs).
 /// 5. An `after_stop` handler is added to assert the final state (`jokes_told` count).
-/// 6. The agent is started.
-/// 7. Two `FunnyJoke` messages are sent to the agent.
-/// 8. The agent is stopped.
+/// 6. The actor is started.
+/// 7. Two `FunnyJoke` messages are sent to the actor.
+/// 8. The actor is stopped.
 ///
 /// **Verification:**
 /// - The `after_stop` handler asserts that `jokes_told` is 2.
@@ -55,76 +55,75 @@ async fn test_async_reactor() -> anyhow::Result<()> {
     initialize_tracing();
 
     // Launch the Acton runtime environment. This provides the necessary infrastructure
-    // for creating and managing agents.
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    // for creating and managing actors.
+    let mut runtime: ActorRuntime = ActonApp::launch();
 
-    // Configure the agent's identity (ERN) and relationship (no parent, no broker needed here).
-    let agent_config = AgentConfig::new(Ern::with_root("improve_show").unwrap(), None, None)?;
-    // Create an agent builder for the `Comedian` state (`model`).
+    // Configure the actor's identity (ERN) and relationship (no parent, no broker needed here).
+    let actor_config = ActorConfig::new(Ern::with_root("improve_show").unwrap(), None, None)?;
+    // Create an actor builder for the `Comedian` state (`model`).
     // The builder is in an `Idle` state, ready for configuration.
-    let mut comedian_agent_builder = runtime
-        .new_agent_with_config::<Comedian>(agent_config);
+    let mut comedian_actor_builder = runtime.new_actor_with_config::<Comedian>(actor_config);
 
-    // Configure the agent's behavior by defining message handlers using `mutate_on`.
-    comedian_agent_builder
+    // Configure the actor's behavior by defining message handlers using `mutate_on`.
+    comedian_actor_builder
         // Define a handler for messages of type `FunnyJoke`.
-        // The closure receives the `ManagedAgent` (giving access to `model` and `handle`)
+        // The closure receives the `ManagedActor` (giving access to `model` and `handle`)
         // and the incoming message `envelope`.
-        .mutate_on::<FunnyJoke>(|agent, _envelope| {
-            // Mutate the agent's internal state (`model`).
-            agent.model.jokes_told += 1;
-            // Clone the agent's handle. Handles are cheap to clone and allow interaction
-            // with the agent (like sending messages) from outside the agent's task.
-            let agent_handle = agent.handle().clone();
+        .mutate_on::<FunnyJoke>(|actor, _envelope| {
+            // Mutate the actor's internal state (`model`).
+            actor.model.jokes_told += 1;
+            // Clone the actor's handle. Handles are cheap to clone and allow interaction
+            // with the actor (like sending messages) from outside the actor's task.
+            let actor_handle = actor.handle().clone();
             // Return a pinned future (`Pin<Box<dyn Future>>`). This allows the handler
             // to perform asynchronous operations after the initial synchronous part.
             Box::pin(async move {
                 trace!("emitting async");
-                // Send a `Ping` message back to the agent itself asynchronously.
-                agent_handle.send(Ping).await;
+                // Send a `Ping` message back to the actor itself asynchronously.
+                actor_handle.send(Ping).await;
             })
         })
         // Define a handler for `AudienceReactionMsg` messages.
-        .mutate_on::<AudienceReactionMsg>(|agent, envelope| {
+        .mutate_on::<AudienceReactionMsg>(|actor, envelope| {
             trace!("Received Audience Reaction");
             // Access the message content from the envelope.
             match envelope.message() {
-                AudienceReactionMsg::Chuckle => agent.model.funny += 1,
-                AudienceReactionMsg::Groan => agent.model.bombers += 1,
+                AudienceReactionMsg::Chuckle => actor.model.funny += 1,
+                AudienceReactionMsg::Groan => actor.model.bombers += 1,
             }
-            // This handler completes synchronously, so we return `AgentReply::immediate()`.
-            AgentReply::immediate()
+            // This handler completes synchronously, so we return `ActorReply::immediate()`.
+            ActorReply::immediate()
         })
         // Define a handler for `Ping` messages (sent from the FunnyJoke handler).
-        .mutate_on::<Ping>(|_agent, _envelope| {
+        .mutate_on::<Ping>(|_actor, _envelope| {
             trace!("PING");
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
-        // Define a callback function to execute *after* the agent has stopped processing messages
+        // Define a callback function to execute *after* the actor has stopped processing messages
         // and its internal task has finished.
-        .after_stop(|agent| {
+        .after_stop(|actor| {
             info!(
                 "Jokes told at {}: {}\tFunny: {}\tBombers: {}",
-                agent.id(),             // Access agent's unique ID.
-                agent.model.jokes_told, // Access final state.
-                agent.model.funny,
-                agent.model.bombers
+                actor.id(),             // Access actor's unique ID.
+                actor.model.jokes_told, // Access final state.
+                actor.model.funny,
+                actor.model.bombers
             );
-            // Assert the final state after the agent has run.
-            assert_eq!(agent.model.jokes_told, 2);
-            AgentReply::immediate()
+            // Assert the final state after the actor has run.
+            assert_eq!(actor.model.jokes_told, 2);
+            ActorReply::immediate()
         });
 
-    // Transition the agent from `Idle` to `Started`. This spawns the agent's main task loop
-    // and returns an `AgentHandle` for interaction.
-    let comedian_handle = comedian_agent_builder.start().await;
+    // Transition the actor from `Idle` to `Started`. This spawns the actor's main task loop
+    // and returns an `ActorHandle` for interaction.
+    let comedian_handle = comedian_actor_builder.start().await;
 
-    // Send messages to the now running agent using its handle.
+    // Send messages to the now running actor using its handle.
     comedian_handle.send(FunnyJoke::ChickenCrossesRoad).await;
     comedian_handle.send(FunnyJoke::Pun).await;
 
-    // Initiate the agent's shutdown sequence. This sends a `Terminate` signal.
-    // The agent will finish processing any messages currently in its inbox,
+    // Initiate the actor's shutdown sequence. This sends a `Terminate` signal.
+    // The actor will finish processing any messages currently in its inbox,
     // then execute its `after_stop` handler before fully terminating.
     // The `.await` ensures we wait for the shutdown to complete.
 
@@ -137,91 +136,91 @@ async fn test_async_reactor() -> anyhow::Result<()> {
 /// Tests the execution of lifecycle handlers (`after_start`, `after_stop`).
 ///
 /// **Scenario:**
-/// 1. A `Counter` agent is created.
+/// 1. A `Counter` actor is created.
 /// 2. It's configured to handle `Tally` messages by incrementing its count.
 /// 3. An `after_stop` handler is added to assert the final count is 4.
-/// 4. The `Counter` agent is started.
+/// 4. The `Counter` actor is started.
 /// 5. Four `Tally` messages are sent.
-/// 6. A `Messenger` agent is created with simple `after_start` and `after_stop` handlers (for logging).
-/// 7. The `Messenger` agent is started.
-/// 8. Both agents are stopped.
+/// 6. A `Messenger` actor is created with simple `after_start` and `after_stop` handlers (for logging).
+/// 7. The `Messenger` actor is started.
+/// 8. Both actors are stopped.
 ///
 /// **Verification:**
-/// - The `Counter` agent's `after_stop` handler asserts its `count` is 4.
-/// - Tracing logs show the `Messenger` agent's lifecycle handlers being called.
+/// - The `Counter` actor's `after_stop` handler asserts its `count` is 4.
+/// - Tracing logs show the `Messenger` actor's lifecycle handlers being called.
 #[acton_test]
 async fn test_lifecycle_handlers() -> anyhow::Result<()> {
     // Initialize tracing for logging purposes
     initialize_tracing();
 
     // Launch the Acton runtime.
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
 
-    // --- Counter Agent ---
-    // Create a builder for the Counter agent.
-    let mut counter_agent_builder = runtime.new_agent::<Counter>();
-    counter_agent_builder
+    // --- Counter Actor ---
+    // Create a builder for the Counter actor.
+    let mut counter_actor_builder = runtime.new_actor::<Counter>();
+    counter_actor_builder
         // Handler for `Tally` messages.
-        .mutate_on::<Tally>(|agent, _envelope| {
+        .mutate_on::<Tally>(|actor, _envelope| {
             info!("on tally");
             // Increment the internal counter.
-            agent.model.count += 1;
-            AgentReply::immediate()
+            actor.model.count += 1;
+            ActorReply::immediate()
         })
-        // Handler executed after the agent stops.
-        .after_stop(|agent| {
+        // Handler executed after the actor stops.
+        .after_stop(|actor| {
             // Assert the final count after processing messages.
-            assert_eq!(4, agent.model.count);
+            assert_eq!(4, actor.model.count);
             trace!("on stopping");
-            AgentReply::immediate()
+            ActorReply::immediate()
         });
 
-    // Start the counter agent.
-    let counter_handle = counter_agent_builder.start().await;
+    // Start the counter actor.
+    let counter_handle = counter_actor_builder.start().await;
 
     // Send `Tally::AddCount` message four times.
     for _ in 0..4 {
         counter_handle.send(Tally {}).await;
     }
 
-    // --- Messenger Agent ---
-    // Create a builder for the Messenger agent.
-    let mut messenger_agent_builder = runtime.new_agent::<Messenger>();
-    messenger_agent_builder
-        // Handler executed after the agent starts.
-        .after_start(|_agent| {
+    // --- Messenger Actor ---
+    // Create a builder for the Messenger actor.
+    let mut messenger_actor_builder = runtime.new_actor::<Messenger>();
+    messenger_actor_builder
+        // Handler executed after the actor starts.
+        .after_start(|_actor| {
             trace!("*");
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
-        // Handler executed after the agent stops.
-        .after_stop(|_agent| {
+        // Handler executed after the actor stops.
+        .after_stop(|_actor| {
             trace!("*");
-            AgentReply::immediate()
+            ActorReply::immediate()
         });
 
-    // Start the messenger agent.
-    let _messenger_handle = messenger_agent_builder.start().await;
+    // Start the messenger actor.
+    let _messenger_handle = messenger_actor_builder.start().await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
-    // Stop both agents.
+    // Stop both actors.
     runtime.shutdown_all().await?;
 
     Ok(())
 }
 
-/// Tests the creation and supervision of child agents.
+/// Tests the creation and supervision of child actors.
 ///
 /// **Scenario:**
-/// 1. A parent `PoolItem` agent is created.
-/// 2. A child `PoolItem` agent is created.
+/// 1. A parent `PoolItem` actor is created.
+/// 2. A child `PoolItem` actor is created.
 /// 3. The child is configured to handle `Ping` messages by incrementing its `receive_count`.
 /// 4. An `after_stop` handler is added to the child to assert the final `receive_count` is 22.
-/// 5. The parent agent is started.
-/// 6. The parent agent is instructed to `supervise` the child agent (this also starts the child).
+/// 5. The parent actor is started.
+/// 6. The parent actor is instructed to `supervise` the child actor (this also starts the child).
 /// 7. The test verifies the parent now has 1 child in its `children` map.
 /// 8. The test finds the child handle using `parent_handle.find_child()`.
 /// 9. 22 `Ping` messages are sent directly to the child handle.
-/// 10. The parent agent is stopped. Because the parent supervises the child, stopping the parent
+/// 10. The parent actor is stopped. Because the parent supervises the child, stopping the parent
 ///     will automatically trigger the stop sequence for the child as well.
 ///
 /// **Verification:**
@@ -232,61 +231,59 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
 async fn test_child_actor() -> anyhow::Result<()> {
     // Initialize tracing for logging purposes
     initialize_tracing();
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
 
-    // --- Parent Agent ---
-    let parent_config = AgentConfig::new(
+    // --- Parent Actor ---
+    let parent_config = ActorConfig::new(
         Ern::with_root("test_child_actor_parent").unwrap(),
         None,
         None,
     )?;
-    // Create the parent agent builder. No specific handlers needed for the parent itself in this test.
-    let parent_agent_builder = runtime
-        .new_agent_with_config::<PoolItem>(parent_config);
+    // Create the parent actor builder. No specific handlers needed for the parent itself in this test.
+    let parent_actor_builder = runtime.new_actor_with_config::<PoolItem>(parent_config);
 
-    // --- Child Agent ---
-    let child_config = AgentConfig::new(
+    // --- Child Actor ---
+    let child_config = ActorConfig::new(
         Ern::with_root("test_child_actor_chile").unwrap(),
         None,
         None,
     )?;
-    // Create the child agent builder.
-    let mut child_agent_builder = runtime
-        .new_agent_with_config::<PoolItem>(child_config);
+    // Create the child actor builder.
+    let mut child_actor_builder = runtime.new_actor_with_config::<PoolItem>(child_config);
 
-    // Configure the child agent's behavior.
-    child_agent_builder
+    // Configure the child actor's behavior.
+    child_actor_builder
         // Handler for `Ping` messages.
-        .mutate_on::<Ping>(|agent, envelope| {
+        .mutate_on::<Ping>(|actor, envelope| {
             match envelope.message() {
                 Ping => {
                     // Increment the child's internal counter.
-                    agent.model.receive_count += 1;
+                    actor.model.receive_count += 1;
                 }
             }
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
-        // Handler executed after the child agent stops.
-        .after_stop(|agent| {
-            info!("Child processed {} PINGs", agent.model.receive_count);
+        // Handler executed after the child actor stops.
+        .after_stop(|actor| {
+            info!("Child processed {} PINGs", actor.model.receive_count);
             // Assert the final count after processing messages.
             assert_eq!(
-                agent.model.receive_count, 22,
+                actor.model.receive_count, 22,
                 "Child actor did not process the expected number of PINGs"
             );
-            AgentReply::immediate()
+            ActorReply::immediate()
         });
 
     // Get the child's unique ID before it's moved during supervision.
-    let child_id = child_agent_builder.id().clone();
+    let child_id = child_actor_builder.id().clone();
 
-    // Start the parent agent, obtaining its handle.
-    let parent_handle = parent_agent_builder.start().await;
+    // Start the parent actor, obtaining its handle.
+    let parent_handle = parent_actor_builder.start().await;
 
-    // Tell the parent agent to supervise the child agent.
-    // This transfers ownership of the child builder, starts the child agent,
+    // Tell the parent actor to supervise the child actor.
+    // This transfers ownership of the child builder, starts the child actor,
     // and registers the child's handle within the parent's `children` map.
-    parent_handle.supervise(child_agent_builder).await?;
+    parent_handle.supervise(child_actor_builder).await?;
 
     // Verify the parent now knows about the child.
     assert_eq!(
@@ -302,19 +299,19 @@ async fn test_child_actor() -> anyhow::Result<()> {
         found_child_handle.is_some(),
         "Couldn't find child with id {child_id}"
     );
-    // We get an Option<AgentHandle>, so unwrap it.
+    // We get an Option<ActorHandle>, so unwrap it.
     let child_handle = found_child_handle.unwrap();
 
-    // Send `Ping` messages directly to the child agent 22 times.
+    // Send `Ping` messages directly to the child actor 22 times.
     for _ in 0..22 {
         trace!("Emitting PING");
         child_handle.send(Ping).await;
     }
 
-    // Stop the parent agent. Because it supervises the child,
-    // this will also initiate the stop sequence for the child agent.
+    // Stop the parent actor. Because it supervises the child,
+    // this will also initiate the stop sequence for the child actor.
     // The parent waits for the child to stop before it fully stops itself.
-    trace!("Stopping parent agent (which should stop the child)");
+    trace!("Stopping parent actor (which should stop the child)");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
@@ -322,11 +319,11 @@ async fn test_child_actor() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests finding a supervised child agent using its ID.
+/// Tests finding a supervised child actor using its ID.
 ///
 /// **Scenario:**
-/// 1. A parent `PoolItem` agent is created and started.
-/// 2. A child `PoolItem` agent is created.
+/// 1. A parent `PoolItem` actor is created and started.
+/// 2. A child `PoolItem` actor is created.
 /// 3. The parent supervises the child.
 /// 4. The test verifies the parent has 1 child.
 /// 5. The test attempts to find the child handle using `parent_handle.find_child()`.
@@ -339,26 +336,25 @@ async fn test_child_actor() -> anyhow::Result<()> {
 async fn test_find_child_actor() -> anyhow::Result<()> {
     // Initialize tracing for logging purposes
     initialize_tracing();
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
 
-    // --- Parent Agent ---
-    let parent_agent_builder = runtime.new_agent::<PoolItem>();
-    // Start the parent agent.
-    let parent_handle = parent_agent_builder.start().await;
+    // --- Parent Actor ---
+    let parent_actor_builder = runtime.new_actor::<PoolItem>();
+    // Start the parent actor.
+    let parent_handle = parent_actor_builder.start().await;
 
-    // --- Child Agent ---
-    let child_config = AgentConfig::new(
+    // --- Child Actor ---
+    let child_config = ActorConfig::new(
         Ern::with_root("test_find_child_actor_child").unwrap(),
         None,
         None,
     )?;
-    let child_agent_builder = runtime
-        .new_agent_with_config::<PoolItem>(child_config);
+    let child_actor_builder = runtime.new_actor_with_config::<PoolItem>(child_config);
     // Get the child's ID before supervision.
-    let child_id = child_agent_builder.id().clone();
+    let child_id = child_actor_builder.id().clone();
 
-    // Supervise the child agent.
-    parent_handle.supervise(child_agent_builder).await?;
+    // Supervise the child actor.
+    parent_handle.supervise(child_actor_builder).await?;
 
     // Verify parent knows about the child.
     assert_eq!(
@@ -377,48 +373,47 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
     let _child_handle = found_child_handle.unwrap(); // We just need to confirm it was found.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Stop the parent agent (and implicitly the child).
+    // Stop the parent actor (and implicitly the child).
     runtime.shutdown_all().await?;
 
     Ok(())
 }
 
-/// Tests the ability of an agent to mutate its own internal state (`model`)
+/// Tests the ability of an actor to mutate its own internal state (`model`)
 /// based on received messages.
 ///
 /// **Scenario:**
-/// 1. A `Comedian` agent is created.
+/// 1. A `Comedian` actor is created.
 /// 2. It's configured to handle `FunnyJoke` messages:
 ///    - Increment `jokes_told`.
 ///    - Send an `AudienceReactionMsg` back to itself (`Chuckle` or `Groan` based on the joke).
 /// 3. It's configured to handle `AudienceReactionMsg` messages:
 ///    - Increment `funny` or `bombers` based on the reaction.
 /// 4. An `after_stop` handler asserts the final counts for `jokes_told`, `funny`, and `bombers`.
-/// 5. The agent is started.
+/// 5. The actor is started.
 /// 6. Two different `FunnyJoke` messages are sent.
-/// 7. The agent is stopped.
+/// 7. The actor is stopped.
 ///
 /// **Verification:**
 /// - The `after_stop` handler asserts `jokes_told` is 2, `funny` is 1, and `bombers` is 1.
 #[acton_test]
 async fn test_actor_mutation() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
 
-    // Configure and create the Comedian agent builder.
-    let agent_config =
-        AgentConfig::new(Ern::with_root("test_actor_mutation").unwrap(), None, None)?;
-    let mut comedian_agent_builder = runtime
-        .new_agent_with_config::<Comedian>(agent_config);
+    // Configure and create the Comedian actor builder.
+    let actor_config =
+        ActorConfig::new(Ern::with_root("test_actor_mutation").unwrap(), None, None)?;
+    let mut comedian_actor_builder = runtime.new_actor_with_config::<Comedian>(actor_config);
 
-    // Configure agent behavior.
-    comedian_agent_builder
+    // Configure actor behavior.
+    comedian_actor_builder
         // Handler for `FunnyJoke` messages.
-        .mutate_on::<FunnyJoke>(|agent, envelope| {
+        .mutate_on::<FunnyJoke>(|actor, envelope| {
             // Mutate state: increment jokes_told count.
-            agent.model.jokes_told += 1;
-            // Create a new envelope targeted back at this agent's address.
-            let self_envelope = agent.new_envelope();
+            actor.model.jokes_told += 1;
+            // Create a new envelope targeted back at this actor's address.
+            let self_envelope = actor.new_envelope();
             // Clone the incoming message content to determine the reaction.
             let message = envelope.message().clone();
             // Return an async block to send the reaction message.
@@ -439,61 +434,61 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
             })
         })
         // Handler for `AudienceReactionMsg` (sent from the FunnyJoke handler above).
-        .mutate_on::<AudienceReactionMsg>(|agent, envelope| {
+        .mutate_on::<AudienceReactionMsg>(|actor, envelope| {
             // Mutate state based on the reaction message content.
             match envelope.message() {
-                AudienceReactionMsg::Chuckle => agent.model.funny += 1,
-                AudienceReactionMsg::Groan => agent.model.bombers += 1,
+                AudienceReactionMsg::Chuckle => actor.model.funny += 1,
+                AudienceReactionMsg::Groan => actor.model.bombers += 1,
             }
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
-        // Handler executed after the agent stops.
-        .after_stop(|agent| {
+        // Handler executed after the actor stops.
+        .after_stop(|actor| {
             info!(
                 "Jokes told at {}: {}\tFunny: {}\tBombers: {}",
-                agent.id(),
-                agent.model.jokes_told,
-                agent.model.funny,
-                agent.model.bombers
+                actor.id(),
+                actor.model.jokes_told,
+                actor.model.funny,
+                actor.model.bombers
             );
             // Assert the final state counts.
-            assert_eq!(agent.model.jokes_told, 2);
-            assert_eq!(agent.model.funny, 1);
-            assert_eq!(agent.model.bombers, 1);
-            AgentReply::immediate()
+            assert_eq!(actor.model.jokes_told, 2);
+            assert_eq!(actor.model.funny, 1);
+            assert_eq!(actor.model.bombers, 1);
+            ActorReply::immediate()
         });
 
-    // Start the agent.
-    let comedian_handle = comedian_agent_builder.start().await;
+    // Start the actor.
+    let comedian_handle = comedian_actor_builder.start().await;
 
     // Send the initial jokes to trigger the handlers.
     comedian_handle.send(FunnyJoke::ChickenCrossesRoad).await;
     comedian_handle.send(FunnyJoke::Pun).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Stop the agent and wait for shutdown completion.
+    // Stop the actor and wait for shutdown completion.
     runtime.shutdown_all().await?;
 
     Ok(())
 }
 
-/// Tests interaction between a parent and a child agent initiated from within the parent's message handler.
+/// Tests interaction between a parent and a child actor initiated from within the parent's message handler.
 ///
 /// **Scenario:**
-/// 1. A parent `Comedian` agent is created.
-/// 2. A child `Counter` agent is created.
+/// 1. A parent `Comedian` actor is created.
+/// 2. A child `Counter` actor is created.
 /// 3. The child is configured to handle `Ping` messages (logs receipt).
 /// 4. The parent is configured to handle `FunnyJokeFor` messages:
 ///    - Extract the target child's ID from the message.
 ///    - Assert that the parent currently supervises one child.
-///    - Find the child handle using `agent.handle().find_child()`.
+///    - Find the child handle using `actor.handle().find_child()`.
 ///    - Assert that the child was found.
 ///    - Send a `Ping` message to the found child handle asynchronously.
 /// 5. The parent supervises the child.
-/// 6. The parent agent is started.
+/// 6. The parent actor is started.
 /// 7. The test asserts the parent handle shows 1 child *after* starting.
 /// 8. A `FunnyJokeFor` message (containing the child's ID) is sent to the parent.
-/// 9. The parent agent is stopped.
+/// 9. The parent actor is stopped.
 ///
 /// **Verification:**
 /// - Assertions within the parent's `FunnyJokeFor` handler pass (child count is 1, child is found).
@@ -504,37 +499,37 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     initialize_tracing();
 
     // Launch the Acton system and await its readiness
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
 
-    // --- Parent Agent (Comedian) ---
-    // Create the parent agent builder.
-    let mut parent_agent_builder = runtime.new_agent::<Comedian>();
+    // --- Parent Actor (Comedian) ---
+    // Create the parent actor builder.
+    let mut parent_actor_builder = runtime.new_actor::<Comedian>();
 
     // Configure the parent's message handler for `FunnyJokeFor`.
-    parent_agent_builder.mutate_on::<FunnyJokeFor>(|agent, envelope| {
+    parent_actor_builder.mutate_on::<FunnyJokeFor>(|actor, envelope| {
         // Extract the child ID from the incoming message.
         if let FunnyJokeFor::ChickenCrossesRoad(child_id) = envelope.message().clone() {
             info!("Got a funny joke for {}", &child_id);
 
             // **Inside the handler**, check if the parent knows about its children.
-            // The `agent.handle()` provides access to the agent's context, including supervised children.
+            // The `actor.handle()` provides access to the actor's context, including supervised children.
             assert_eq!(
-                agent.handle().children().len(),
+                actor.handle().children().len(),
                 1,
-                "Parent agent missing any children in handler"
+                "Parent actor missing any children in handler"
             );
-            trace!("Parent agent has children: {:?}", agent.handle().children());
+            trace!("Parent actor has children: {:?}", actor.handle().children());
 
             // Attempt to find the specific child handle using the ID from the message.
             assert!(
-                agent.handle().find_child(&child_id).is_some(),
+                actor.handle().find_child(&child_id).is_some(),
                 "No child found with ID {} in handler",
                 &child_id
             );
 
             // Use the child handle if found, otherwise log an error.
             // Both branches return the same Box::pin(async {}) type for type unification.
-            let maybe_child = agent.handle().find_child(&child_id);
+            let maybe_child = actor.handle().find_child(&child_id);
             Box::pin(async move {
                 if let Some(child_handle) = maybe_child {
                     trace!("Pinging child {}", &child_id);
@@ -546,43 +541,43 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
             })
         } else {
             // If the message wasn't the expected variant.
-            AgentReply::immediate()
+            ActorReply::immediate()
         }
     });
 
-    // --- Child Agent (Counter) ---
-    // Configure and create the child agent builder.
-    let child_config = AgentConfig::new(Ern::with_root("child").unwrap(), None, None)?;
-    let mut child_agent_builder = runtime.new_agent_with_config::<Counter>(child_config);
+    // --- Child Actor (Counter) ---
+    // Configure and create the child actor builder.
+    let child_config = ActorConfig::new(Ern::with_root("child").unwrap(), None, None)?;
+    let mut child_actor_builder = runtime.new_actor_with_config::<Counter>(child_config);
     info!(
-        "Created child agent builder with id: {}",
-        child_agent_builder.id()
+        "Created child actor builder with id: {}",
+        child_actor_builder.id()
     );
 
     // Configure the child's message handler for `Ping`.
-    child_agent_builder.mutate_on::<Ping>(|agent, _envelope| {
-        info!("Child {} received Ping from parent agent", agent.id());
-        AgentReply::immediate()
+    child_actor_builder.mutate_on::<Ping>(|actor, _envelope| {
+        info!("Child {} received Ping from parent actor", actor.id());
+        ActorReply::immediate()
     });
 
     // Get the child's ID before it's moved during supervision.
-    let child_id = child_agent_builder.id().clone();
+    let child_id = child_actor_builder.id().clone();
 
     // Supervise the child under the parent. Note: We use the *builder's* handle here,
-    // as the parent agent hasn't been started yet. Supervision can happen during the Idle state.
-    parent_agent_builder
+    // as the parent actor hasn't been started yet. Supervision can happen during the Idle state.
+    parent_actor_builder
         .handle()
-        .supervise(child_agent_builder)
+        .supervise(child_actor_builder)
         .await?;
     // Verify the builder's handle reflects the supervised child immediately.
     assert_eq!(
-        parent_agent_builder.handle().children().len(),
+        parent_actor_builder.handle().children().len(),
         1,
         "Parent builder missing its child after supervision"
     );
 
-    // Start the parent agent. This also implicitly starts the already supervised child.
-    let parent_handle = parent_agent_builder.start().await;
+    // Start the parent actor. This also implicitly starts the already supervised child.
+    let parent_handle = parent_actor_builder.start().await;
 
     // Assert that the *started* parent handle also reflects the child count correctly.
     assert_eq!(
@@ -598,7 +593,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
         .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Stop the parent agent (which will also stop the supervised child).
+    // Stop the parent actor (which will also stop the supervised child).
     runtime.shutdown_all().await?;
     Ok(())
 }

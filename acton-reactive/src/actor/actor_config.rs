@@ -14,51 +14,50 @@
  * limitations under that License.
  */
 
-
 use acton_ern::{Ern, ErnParser};
 
 use crate::common::{BrokerRef, ParentRef};
-use crate::traits::AgentHandleInterface;
+use crate::traits::ActorHandleInterface;
 
-/// Configuration parameters required to initialize a new agent.
+/// Configuration parameters required to initialize a new actor.
 ///
-/// This struct encapsulates the essential settings for creating an agent instance,
-/// including its unique identity, its relationship within the agent hierarchy (parent),
+/// This struct encapsulates the essential settings for creating an actor instance,
+/// including its unique identity, its relationship within the actor hierarchy (parent),
 /// and its connection to the system message broker.
 ///
-/// The agent's identity is represented by an [`Ern`](acton_ern::Ern), which supports
-/// hierarchical naming. If a `parent` agent is specified during configuration, the
-/// final `Ern` of the new agent will be derived by appending its base `id` to the
+/// The actor's identity is represented by an [`Ern`](acton_ern::Ern), which supports
+/// hierarchical naming. If a `parent` actor is specified during configuration, the
+/// final `Ern` of the new actor will be derived by appending its base `id` to the
 /// parent's `Ern`.
 #[derive(Default, Debug, Clone)]
-pub struct AgentConfig {
-    /// The unique identifier (`Ern`) for the agent.
+pub struct ActorConfig {
+    /// The unique identifier (`Ern`) for the actor.
     /// If created under a parent, this will be the fully resolved hierarchical ID.
     id: Ern,
     /// Optional handle to the system message broker.
     pub(crate) broker: Option<BrokerRef>,
-    /// Optional handle to the agent's parent (supervisor).
+    /// Optional handle to the actor's parent (supervisor).
     parent: Option<ParentRef>,
 }
 
-impl AgentConfig {
-    /// Creates a new `AgentConfig` instance, potentially deriving a hierarchical ID.
+impl ActorConfig {
+    /// Creates a new `ActorConfig` instance, potentially deriving a hierarchical ID.
     ///
-    /// This constructor configures a new agent. If a `parent` handle is provided,
-    /// the agent's final `id` (`Ern`) is constructed by appending the provided `id`
+    /// This constructor configures a new actor. If a `parent` handle is provided,
+    /// the actor's final `id` (`Ern`) is constructed by appending the provided `id`
     /// segment to the parent's `Ern`. If no `parent` is provided, the `id` is used directly.
     ///
     /// # Arguments
     ///
-    /// * `id` - The base identifier (`Ern`) for the agent. If `parent` is `Some`, this
+    /// * `id` - The base identifier (`Ern`) for the actor. If `parent` is `Some`, this
     ///   acts as the final segment appended to the parent's ID. If `parent` is `None`,
-    ///   this becomes the agent's root ID.
-    /// * `parent` - An optional [`ParentRef`] (handle) to the supervising agent.
+    ///   this becomes the actor's root ID.
+    /// * `parent` - An optional [`ParentRef`] (handle) to the supervising actor.
     /// * `broker` - An optional [`BrokerRef`] (handle) to the system message broker.
     ///
     /// # Returns
     ///
-    /// Returns a `Result` containing the configured `AgentConfig` instance.
+    /// Returns a `Result` containing the configured `ActorConfig` instance.
     ///
     /// # Errors
     ///
@@ -69,7 +68,8 @@ impl AgentConfig {
         parent: Option<ParentRef>,
         broker: Option<BrokerRef>,
     ) -> anyhow::Result<Self> {
-        if let Some(parent_ref) = parent { // Use a different variable name to avoid shadowing
+        if let Some(parent_ref) = parent {
+            // Use a different variable name to avoid shadowing
             // Get the parent ERN
             let parent_id = ErnParser::new(parent_ref.id().to_string()).parse()?;
             let child_id = parent_id + id;
@@ -87,32 +87,29 @@ impl AgentConfig {
         }
     }
 
-    /// Creates a new `AgentConfig` for a top-level agent with a root identifier.
+    /// Creates a new `ActorConfig` for a top-level actor with a root identifier.
     ///
-    /// This is a convenience function for creating an `AgentConfig` for an agent
-    /// that has no parent (i.e., it's a root agent in the hierarchy). The provided
+    /// This is a convenience function for creating an `ActorConfig` for an actor
+    /// that has no parent (i.e., it's a root actor in the hierarchy). The provided
     /// `name` is used to create a root [`Ern`](acton_ern::Ern).
     ///
     /// # Arguments
     ///
-    /// * `name` - A string-like value that will be used as the root name for the agent's `Ern`.
+    /// * `name` - A string-like value that will be used as the root name for the actor's `Ern`.
     ///
     /// # Returns
     ///
-    /// Returns a `Result` containing the new `AgentConfig` instance with no parent or broker.
+    /// Returns a `Result` containing the new `ActorConfig` instance with no parent or broker.
     ///
     /// # Errors
     ///
     /// Returns an error if creating the root `Ern` from the provided `name` fails
     /// (e.g., if the name is invalid according to `Ern` rules).
-    pub fn new_with_name(
-        name: impl Into<String>,
-    ) -> anyhow::Result<Self> {
+    pub fn new_with_name(name: impl Into<String>) -> anyhow::Result<Self> {
         Self::new(Ern::with_root(name.into())?, None, None)
     }
 
-
-    /// Returns a clone of the agent's unique identifier (`Ern`).
+    /// Returns a clone of the actor's unique identifier (`Ern`).
     #[inline]
     pub(crate) fn id(&self) -> Ern {
         self.id.clone()

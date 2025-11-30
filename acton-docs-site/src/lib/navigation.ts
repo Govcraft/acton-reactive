@@ -23,7 +23,10 @@ export const navigation = [
     ],
   },
   {
-    title: 'API reference',
-    links: [{ title: 'API reference', href: '/docs/api-reference' }],
+    title: 'Reference',
+    links: [
+      { title: 'API reference', href: '/docs/api-reference' },
+      { title: 'FAQ & Troubleshooting', href: '/docs/faq' },
+    ],
   },
 ]

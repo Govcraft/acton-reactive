@@ -18,18 +18,18 @@
  * const client = new ActonIpcClient('/path/to/socket');
  * await client.connect();
  *
- * const response = await client.request('agent', 'MessageType', { data: 'value' });
+ * const response = await client.request('actor', 'MessageType', { data: 'value' });
  * console.log(response.payload);
  *
  * await client.close();
  * ```
  */
 
-import { createConnection, Socket } from 'net';
-import { EventEmitter } from 'events';
-import { existsSync } from 'fs';
-import { join } from 'path';
-import { randomUUID } from 'crypto';
+import { createConnection, Socket } from "net";
+import { EventEmitter } from "events";
+import { existsSync } from "fs";
+import { join } from "path";
+import { randomUUID } from "crypto";
 
 // =============================================================================
 // Protocol Constants
@@ -70,28 +70,28 @@ const DEFAULT_TIMEOUT_MS = 30000;
 export class IpcError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'IpcError';
+    this.name = "IpcError";
   }
 }
 
 export class ConnectionError extends IpcError {
   constructor(message: string) {
     super(message);
-    this.name = 'ConnectionError';
+    this.name = "ConnectionError";
   }
 }
 
 export class ProtocolError extends IpcError {
   constructor(message: string) {
     super(message);
-    this.name = 'ProtocolError';
+    this.name = "ProtocolError";
   }
 }
 
 export class TimeoutError extends IpcError {
   constructor(message: string) {
     super(message);
-    this.name = 'TimeoutError';
+    this.name = "TimeoutError";
   }
 }
 
@@ -100,7 +100,7 @@ export class ServerError extends IpcError {
 
   constructor(message: string, code?: string) {
     super(message);
-    this.name = 'ServerError';
+    this.name = "ServerError";
     this.code = code;
   }
 }
@@ -140,7 +140,7 @@ export interface PushNotification {
   notification_id: string;
   message_type: string;
   payload: unknown;
-  source_agent?: string;
+  source_actor?: string;
   timestamp_ms: number;
 }
 
@@ -157,7 +157,7 @@ export interface DiscoveryResponse {
       discovery: boolean;
     };
   };
-  agents: Array<{
+  actors: Array<{
     name: string;
     ern?: string;
   }>;
@@ -183,37 +183,37 @@ class JsonSerializer implements Serializer {
   formatByte = Format.JSON;
 
   serialize(data: unknown): Buffer {
-    return Buffer.from(JSON.stringify(data), 'utf-8');
+    return Buffer.from(JSON.stringify(data), "utf-8");
   }
 
   deserialize(data: Buffer): unknown {
-    return JSON.parse(data.toString('utf-8'));
+    return JSON.parse(data.toString("utf-8"));
   }
 }
 
 class MessagePackSerializer implements Serializer {
   formatByte = Format.MESSAGEPACK;
-  private msgpack: typeof import('@msgpack/msgpack') | null = null;
+  private msgpack: typeof import("@msgpack/msgpack") | null = null;
 
   constructor() {
     try {
       // Dynamic import for optional dependency
-      this.msgpack = require('@msgpack/msgpack');
+      this.msgpack = require("@msgpack/msgpack");
     } catch {
       throw new Error(
-        'MessagePack support requires @msgpack/msgpack package. ' +
-        'Install with: npm install @msgpack/msgpack'
+        "MessagePack support requires @msgpack/msgpack package. " +
+          "Install with: npm install @msgpack/msgpack",
       );
     }
   }
 
   serialize(data: unknown): Buffer {
-    if (!this.msgpack) throw new Error('MessagePack not available');
+    if (!this.msgpack) throw new Error("MessagePack not available");
     return Buffer.from(this.msgpack.encode(data));
   }
 
   deserialize(data: Buffer): unknown {
-    if (!this.msgpack) throw new Error('MessagePack not available');
+    if (!this.msgpack) throw new Error("MessagePack not available");
     return this.msgpack.decode(data);
   }
 }
@@ -222,11 +222,11 @@ class MessagePackSerializer implements Serializer {
 // Correlation ID Generation
 // =============================================================================
 
-function generateCorrelationId(prefix: string = 'req'): string {
+function generateCorrelationId(prefix: string = "req"): string {
   // Use timestamp + random for ordering similar to UUIDv7
   const timestampMs = Date.now();
-  const timestampHex = timestampMs.toString(16).padStart(12, '0');
-  const randomPart = randomUUID().replace(/-/g, '').substring(0, 16);
+  const timestampHex = timestampMs.toString(16).padStart(12, "0");
+  const randomPart = randomUUID().replace(/-/g, "").substring(0, 16);
   return `${prefix}_${timestampHex}${randomPart}`;
 }
 
@@ -245,12 +245,14 @@ function encodeFrame(
   messageType: MessageType,
   payload: Buffer,
   format: Format = Format.JSON,
-  version: ProtocolVersion = ProtocolVersion.V2
+  version: ProtocolVersion = ProtocolVersion.V2,
 ): Buffer {
   const payloadLen = payload.length;
 
   if (payloadLen > MAX_FRAME_SIZE) {
-    throw new ProtocolError(`Payload too large: ${payloadLen} > ${MAX_FRAME_SIZE}`);
+    throw new ProtocolError(
+      `Payload too large: ${payloadLen} > ${MAX_FRAME_SIZE}`,
+    );
   }
 
   if (version === ProtocolVersion.V2) {
@@ -276,8 +278,8 @@ function encodeFrame(
 // =============================================================================
 
 export function getDefaultSocketPath(appName: string): string {
-  const runtimeDir = process.env.XDG_RUNTIME_DIR || '/tmp';
-  return join(runtimeDir, 'acton', appName, 'ipc.sock');
+  const runtimeDir = process.env.XDG_RUNTIME_DIR || "/tmp";
+  return join(runtimeDir, "acton", appName, "ipc.sock");
 }
 
 export function socketExists(path: string): boolean {
@@ -295,16 +297,22 @@ export class ActonIpcClient extends EventEmitter {
   private serializer: Serializer;
   private protocolVersion: ProtocolVersion;
 
-  private pending = new Map<string, {
-    resolve: (value: IpcResponse) => void;
-    reject: (error: Error) => void;
-    timeout: NodeJS.Timeout;
-  }>();
+  private pending = new Map<
+    string,
+    {
+      resolve: (value: IpcResponse) => void;
+      reject: (error: Error) => void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
 
-  private streamQueues = new Map<string, {
-    frames: StreamFrame[];
-    resolve: ((frame: StreamFrame) => void) | null;
-  }>();
+  private streamQueues = new Map<
+    string,
+    {
+      frames: StreamFrame[];
+      resolve: ((frame: StreamFrame) => void) | null;
+    }
+  >();
 
   private receiveBuffer = Buffer.alloc(0);
 
@@ -333,7 +341,7 @@ export class ActonIpcClient extends EventEmitter {
         resolve();
       });
 
-      this.socket.on('error', (err) => {
+      this.socket.on("error", (err) => {
         if (!this.connected) {
           reject(new ConnectionError(err.message));
         } else {
@@ -341,11 +349,11 @@ export class ActonIpcClient extends EventEmitter {
         }
       });
 
-      this.socket.on('data', (data) => {
+      this.socket.on("data", (data) => {
         this.handleData(data);
       });
 
-      this.socket.on('close', () => {
+      this.socket.on("close", () => {
         this.handleClose();
       });
     });
@@ -361,7 +369,7 @@ export class ActonIpcClient extends EventEmitter {
     // Reject all pending requests
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timeout);
-      pending.reject(new ConnectionError('Connection closed'));
+      pending.reject(new ConnectionError("Connection closed"));
     }
     this.pending.clear();
   }
@@ -377,7 +385,8 @@ export class ActonIpcClient extends EventEmitter {
       const payloadLen = this.receiveBuffer.readUInt32BE(0);
       const version = this.receiveBuffer.readUInt8(4) as ProtocolVersion;
 
-      const headerSize = version === ProtocolVersion.V2 ? HEADER_SIZE_V2 : HEADER_SIZE_V1;
+      const headerSize =
+        version === ProtocolVersion.V2 ? HEADER_SIZE_V2 : HEADER_SIZE_V1;
       const totalSize = headerSize + payloadLen;
 
       if (this.receiveBuffer.length < totalSize) {
@@ -387,9 +396,10 @@ export class ActonIpcClient extends EventEmitter {
 
       // Parse frame
       const messageType = this.receiveBuffer.readUInt8(5) as MessageType;
-      const format = version === ProtocolVersion.V2
-        ? this.receiveBuffer.readUInt8(6) as Format
-        : Format.JSON;
+      const format =
+        version === ProtocolVersion.V2
+          ? (this.receiveBuffer.readUInt8(6) as Format)
+          : Format.JSON;
 
       const payload = this.receiveBuffer.subarray(headerSize, totalSize);
       this.receiveBuffer = this.receiveBuffer.subarray(totalSize);
@@ -413,7 +423,7 @@ export class ActonIpcClient extends EventEmitter {
         data = new JsonSerializer().deserialize(frame.payload);
       }
     } catch (err) {
-      console.error('Failed to deserialize frame:', err);
+      console.error("Failed to deserialize frame:", err);
       return;
     }
 
@@ -456,10 +466,12 @@ export class ActonIpcClient extends EventEmitter {
     if (pending) {
       this.pending.delete(correlationId);
       clearTimeout(pending.timeout);
-      pending.reject(new ServerError(
-        data.error as string || 'Unknown error',
-        data.error_code as string | undefined
-      ));
+      pending.reject(
+        new ServerError(
+          (data.error as string) || "Unknown error",
+          data.error_code as string | undefined,
+        ),
+      );
     }
   }
 
@@ -472,7 +484,7 @@ export class ActonIpcClient extends EventEmitter {
         correlation_id: correlationId,
         sequence: data.sequence as number,
         payload: data.payload,
-        is_final: data.is_final as boolean || false,
+        is_final: (data.is_final as boolean) || false,
         error: data.error as string | undefined,
         error_code: data.error_code as string | undefined,
       };
@@ -491,11 +503,11 @@ export class ActonIpcClient extends EventEmitter {
       notification_id: data.notification_id as string,
       message_type: data.message_type as string,
       payload: data.payload,
-      source_agent: data.source_agent as string | undefined,
-      timestamp_ms: data.timestamp_ms as number || Date.now(),
+      source_actor: data.source_actor as string | undefined,
+      timestamp_ms: (data.timestamp_ms as number) || Date.now(),
     };
 
-    this.emit('push', notification);
+    this.emit("push", notification);
   }
 
   private handleError(err: Error): void {
@@ -506,17 +518,20 @@ export class ActonIpcClient extends EventEmitter {
     }
     this.pending.clear();
 
-    this.emit('error', err);
+    this.emit("error", err);
   }
 
   private handleClose(): void {
     this.connected = false;
-    this.emit('close');
+    this.emit("close");
   }
 
-  private async sendFrame(messageType: MessageType, data: unknown): Promise<void> {
+  private async sendFrame(
+    messageType: MessageType,
+    data: unknown,
+  ): Promise<void> {
     if (!this.socket || !this.connected) {
-      throw new ConnectionError('Not connected');
+      throw new ConnectionError("Not connected");
     }
 
     const payload = this.serializer.serialize(data);
@@ -524,7 +539,7 @@ export class ActonIpcClient extends EventEmitter {
       messageType,
       payload,
       this.serializer.formatByte,
-      this.protocolVersion
+      this.protocolVersion,
     );
 
     return new Promise((resolve, reject) => {
@@ -539,9 +554,9 @@ export class ActonIpcClient extends EventEmitter {
     target: string,
     messageType: string,
     payload: unknown,
-    timeoutMs: number = DEFAULT_TIMEOUT_MS
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ): Promise<IpcResponse> {
-    const correlationId = generateCorrelationId('req');
+    const correlationId = generateCorrelationId("req");
 
     const envelope: IpcEnvelope = {
       correlation_id: correlationId,
@@ -572,9 +587,9 @@ export class ActonIpcClient extends EventEmitter {
   async fireAndForget(
     target: string,
     messageType: string,
-    payload: unknown
+    payload: unknown,
   ): Promise<void> {
-    const correlationId = generateCorrelationId('req');
+    const correlationId = generateCorrelationId("req");
 
     const envelope: IpcEnvelope = {
       correlation_id: correlationId,
@@ -593,9 +608,9 @@ export class ActonIpcClient extends EventEmitter {
     target: string,
     messageType: string,
     payload: unknown,
-    timeoutMs: number = DEFAULT_TIMEOUT_MS
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ): AsyncGenerator<StreamFrame> {
-    const correlationId = generateCorrelationId('str');
+    const correlationId = generateCorrelationId("str");
 
     const envelope: IpcEnvelope = {
       correlation_id: correlationId,
@@ -618,7 +633,7 @@ export class ActonIpcClient extends EventEmitter {
       while (true) {
         const remaining = timeoutMs - (Date.now() - startTime);
         if (remaining <= 0) {
-          throw new TimeoutError('Stream timed out');
+          throw new TimeoutError("Stream timed out");
         }
 
         const frame = await this.getNextStreamFrame(correlationId, remaining);
@@ -635,11 +650,14 @@ export class ActonIpcClient extends EventEmitter {
     }
   }
 
-  private getNextStreamFrame(correlationId: string, timeoutMs: number): Promise<StreamFrame> {
+  private getNextStreamFrame(
+    correlationId: string,
+    timeoutMs: number,
+  ): Promise<StreamFrame> {
     return new Promise((resolve, reject) => {
       const queue = this.streamQueues.get(correlationId);
       if (!queue) {
-        reject(new Error('Stream queue not found'));
+        reject(new Error("Stream queue not found"));
         return;
       }
 
@@ -653,7 +671,7 @@ export class ActonIpcClient extends EventEmitter {
       const timeout = setTimeout(() => {
         if (queue.resolve === resolve) {
           queue.resolve = null;
-          reject(new TimeoutError('Stream timed out'));
+          reject(new TimeoutError("Stream timed out"));
         }
       }, timeoutMs);
 
@@ -665,7 +683,7 @@ export class ActonIpcClient extends EventEmitter {
   }
 
   async subscribe(messageTypes: string[]): Promise<boolean> {
-    const correlationId = generateCorrelationId('sub');
+    const correlationId = generateCorrelationId("sub");
 
     const data = {
       correlation_id: correlationId,
@@ -695,7 +713,7 @@ export class ActonIpcClient extends EventEmitter {
   }
 
   async unsubscribe(messageTypes: string[]): Promise<boolean> {
-    const correlationId = generateCorrelationId('unsub');
+    const correlationId = generateCorrelationId("unsub");
 
     const data = {
       correlation_id: correlationId,
@@ -725,22 +743,22 @@ export class ActonIpcClient extends EventEmitter {
   }
 
   onPush(handler: (notification: PushNotification) => void): void {
-    this.on('push', handler);
+    this.on("push", handler);
   }
 
   async discover(): Promise<DiscoveryResponse> {
-    const correlationId = generateCorrelationId('disc');
+    const correlationId = generateCorrelationId("disc");
 
     const data = {
       correlation_id: correlationId,
-      include_agents: true,
+      include_actors: true,
       include_message_types: true,
     };
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(correlationId);
-        reject(new TimeoutError('Discovery timed out'));
+        reject(new TimeoutError("Discovery timed out"));
       }, 5000);
 
       this.pending.set(correlationId, {

@@ -23,20 +23,20 @@ This guide provides an in-depth look at message handling in `acton-reactive`, in
 
 ### mutate_on
 
-Use when you need to modify agent state.
+Use when you need to modify actor state.
 
 ```rust
-agent.mutate_on::<UpdateCounter>(|agent, ctx| {
+actor.mutate_on::<UpdateCounter>(|actor, ctx| {
     // Mutable access to state
-    agent.model.counter += ctx.message().increment;
+    actor.model.counter += ctx.message().increment;
 
     // Return type is a future
-    AgentReply::immediate()
+    ActorReply::immediate()
 });
 ```
 
 **Characteristics:**
-- Exclusive access to agent state
+- Exclusive access to actor state
 - Handlers execute one at a time
 - Cannot return errors (infallible)
 - Use for state mutations
@@ -46,9 +46,9 @@ agent.mutate_on::<UpdateCounter>(|agent, ctx| {
 Use for read-only operations that can run concurrently.
 
 ```rust
-agent.act_on::<GetStatus>(|agent, ctx| {
+actor.act_on::<GetStatus>(|actor, ctx| {
     // Read-only access to state
-    let status = agent.model.status.clone();
+    let status = actor.model.status.clone();
     let reply = ctx.reply_envelope();
 
     Box::pin(async move {
@@ -68,14 +68,14 @@ agent.act_on::<GetStatus>(|agent, ctx| {
 Use when state mutation can fail.
 
 ```rust
-agent.mutate_on_fallible::<ProcessPayment>(|agent, ctx| {
+actor.mutate_on_fallible::<ProcessPayment>(|actor, ctx| {
     let amount = ctx.message().amount;
 
     Box::pin(async move {
-        if agent.model.balance < amount {
+        if actor.model.balance < amount {
             Err(Box::new(InsufficientFunds) as Box<dyn std::error::Error>)
         } else {
-            agent.model.balance -= amount;
+            actor.model.balance -= amount;
             Ok(Box::new(PaymentSuccess) as Box<dyn ActonMessageReply>)
         }
     })
@@ -93,7 +93,7 @@ agent.mutate_on_fallible::<ProcessPayment>(|agent, ctx| {
 Use for concurrent operations that can fail.
 
 ```rust
-agent.act_on_fallible::<ValidateToken>(|agent, ctx| {
+actor.act_on_fallible::<ValidateToken>(|actor, ctx| {
     let token = ctx.message().token.clone();
 
     Box::pin(async move {
@@ -118,7 +118,7 @@ The `MessageContext<M>` provides access to the incoming message and reply capabi
 ### Context Methods
 
 ```rust
-agent.mutate_on::<MyMessage>(|agent, ctx| {
+actor.mutate_on::<MyMessage>(|actor, ctx| {
     // Access the message
     let message: &MyMessage = ctx.message();
 
@@ -134,7 +134,7 @@ agent.mutate_on::<MyMessage>(|agent, ctx| {
     // Convenience method to reply
     ctx.reply(ResponseMessage { data: 42 });
 
-    AgentReply::immediate()
+    ActorReply::immediate()
 });
 ```
 
@@ -143,7 +143,7 @@ agent.mutate_on::<MyMessage>(|agent, ctx| {
 The reply envelope is pre-addressed to the sender:
 
 ```rust
-agent.mutate_on::<Request>(|agent, ctx| {
+actor.mutate_on::<Request>(|actor, ctx| {
     let reply = ctx.reply_envelope();
 
     Box::pin(async move {
@@ -200,7 +200,7 @@ concurrent_handlers_high_water_mark = 100
 ```
 
 When the limit is reached:
-1. Agent waits for all concurrent handlers to complete
+1. Actor waits for all concurrent handlers to complete
 2. Then processes the next batch
 
 ---
@@ -223,7 +223,7 @@ impl std::fmt::Display for ValidationError {
 }
 
 // Register fallible handler
-agent.mutate_on_fallible::<ProcessData>(|agent, ctx| {
+actor.mutate_on_fallible::<ProcessData>(|actor, ctx| {
     let data = ctx.message().data.clone();
 
     Box::pin(async move {
@@ -236,10 +236,10 @@ agent.mutate_on_fallible::<ProcessData>(|agent, ctx| {
 });
 
 // Register error handler for specific error type
-agent.on_error::<ProcessData, ValidationError>(|agent, ctx, error| {
+actor.on_error::<ProcessData, ValidationError>(|actor, ctx, error| {
     println!("Validation failed: {}", error.0);
     // Optionally update state, send notifications, etc.
-    AgentReply::immediate()
+    ActorReply::immediate()
 });
 ```
 
@@ -247,7 +247,7 @@ agent.on_error::<ProcessData, ValidationError>(|agent, ctx, error| {
 
 ```rust
 fn error_handler(
-    agent: &mut ManagedAgent<Started, Model>,
+    actor: &mut ManagedActor<Started, Model>,
     ctx: &mut MessageContext<OriginalMessage>,
     error: &SpecificErrorType,
 ) -> impl Future<Output = ()>
@@ -266,8 +266,8 @@ If no error handler is registered, the error is logged and the message is droppe
 Most common pattern - one response per request:
 
 ```rust
-agent.mutate_on::<GetBalance>(|agent, ctx| {
-    let balance = agent.model.balance;
+actor.mutate_on::<GetBalance>(|actor, ctx| {
+    let balance = actor.model.balance;
     let reply = ctx.reply_envelope();
 
     Box::pin(async move {
@@ -281,10 +281,10 @@ agent.mutate_on::<GetBalance>(|agent, ctx| {
 For fire-and-forget messages:
 
 ```rust
-agent.mutate_on::<LogEvent>(|agent, ctx| {
-    agent.model.events.push(ctx.message().clone());
+actor.mutate_on::<LogEvent>(|actor, ctx| {
+    actor.model.events.push(ctx.message().clone());
     // No reply needed
-    AgentReply::immediate()
+    ActorReply::immediate()
 });
 ```
 
@@ -293,8 +293,8 @@ agent.mutate_on::<LogEvent>(|agent, ctx| {
 For streaming responses:
 
 ```rust
-agent.mutate_on::<StreamRequest>(|agent, ctx| {
-    let items = agent.model.items.clone();
+actor.mutate_on::<StreamRequest>(|actor, ctx| {
+    let items = actor.model.items.clone();
     let reply = ctx.reply_envelope();
 
     Box::pin(async move {
@@ -313,11 +313,11 @@ agent.mutate_on::<StreamRequest>(|agent, ctx| {
 
 ### Self-Messaging
 
-Agents can send messages to themselves:
+Actors can send messages to themselves:
 
 ```rust
-agent.mutate_on::<StartProcess>(|agent, ctx| {
-    let self_handle = agent.handle().clone();
+actor.mutate_on::<StartProcess>(|actor, ctx| {
+    let self_handle = actor.handle().clone();
 
     Box::pin(async move {
         // Process step 1
@@ -334,9 +334,9 @@ agent.mutate_on::<StartProcess>(|agent, ctx| {
 Schedule work for later:
 
 ```rust
-agent.mutate_on::<ScheduleTask>(|agent, ctx| {
+actor.mutate_on::<ScheduleTask>(|actor, ctx| {
     let delay = ctx.message().delay;
-    let self_handle = agent.handle().clone();
+    let self_handle = actor.handle().clone();
     let task = ctx.message().task.clone();
 
     Box::pin(async move {
@@ -348,12 +348,12 @@ agent.mutate_on::<ScheduleTask>(|agent, ctx| {
 
 ### Request-Response Pattern
 
-Coordinate between agents:
+Coordinate between actors:
 
 ```rust
-// Requester agent
-agent.mutate_on::<InitiateProcess>(|agent, ctx| {
-    let service = agent.model.service_handle.clone();
+// Requester actor
+actor.mutate_on::<InitiateProcess>(|actor, ctx| {
+    let service = actor.model.service_handle.clone();
     let reply = ctx.reply_envelope();
 
     Box::pin(async move {
@@ -364,16 +364,16 @@ agent.mutate_on::<InitiateProcess>(|agent, ctx| {
 });
 
 // The response will come as a separate message
-agent.mutate_on::<ServiceResponse>(|agent, ctx| {
+actor.mutate_on::<ServiceResponse>(|actor, ctx| {
     // Handle the response
-    agent.model.last_result = Some(ctx.message().result.clone());
-    AgentReply::immediate()
+    actor.model.last_result = Some(ctx.message().result.clone());
+    ActorReply::immediate()
 });
 ```
 
 ### Aggregation Pattern
 
-Collect responses from multiple agents:
+Collect responses from multiple actors:
 
 ```rust
 #[acton_actor]
@@ -383,13 +383,13 @@ struct Aggregator {
     requester: Option<MessageAddress>,
 }
 
-agent.mutate_on::<AggregateRequest>(|agent, ctx| {
-    let workers = agent.model.workers.clone();
-    let self_handle = agent.handle().clone();
+actor.mutate_on::<AggregateRequest>(|actor, ctx| {
+    let workers = actor.model.workers.clone();
+    let self_handle = actor.handle().clone();
 
-    agent.model.pending = workers.len();
-    agent.model.results.clear();
-    agent.model.requester = Some(ctx.reply_envelope().return_address().clone());
+    actor.model.pending = workers.len();
+    actor.model.results.clear();
+    actor.model.requester = Some(ctx.reply_envelope().return_address().clone());
 
     Box::pin(async move {
         for worker in workers {
@@ -399,15 +399,15 @@ agent.mutate_on::<AggregateRequest>(|agent, ctx| {
     })
 });
 
-agent.mutate_on::<WorkResult>(|agent, ctx| {
-    agent.model.results.push(ctx.message().result.clone());
-    agent.model.pending -= 1;
+actor.mutate_on::<WorkResult>(|actor, ctx| {
+    actor.model.results.push(ctx.message().result.clone());
+    actor.model.pending -= 1;
 
-    if agent.model.pending == 0 {
+    if actor.model.pending == 0 {
         // All results collected
-        if let Some(requester) = &agent.model.requester {
-            let results = agent.model.results.clone();
-            let envelope = agent.handle().create_envelope(requester);
+        if let Some(requester) = &actor.model.requester {
+            let results = actor.model.results.clone();
+            let envelope = actor.handle().create_envelope(requester);
 
             return Box::pin(async move {
                 envelope.send(AggregatedResults(results)).await;
@@ -415,7 +415,7 @@ agent.mutate_on::<WorkResult>(|agent, ctx| {
         }
     }
 
-    AgentReply::immediate()
+    ActorReply::immediate()
 });
 ```
 
@@ -423,14 +423,14 @@ agent.mutate_on::<WorkResult>(|agent, ctx| {
 
 ## Handler Return Types
 
-### AgentReply Helpers
+### ActorReply Helpers
 
 ```rust
 // For synchronous handlers (no async work)
-AgentReply::immediate()
+ActorReply::immediate()
 
 // For async handlers
-AgentReply::from_async(async move {
+ActorReply::from_async(async move {
     // async work
 })
 

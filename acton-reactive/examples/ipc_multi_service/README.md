@@ -1,6 +1,6 @@
 # IPC Multi-Service Example
 
-This example demonstrates exposing **multiple agents via IPC**, each providing a different service, with a real-time dashboard that updates in place.
+This example demonstrates exposing **multiple actors via IPC**, each providing a different service, with a real-time dashboard that updates in place.
 
 ## Components
 
@@ -9,7 +9,7 @@ This example demonstrates exposing **multiple agents via IPC**, each providing a
 
 ## Features
 
-- Multiple agents with different responsibilities
+- Multiple actors with different responsibilities
 - IPC routing to different services by logical name
 - Real-time dashboard with in-place terminal updates
 - Listener statistics monitoring
@@ -97,7 +97,7 @@ cargo run --example ipc_multi_service_client --features ipc -- /path/to/socket.s
 
 ```
 ═══════════════════════════════════════════════════════════
-  IPC Multi-Agent Server Dashboard
+  IPC Multi-Actor Server Dashboard
 ═══════════════════════════════════════════════════════════
   Socket: /run/user/1000/acton/ipc_multi_service_server.sock
 

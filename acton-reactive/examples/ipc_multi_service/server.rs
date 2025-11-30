@@ -14,14 +14,14 @@
  * limitations under that License.
  */
 
-//! IPC Multi-Agent Example with Dashboard UI
+//! IPC Multi-Actor Example with Dashboard UI
 //!
-//! This example demonstrates exposing multiple agents via IPC, each providing
+//! This example demonstrates exposing multiple actors via IPC, each providing
 //! a different service, with a real-time dashboard that updates in place.
 //!
 //! # Features
 //!
-//! - Multiple agents with different responsibilities
+//! - Multiple actors with different responsibilities
 //! - IPC routing to different services by logical name
 //! - Real-time dashboard with in-place updates
 //! - Listener statistics monitoring
@@ -218,7 +218,7 @@ mod render {
             MoveTo(0, 0),
             SetForegroundColor(Color::Cyan),
             Print("═══════════════════════════════════════════════════════════\r\n"),
-            Print("  IPC Multi-Agent Server Dashboard\r\n"),
+            Print("  IPC Multi-Actor Server Dashboard\r\n"),
             Print("═══════════════════════════════════════════════════════════\r\n"),
             ResetColor,
             SetForegroundColor(Color::DarkGrey),
@@ -407,10 +407,10 @@ impl Dashboard {
 }
 
 // ============================================================================
-// Agent States
+// Actor States
 // ============================================================================
 
-/// Counter service agent state.
+/// Counter service actor state.
 #[acton_actor]
 struct CounterState {
     value: i64,
@@ -418,14 +418,14 @@ struct CounterState {
     state_tx: Option<watch::Sender<DashboardState>>,
 }
 
-/// Logger service agent state.
+/// Logger service actor state.
 #[acton_actor]
 struct LoggerState {
     entries: Vec<(String, String)>,
     state_tx: Option<watch::Sender<DashboardState>>,
 }
 
-/// Config service agent state.
+/// Config service actor state.
 #[acton_actor]
 struct ConfigState {
     values: HashMap<String, String>,
@@ -433,28 +433,28 @@ struct ConfigState {
 }
 
 // ============================================================================
-// Agent Creation Functions
+// Actor Creation Functions
 // ============================================================================
 
-/// Creates the counter service agent.
-async fn create_counter_agent(
-    runtime: &mut AgentRuntime,
+/// Creates the counter service actor.
+async fn create_counter_actor(
+    runtime: &mut ActorRuntime,
     state_tx: watch::Sender<DashboardState>,
-) -> AgentHandle {
-    let mut counter = runtime.new_agent_with_name::<CounterState>("counter".to_string());
+) -> ActorHandle {
+    let mut counter = runtime.new_actor_with_name::<CounterState>("counter".to_string());
 
-    // Store the sender in the agent state
+    // Store the sender in the actor state
     counter.model.state_tx = Some(state_tx.clone());
 
     counter
-        .mutate_on::<Increment>(move |agent, envelope| {
+        .mutate_on::<Increment>(move |actor, envelope| {
             let amount = envelope.message().amount;
-            agent.model.value += amount;
-            agent.model.operations += 1;
-            let value = agent.model.value;
-            let ops = agent.model.operations;
+            actor.model.value += amount;
+            actor.model.operations += 1;
+            let value = actor.model.value;
+            let ops = actor.model.operations;
 
-            if let Some(tx) = &agent.model.state_tx {
+            if let Some(tx) = &actor.model.state_tx {
                 tx.send_modify(|state| {
                     state.update_counter(value, ops);
                     state.add_activity(format!("Counter +{amount} → {value}"));
@@ -463,14 +463,14 @@ async fn create_counter_agent(
 
             Box::pin(async {})
         })
-        .mutate_on::<Decrement>(move |agent, envelope| {
+        .mutate_on::<Decrement>(move |actor, envelope| {
             let amount = envelope.message().amount;
-            agent.model.value -= amount;
-            agent.model.operations += 1;
-            let value = agent.model.value;
-            let ops = agent.model.operations;
+            actor.model.value -= amount;
+            actor.model.operations += 1;
+            let value = actor.model.value;
+            let ops = actor.model.operations;
 
-            if let Some(tx) = &agent.model.state_tx {
+            if let Some(tx) = &actor.model.state_tx {
                 tx.send_modify(|state| {
                     state.update_counter(value, ops);
                     state.add_activity(format!("Counter -{amount} → {value}"));
@@ -483,22 +483,22 @@ async fn create_counter_agent(
     counter.start().await
 }
 
-/// Creates the logger service agent.
-async fn create_logger_agent(
-    runtime: &mut AgentRuntime,
+/// Creates the logger service actor.
+async fn create_logger_actor(
+    runtime: &mut ActorRuntime,
     state_tx: watch::Sender<DashboardState>,
-) -> AgentHandle {
-    let mut logger = runtime.new_agent_with_name::<LoggerState>("logger".to_string());
+) -> ActorHandle {
+    let mut logger = runtime.new_actor_with_name::<LoggerState>("logger".to_string());
 
     logger.model.state_tx = Some(state_tx.clone());
 
-    logger.mutate_on::<LogMessage>(move |agent, envelope| {
+    logger.mutate_on::<LogMessage>(move |actor, envelope| {
         let level = envelope.message().level.clone();
         let message = envelope.message().message.clone();
-        agent.model.entries.push((level.clone(), message.clone()));
-        let count = agent.model.entries.len();
+        actor.model.entries.push((level.clone(), message.clone()));
+        let count = actor.model.entries.len();
 
-        if let Some(tx) = &agent.model.state_tx {
+        if let Some(tx) = &actor.model.state_tx {
             tx.send_modify(|state| {
                 state.update_logger(count);
                 state.add_activity(format!("[{level}] {message}"));
@@ -511,23 +511,23 @@ async fn create_logger_agent(
     logger.start().await
 }
 
-/// Creates the config service agent.
-async fn create_config_agent(
-    runtime: &mut AgentRuntime,
+/// Creates the config service actor.
+async fn create_config_actor(
+    runtime: &mut ActorRuntime,
     state_tx: watch::Sender<DashboardState>,
-) -> AgentHandle {
-    let mut config = runtime.new_agent_with_name::<ConfigState>("config".to_string());
+) -> ActorHandle {
+    let mut config = runtime.new_actor_with_name::<ConfigState>("config".to_string());
 
     config.model.state_tx = Some(state_tx.clone());
 
     config
-        .mutate_on::<SetConfig>(move |agent, envelope| {
+        .mutate_on::<SetConfig>(move |actor, envelope| {
             let key = envelope.message().key.clone();
             let value = envelope.message().value.clone();
-            agent.model.values.insert(key.clone(), value.clone());
-            let count = agent.model.values.len();
+            actor.model.values.insert(key.clone(), value.clone());
+            let count = actor.model.values.len();
 
-            if let Some(tx) = &agent.model.state_tx {
+            if let Some(tx) = &actor.model.state_tx {
                 tx.send_modify(|state| {
                     state.update_config(count);
                     state.add_activity(format!("Config: {key}={value}"));
@@ -536,11 +536,11 @@ async fn create_config_agent(
 
             Box::pin(async {})
         })
-        .mutate_on::<GetConfig>(move |agent, envelope| {
+        .mutate_on::<GetConfig>(move |actor, envelope| {
             let key = envelope.message().key.clone();
-            let value = agent.model.values.get(&key).cloned();
+            let value = actor.model.values.get(&key).cloned();
 
-            if let Some(tx) = &agent.model.state_tx {
+            if let Some(tx) = &actor.model.state_tx {
                 let msg = value.map_or_else(
                     || format!("Config get: {key} (not found)"),
                     |v| format!("Config get: {key}={v}"),
@@ -620,23 +620,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.add_activity(format!("Registered {} IPC message types", registry.len()));
     });
 
-    // Create service agents
-    let counter = create_counter_agent(&mut runtime, state_tx.clone()).await;
+    // Create service actors
+    let counter = create_counter_actor(&mut runtime, state_tx.clone()).await;
     state_tx.send_modify(|state| state.set_service_running("Counter", true));
 
-    let logger = create_logger_agent(&mut runtime, state_tx.clone()).await;
+    let logger = create_logger_actor(&mut runtime, state_tx.clone()).await;
     state_tx.send_modify(|state| state.set_service_running("Logger", true));
 
-    let config = create_config_agent(&mut runtime, state_tx.clone()).await;
+    let config = create_config_actor(&mut runtime, state_tx.clone()).await;
     state_tx.send_modify(|state| state.set_service_running("Config", true));
 
-    // Expose agents for IPC
+    // Expose actors for IPC
     runtime.ipc_expose("counter", counter.clone());
     runtime.ipc_expose("logger", logger.clone());
     runtime.ipc_expose("config", config.clone());
 
     state_tx.send_modify(|state| {
-        state.add_activity("Exposed agents: counter, logger, config".to_string());
+        state.add_activity("Exposed actors: counter, logger, config".to_string());
     });
 
     // Start the IPC listener

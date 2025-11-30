@@ -17,7 +17,7 @@
 //! Unix Domain Socket listener for IPC communication.
 //!
 //! This module provides the core IPC listener that accepts connections from
-//! external processes and routes messages to agents.
+//! external processes and routes messages to actors.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -34,20 +34,20 @@ use tracing::{debug, error, info, trace, warn};
 use super::config::IpcConfig;
 use super::protocol::{
     is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame,
-    write_discovery_response_with_format, write_heartbeat, write_push,
-    write_response_with_format, write_stream_frame_with_format,
-    write_subscription_response_with_format, Format, MSG_TYPE_REQUEST,
+    write_discovery_response_with_format, write_heartbeat, write_push, write_response_with_format,
+    write_stream_frame_with_format, write_subscription_response_with_format, Format,
+    MSG_TYPE_REQUEST,
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
 use super::subscription_manager::{create_push_channel, PushReceiver, SubscriptionManager};
 use super::types::{
-    AgentInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcResponse,
+    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcResponse,
     IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
 };
-use crate::common::{AgentHandle, Envelope};
+use crate::common::{ActorHandle, Envelope};
 use crate::message::MessageAddress;
-use crate::traits::{ActonMessage, AgentHandleInterface};
+use crate::traits::{ActonMessage, ActorHandleInterface};
 
 /// Statistics for the IPC listener.
 #[derive(Debug, Default)]
@@ -64,7 +64,7 @@ pub struct IpcListenerStats {
     pub errors: AtomicUsize,
     /// Total requests rate limited.
     pub rate_limited: AtomicUsize,
-    /// Total requests rejected due to agent backpressure.
+    /// Total requests rejected due to actor backpressure.
     pub backpressure_rejections: AtomicUsize,
     /// Total requests rejected due to shutdown.
     pub shutdown_rejections: AtomicUsize,
@@ -161,7 +161,7 @@ impl IpcListenerStats {
         self.rate_limited.load(Ordering::Relaxed)
     }
 
-    /// Get the number of requests rejected due to agent backpressure.
+    /// Get the number of requests rejected due to actor backpressure.
     #[must_use]
     pub fn backpressure_rejections(&self) -> usize {
         self.backpressure_rejections.load(Ordering::Relaxed)
@@ -212,8 +212,8 @@ struct ConnectionContext {
     config: IpcConfig,
     /// Registry for deserializing message types.
     type_registry: Arc<IpcTypeRegistry>,
-    /// Registry mapping logical names to agent handles.
-    agent_registry: Arc<DashMap<String, AgentHandle>>,
+    /// Registry mapping logical names to actor handles.
+    actor_registry: Arc<DashMap<String, ActorHandle>>,
     /// Token for shutdown signaling.
     cancel_token: CancellationToken,
     /// Semaphore for limiting concurrent connections.
@@ -225,7 +225,6 @@ struct ConnectionContext {
     /// Subscription manager for broker forwarding.
     subscription_manager: Arc<SubscriptionManager>,
 }
-
 
 /// IPC listener handle for managing the listener lifecycle.
 pub struct IpcListenerHandle {
@@ -301,13 +300,17 @@ impl IpcListenerHandle {
     /// }
     /// ```
     pub async fn shutdown_gracefully(&self) -> ShutdownResult {
-        self.shutdown_gracefully_with_timeout(self.drain_timeout).await
+        self.shutdown_gracefully_with_timeout(self.drain_timeout)
+            .await
     }
 
     /// Gracefully shut down with a custom timeout.
     ///
     /// See [`shutdown_gracefully`](Self::shutdown_gracefully) for details.
-    pub async fn shutdown_gracefully_with_timeout(&self, drain_timeout: Duration) -> ShutdownResult {
+    pub async fn shutdown_gracefully_with_timeout(
+        &self,
+        drain_timeout: Duration,
+    ) -> ShutdownResult {
         // Signal to stop accepting new requests
         self.shutdown_state.start_draining();
         info!("IPC listener entering drain phase");
@@ -364,7 +367,7 @@ impl IpcListenerHandle {
 ///
 /// * `config` - IPC configuration.
 /// * `type_registry` - Registry for message type deserialization.
-/// * `agent_registry` - Registry mapping logical names to agent handles.
+/// * `actor_registry` - Registry mapping logical names to actor handles.
 /// * `cancel_token` - Token for graceful shutdown.
 ///
 /// # Returns
@@ -374,7 +377,7 @@ impl IpcListenerHandle {
 pub async fn run(
     config: IpcConfig,
     type_registry: Arc<IpcTypeRegistry>,
-    agent_registry: Arc<DashMap<String, AgentHandle>>,
+    actor_registry: Arc<DashMap<String, ActorHandle>>,
     cancel_token: CancellationToken,
 ) -> Result<IpcListenerHandle, IpcError> {
     let socket_path = config.socket_path();
@@ -448,7 +451,7 @@ pub async fn run(
     let context = ConnectionContext {
         config,
         type_registry,
-        agent_registry,
+        actor_registry,
         cancel_token: cancel_token.clone(),
         connection_semaphore,
         stats: stats.clone(),
@@ -551,7 +554,9 @@ async fn handle_request_frame(
 
     // Check if we're draining - reject new requests during shutdown
     if ctx.shutdown_state.is_draining() {
-        ctx.stats.shutdown_rejections.fetch_add(1, Ordering::Relaxed);
+        ctx.stats
+            .shutdown_rejections
+            .fetch_add(1, Ordering::Relaxed);
 
         let correlation_id = format
             .deserialize::<IpcEnvelope>(payload)
@@ -629,8 +634,13 @@ async fn handle_request_frame(
     }
 
     // Process the envelope and send response
-    let response =
-        process_envelope(&envelope, &ctx.type_registry, &ctx.agent_registry, &ctx.stats).await;
+    let response = process_envelope(
+        &envelope,
+        &ctx.type_registry,
+        &ctx.actor_registry,
+        &ctx.stats,
+    )
+    .await;
 
     // Done processing - decrement in-flight counter
     ctx.stats.decrement_in_flight();
@@ -652,7 +662,8 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 
     // Create push notification channel and register connection for subscriptions
     let (push_sender, push_receiver) = create_push_channel(conn_id, push_buffer_size);
-    ctx.subscription_manager.register_connection(conn_id, push_sender);
+    ctx.subscription_manager
+        .register_connection(conn_id, push_sender);
 
     debug!(
         conn_id,
@@ -909,22 +920,22 @@ async fn handle_discover_frame(
     trace!(
         conn_id,
         correlation_id = %request.correlation_id,
-        include_agents = request.include_agents,
+        include_actors = request.include_actors,
         include_message_types = request.include_message_types,
         "Received discover request"
     );
 
-    // Gather agent information if requested
-    let agents = if request.include_agents {
-        let agent_list: Vec<AgentInfo> = ctx
-            .agent_registry
+    // Gather actor information if requested
+    let actors = if request.include_actors {
+        let actor_list: Vec<ActorInfo> = ctx
+            .actor_registry
             .iter()
-            .map(|entry| AgentInfo {
+            .map(|entry| ActorInfo {
                 name: entry.key().clone(),
                 ern: entry.value().id().to_string(),
             })
             .collect();
-        Some(agent_list)
+        Some(actor_list)
     } else {
         None
     };
@@ -936,7 +947,7 @@ async fn handle_discover_frame(
         None
     };
 
-    let response = IpcDiscoverResponse::success(&request.correlation_id, agents, message_types);
+    let response = IpcDiscoverResponse::success(&request.correlation_id, actors, message_types);
 
     if let Err(e) = write_discovery_response_with_format(writer, &response, format).await {
         error!(conn_id, error = %e, "Failed to send discover response");
@@ -955,7 +966,7 @@ const IPC_RESPONSE_CHANNEL_CAPACITY: usize = 1;
 /// Creates a temporary `MessageAddress` for receiving IPC responses.
 ///
 /// This creates a short-lived MPSC channel that acts as a "reply-to" address
-/// for IPC request-response patterns. When an agent calls `reply_envelope.send()`,
+/// for IPC request-response patterns. When an actor calls `reply_envelope.send()`,
 /// the response is sent to this channel.
 fn create_ipc_response_proxy(correlation_id: &str) -> (mpsc::Receiver<Envelope>, MessageAddress) {
     let (sender, receiver) = mpsc::channel::<Envelope>(IPC_RESPONSE_CHANNEL_CAPACITY);
@@ -1003,25 +1014,25 @@ fn serialize_response(
     }
 }
 
-/// Process an IPC envelope and route to the target agent.
+/// Process an IPC envelope and route to the target actor.
 ///
 /// If `expects_reply` is `true`, this function creates a temporary channel
-/// to receive the agent's response and waits for it (with timeout).
+/// to receive the actor's response and waits for it (with timeout).
 async fn process_envelope(
     envelope: &IpcEnvelope,
     type_registry: &Arc<IpcTypeRegistry>,
-    agent_registry: &Arc<DashMap<String, AgentHandle>>,
+    actor_registry: &Arc<DashMap<String, ActorHandle>>,
     stats: &Arc<IpcListenerStats>,
 ) -> IpcResponse {
     let correlation_id = &envelope.correlation_id;
 
-    // Look up the target agent
-    let Some(entry) = agent_registry.get(&envelope.target) else {
-        let err = IpcError::AgentNotFound(envelope.target.clone());
+    // Look up the target actor
+    let Some(entry) = actor_registry.get(&envelope.target) else {
+        let err = IpcError::ActorNotFound(envelope.target.clone());
         stats.errors.fetch_add(1, Ordering::Relaxed);
         return IpcResponse::error(correlation_id, &err);
     };
-    let agent_handle = entry.value().clone();
+    let actor_handle = entry.value().clone();
 
     // Deserialize the message
     let message = match type_registry.deserialize_value(&envelope.message_type, &envelope.payload) {
@@ -1036,7 +1047,7 @@ async fn process_envelope(
     if envelope.expects_reply {
         process_request_response(
             correlation_id,
-            &agent_handle,
+            &actor_handle,
             message,
             envelope.response_timeout(),
             stats,
@@ -1044,19 +1055,19 @@ async fn process_envelope(
         )
         .await
     } else {
-        process_fire_and_forget(correlation_id, &agent_handle, message, stats)
+        process_fire_and_forget(correlation_id, &actor_handle, message, stats)
     }
 }
 
 /// Process a fire-and-forget message (no response expected).
 fn process_fire_and_forget(
     correlation_id: &str,
-    agent_handle: &AgentHandle,
+    actor_handle: &ActorHandle,
     message: Box<dyn ActonMessage + Send + Sync>,
     stats: &Arc<IpcListenerStats>,
 ) -> IpcResponse {
-    // Send the message to the agent using backpressure-aware method
-    match agent_handle.try_send_boxed(message) {
+    // Send the message to the actor using backpressure-aware method
+    match actor_handle.try_send_boxed(message) {
         Ok(()) => {
             stats.messages_routed.fetch_add(1, Ordering::Relaxed);
             // Return a simple acknowledgment for fire-and-forget messages
@@ -1066,7 +1077,9 @@ fn process_fire_and_forget(
             )
         }
         Err(IpcError::TargetBusy) => {
-            stats.backpressure_rejections.fetch_add(1, Ordering::Relaxed);
+            stats
+                .backpressure_rejections
+                .fetch_add(1, Ordering::Relaxed);
             IpcResponse::error(correlation_id, &IpcError::TargetBusy)
         }
         Err(e) => {
@@ -1106,7 +1119,9 @@ async fn run_stream_loop(
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             let frame = IpcStreamFrame::error_with_code(
-                correlation_id, sequence, "TIMEOUT",
+                correlation_id,
+                sequence,
+                "TIMEOUT",
                 format!("Stream timed out after {} ms", timeout.as_millis()),
             );
             stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -1135,7 +1150,9 @@ async fn run_stream_loop(
             }
             Err(_) => {
                 let frame = IpcStreamFrame::error_with_code(
-                    correlation_id, sequence, "TIMEOUT",
+                    correlation_id,
+                    sequence,
+                    "TIMEOUT",
                     format!("Stream timed out after {} ms", timeout.as_millis()),
                 );
                 stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -1146,9 +1163,9 @@ async fn run_stream_loop(
     RequestResult::Continue
 }
 
-/// Process a streaming request (multiple responses from agent).
+/// Process a streaming request (multiple responses from actor).
 ///
-/// The agent can send multiple responses through the reply-to channel.
+/// The actor can send multiple responses through the reply-to channel.
 /// Each response is serialized and sent as a stream frame. The stream
 /// ends when the channel is closed or the timeout expires.
 async fn process_stream_request(
@@ -1160,20 +1177,32 @@ async fn process_stream_request(
     let correlation_id = &envelope.correlation_id;
     let timeout = envelope.response_timeout();
 
-    // Look up the target agent
-    let Some(entry) = ctx.agent_registry.get(&envelope.target) else {
-        let frame = IpcStreamFrame::error(correlation_id, 0, format!("Agent not found: {}", envelope.target));
+    // Look up the target actor
+    let Some(entry) = ctx.actor_registry.get(&envelope.target) else {
+        let frame = IpcStreamFrame::error(
+            correlation_id,
+            0,
+            format!("Actor not found: {}", envelope.target),
+        );
         ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
         return send_stream_error(writer, &frame, format).await;
     };
-    let agent_handle = entry.value().clone();
+    let actor_handle = entry.value().clone();
     drop(entry);
 
     // Deserialize the message
-    let message = match ctx.type_registry.deserialize_value(&envelope.message_type, &envelope.payload) {
+    let message = match ctx
+        .type_registry
+        .deserialize_value(&envelope.message_type, &envelope.payload)
+    {
         Ok(msg) => msg,
         Err(e) => {
-            let frame = IpcStreamFrame::error_with_code(correlation_id, 0, "SERIALIZATION_ERROR", e.to_string());
+            let frame = IpcStreamFrame::error_with_code(
+                correlation_id,
+                0,
+                "SERIALIZATION_ERROR",
+                e.to_string(),
+            );
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             return send_stream_error(writer, &frame, format).await;
         }
@@ -1182,10 +1211,12 @@ async fn process_stream_request(
     // Create response channel and send message
     let (mut response_receiver, reply_to_address) = create_ipc_response_proxy(correlation_id);
 
-    if let Err(e) = agent_handle.try_send_boxed_with_reply_to(message, reply_to_address) {
+    if let Err(e) = actor_handle.try_send_boxed_with_reply_to(message, reply_to_address) {
         let frame = if matches!(e, IpcError::TargetBusy) {
-            ctx.stats.backpressure_rejections.fetch_add(1, Ordering::Relaxed);
-            IpcStreamFrame::error_with_code(correlation_id, 0, "TARGET_BUSY", "Agent inbox is full")
+            ctx.stats
+                .backpressure_rejections
+                .fetch_add(1, Ordering::Relaxed);
+            IpcStreamFrame::error_with_code(correlation_id, 0, "TARGET_BUSY", "Actor inbox is full")
         } else {
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             IpcStreamFrame::error(correlation_id, 0, e.to_string())
@@ -1196,15 +1227,21 @@ async fn process_stream_request(
     ctx.stats.messages_routed.fetch_add(1, Ordering::Relaxed);
 
     run_stream_loop(
-        correlation_id, timeout, &mut response_receiver, writer, format,
-        &ctx.type_registry, &ctx.stats,
-    ).await
+        correlation_id,
+        timeout,
+        &mut response_receiver,
+        writer,
+        format,
+        &ctx.type_registry,
+        &ctx.stats,
+    )
+    .await
 }
 
-/// Process a request-response message (wait for agent's reply).
+/// Process a request-response message (wait for actor's reply).
 async fn process_request_response(
     correlation_id: &str,
-    agent_handle: &AgentHandle,
+    actor_handle: &ActorHandle,
     message: Box<dyn ActonMessage + Send + Sync>,
     timeout: Duration,
     stats: &Arc<IpcListenerStats>,
@@ -1214,12 +1251,14 @@ async fn process_request_response(
     let (mut response_receiver, reply_to_address) = create_ipc_response_proxy(correlation_id);
 
     // Send the message with our proxy as the reply-to address using backpressure-aware method
-    match agent_handle.try_send_boxed_with_reply_to(message, reply_to_address) {
+    match actor_handle.try_send_boxed_with_reply_to(message, reply_to_address) {
         Ok(()) => {
             stats.messages_routed.fetch_add(1, Ordering::Relaxed);
         }
         Err(IpcError::TargetBusy) => {
-            stats.backpressure_rejections.fetch_add(1, Ordering::Relaxed);
+            stats
+                .backpressure_rejections
+                .fetch_add(1, Ordering::Relaxed);
             return IpcResponse::error(correlation_id, &IpcError::TargetBusy);
         }
         Err(e) => {

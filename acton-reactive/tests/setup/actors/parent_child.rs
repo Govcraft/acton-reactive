@@ -17,15 +17,15 @@
 // Import the macro directly from the acton_macro crate
 use acton_macro::acton_actor;
 
-/// Represents the state (model) for a Parent agent in supervision tests.
+/// Represents the state (model) for a Parent actor in supervision tests.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 pub struct Parent {
-    /// Placeholder for potential child-related state (not typically an agent handle itself).
+    /// Placeholder for potential child-related state (not typically an actor handle itself).
     pub child: Child,
 }
 
-/// Represents the state (model) for a Child agent in supervision tests.
+/// Represents the state (model) for a Child actor in supervision tests.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 pub struct Child;

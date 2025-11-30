@@ -3,14 +3,53 @@ title: Architecture
 nextjs:
   metadata:
     title: Architecture - acton-reactive
-    description: Comprehensive architectural documentation for the acton-reactive crate, including system diagrams, component relationships, and design patterns.
+    description: Understand how acton-reactive works under the hood - from actors to messages to the runtime that orchestrates everything.
 ---
 
-This document provides comprehensive architectural documentation for the `acton-reactive` crate, including system diagrams, component relationships, and design patterns.
+This page explains how `acton-reactive` works under the hood. You don't need to understand all of this to use the framework, but it helps when debugging or optimizing.
 
 ---
 
-## High-Level Architecture
+## The Big Picture
+
+At a high level, `acton-reactive` is a system where **actors** (independent workers) communicate by passing **messages** through **channels**. A **runtime** manages everything, and a **broker** enables pub/sub messaging.
+
+Think of it like this:
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                        Your Application                          │
+│                                                                   │
+│  "I want actors that process data, talk to each other, and      │
+│   react to events - without me worrying about threading."        │
+│                                                                   │
+└────────────────────────────────┬────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        acton-reactive                            │
+│                                                                   │
+│  ActonApp → ActorRuntime → Actors ←→ Messages ←→ Broker          │
+│                                                                   │
+│  "I'll handle the channels, the concurrency, the lifecycle,     │
+│   and the message routing. You just write handlers."             │
+│                                                                   │
+└────────────────────────────────┬────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                           Tokio                                   │
+│                                                                   │
+│  "I'll handle the actual async tasks, I/O, and scheduling."     │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## System Architecture
+
+Here's how the pieces connect:
 
 ```mermaid
 graph TB
@@ -20,14 +59,14 @@ graph TB
 
     subgraph Core["acton-reactive Core"]
         ActonApp["ActonApp"]
-        Runtime["AgentRuntime"]
-        Broker["AgentBroker"]
+        Runtime["ActorRuntime"]
+        Broker["ActorBroker"]
     end
 
-    subgraph AgentSys["Agent System"]
-        Agent1["ManagedAgent 1"]
-        Agent2["ManagedAgent 2"]
-        Agent3["ManagedAgent 3"]
+    subgraph ActorSys["Actor System"]
+        Actor1["ManagedActor 1"]
+        Actor2["ManagedActor 2"]
+        Actor3["ManagedActor 3"]
     end
 
     subgraph MsgLayer["Messaging Layer"]
@@ -44,142 +83,94 @@ graph TB
     App --> ActonApp
     ActonApp --> Runtime
     Runtime --> Broker
-    Runtime --> Agent1
-    Runtime --> Agent2
-    Runtime --> Agent3
+    Runtime --> Actor1
+    Runtime --> Actor2
+    Runtime --> Actor3
 
-    Agent1 <--> Channels
-    Agent2 <--> Channels
-    Agent3 <--> Channels
+    Actor1 <--> Channels
+    Actor2 <--> Channels
+    Actor3 <--> Channels
 
     Channels --> Envelopes
     Envelopes --> Handlers
 
-    Broker <-.-> Agent1
-    Broker <-.-> Agent2
-    Broker <-.-> Agent3
+    Broker <-.-> Actor1
+    Broker <-.-> Actor2
+    Broker <-.-> Actor3
 
     IPC --> Runtime
     ExtProc --> IPC
 ```
 
-### Core Components
+### What Each Part Does
 
-| Component | Responsibility |
-|-----------|----------------|
-| **ActonApp** | Entry point; initializes the runtime |
-| **AgentRuntime** | Manages agent lifecycle and system state |
-| **AgentBroker** | Central pub/sub message broker |
-| **ManagedAgent** | Individual agent with state and handlers |
-| **AgentHandle** | External reference for agent interaction |
+| Component | Role | Analogy |
+|-----------|------|---------|
+| **ActonApp** | Entry point - creates the runtime | The front door to your office building |
+| **ActorRuntime** | Manages all actors and their lifecycles | HR department - hires, manages, retires workers |
+| **ActorBroker** | Routes pub/sub messages to subscribers | The office bulletin board |
+| **ManagedActor** | An individual actor with state and handlers | An employee at their desk |
+| **ActorHandle** | A reference for sending messages to an actor | An employee's email address |
+| **Channels** | Tokio MPSC channels for message delivery | The mail room |
 
 ---
 
-## Module Structure
+## How an Actor Works
+
+An actor goes through distinct phases, and what you can do with it depends on which phase it's in. This is enforced at compile time through Rust's type system.
+
+### The Type-State Pattern
 
 ```mermaid
 graph LR
-    subgraph LibPrelude["lib.rs Prelude"]
-        Prelude["Public API Surface"]
+    subgraph CompileTime["Compile-Time Enforcement"]
+        IdleState["ManagedActor - Idle"]
+        StartedState["ManagedActor - Started"]
     end
 
-    subgraph ActorMod["actor/"]
-        ManagedAgent["managed_agent.rs"]
-        AgentConfig["agent_config.rs"]
-        Idle["idle.rs"]
-        Started["started.rs"]
+    subgraph IdleMethods["Idle-Only Methods"]
+        MutateOn["mutate_on"]
+        ActOn["act_on"]
+        Hooks["lifecycle hooks"]
     end
 
-    subgraph CommonMod["common/"]
-        Acton["acton.rs"]
-        AgentRuntime2["agent_runtime.rs"]
-        AgentHandle2["agent_handle.rs"]
-        AgentBroker2["agent_broker.rs"]
-        Config["config.rs"]
-        IPCMod["ipc/"]
+    subgraph StartedMethods["Started-Only Methods"]
+        Model["model"]
+        ModelMut["model_mut"]
+        Send["send"]
+        Supervise["supervise"]
     end
 
-    subgraph MessageMod["message/"]
-        Envelope["envelope.rs"]
-        OutboundEnvelope["outbound_envelope.rs"]
-        MessageAddress["message_address.rs"]
-        MessageContext["message_context.rs"]
-        BrokerRequest["broker_request.rs"]
+    subgraph Trans["Transition"]
+        Start["start await"]
     end
 
-    subgraph TraitsMod["traits/"]
-        ActonMessage["acton_message.rs"]
-        AgentHandleInterface["agent_handle_interface.rs"]
-        BrokerTrait["broker.rs"]
-        Subscriber["subscriber.rs"]
-    end
+    MutateOn --> IdleState
+    ActOn --> IdleState
+    Hooks --> IdleState
 
-    Prelude --> ManagedAgent
-    Prelude --> Acton
-    Prelude --> Envelope
-    Prelude --> ActonMessage
+    IdleState -->|start| Start
+    Start --> StartedState
+
+    Model --> StartedState
+    ModelMut --> StartedState
+    Send --> StartedState
+    Supervise --> StartedState
 ```
 
-### Directory Layout
+**What this means for you:**
 
-```text
-acton-reactive/src/
-├── lib.rs                    # Public API & prelude
-├── actor/
-│   ├── mod.rs
-│   ├── managed_agent.rs      # Core ManagedAgent type
-│   ├── agent_config.rs       # AgentConfig builder
-│   └── managed_agent/
-│       ├── idle.rs           # Idle state methods
-│       └── started.rs        # Started state methods
-├── common/
-│   ├── mod.rs
-│   ├── acton.rs              # ActonApp entry point
-│   ├── acton_inner.rs        # Internal runtime state
-│   ├── agent_runtime.rs      # AgentRuntime
-│   ├── agent_handle.rs       # AgentHandle
-│   ├── agent_broker.rs       # AgentBroker
-│   ├── agent_reply.rs        # AgentReply utility
-│   ├── config.rs             # ActonConfig
-│   ├── types.rs              # Internal type aliases
-│   └── ipc/                  # IPC module (feature-gated)
-│       ├── mod.rs
-│       ├── config.rs
-│       ├── listener.rs
-│       ├── protocol.rs
-│       ├── registry.rs
-│       ├── types.rs
-│       ├── rate_limiter.rs
-│       └── subscription_manager.rs
-├── message/
-│   ├── mod.rs
-│   ├── envelope.rs           # Internal Envelope
-│   ├── outbound_envelope.rs  # OutboundEnvelope
-│   ├── message_address.rs    # MessageAddress
-│   ├── message_context.rs    # MessageContext<M>
-│   ├── broker_request.rs     # BrokerRequest
-│   ├── broker_request_envelope.rs
-│   ├── signal.rs             # SystemSignal
-│   ├── message_error.rs      # MessageError
-│   ├── subscribe_broker.rs   # SubscribeBroker
-│   └── unsubscribe_broker.rs # UnsubscribeBroker
-└── traits/
-    ├── mod.rs
-    ├── acton_message.rs      # ActonMessage trait
-    ├── acton_message_reply.rs
-    ├── agent_handle_interface.rs
-    ├── broker.rs             # Broker trait
-    ├── subscriber.rs         # Subscriber trait
-    └── subscribable.rs       # Subscribable trait
-```
+- You can only register handlers *before* starting an actor
+- You can only send messages *after* starting an actor
+- If you try to do it wrong, the compiler stops you - no runtime surprises
 
----
+### Actor Lifecycle
 
-## Agent Lifecycle
+Here's what happens when you create and start an actor:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: new_agent
+    [*] --> Created: new_actor
     Created --> Idle: Configuration Phase
 
     state Idle {
@@ -220,47 +211,62 @@ stateDiagram-v2
         ClosingChannel --> RunningAfterStop
     }
 
-    Stopping --> [*]: Agent Terminated
+    Stopping --> [*]: Actor Terminated
 ```
 
-### Lifecycle Hooks
+### Lifecycle Hook Timing
+
+When exactly do the hooks run?
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Agent as ManagedAgent
+    participant Actor as ManagedActor
     participant Runtime as TokioRuntime
     participant Loop as MessageLoop
 
-    User->>Agent: start await
-    Agent->>Runtime: spawn task
-    Runtime->>Agent: before_start
-    Agent->>Loop: Enter message loop
-    Runtime->>Agent: after_start
+    User->>Actor: start await
+    Actor->>Runtime: spawn task
+    Runtime->>Actor: before_start
+    Actor->>Loop: Enter message loop
+    Runtime->>Actor: after_start
 
     Note over Loop: Processing messages
 
-    User->>Agent: stop
-    Loop->>Agent: Exit message loop
-    Runtime->>Agent: before_stop
-    Runtime->>Agent: Close channels
-    Runtime->>Agent: after_stop
-    Agent->>User: Agent stopped
+    User->>Actor: stop
+    Loop->>Actor: Exit message loop
+    Runtime->>Actor: before_stop
+    Runtime->>Actor: Close channels
+    Runtime->>Actor: after_stop
+    Actor->>User: Actor stopped
 ```
+
+**In plain English:**
+1. You call `start().await`
+2. `before_start` runs (good for loading config, opening connections)
+3. The message loop starts
+4. `after_start` runs (good for sending initial messages)
+5. *...actor processes messages...*
+6. Something calls `stop()` or the runtime shuts down
+7. `before_stop` runs (good for cleanup, saving state)
+8. The message loop ends
+9. `after_stop` runs (good for final logging, assertions in tests)
 
 ---
 
-## Message Flow
+## How Messages Flow
 
 ### Direct Messaging
 
+When you call `handle.send(message)`, here's what happens:
+
 ```mermaid
 sequenceDiagram
-    participant Sender as Sender Agent
-    participant Handle as AgentHandle
+    participant Sender as Sender Actor
+    participant Handle as ActorHandle
     participant Envelope as OutboundEnvelope
     participant Channel as MPSC Channel
-    participant Receiver as Receiver Agent
+    participant Receiver as Receiver Actor
     participant Handler as Message Handler
 
     Sender->>Handle: handle.send message
@@ -273,7 +279,14 @@ sequenceDiagram
     Handler->>Receiver: handler executes
 ```
 
-### Handler Types
+**Key points:**
+- Messages are wrapped in `Arc` for efficient cloning
+- The receiver looks up the handler by message type (using `TypeId`)
+- If no handler is registered for that message type, it's silently dropped
+
+### Handler Execution Models
+
+There are two ways handlers can execute, depending on which method you used to register them:
 
 ```mermaid
 graph TB
@@ -304,32 +317,49 @@ graph TB
     ReadOnlyHandlers --> Concurrent
 ```
 
+**The difference visualized:**
+
+```text
+mutate_on handlers (sequential):
+┌─────────┐  ┌─────────┐  ┌─────────┐
+│   M1    │→ │   M2    │→ │   M3    │
+└─────────┘  └─────────┘  └─────────┘
+   time →
+
+act_on handlers (concurrent):
+┌─────┬─────┬─────┐
+│ M1  │ M2  │ M3  │  ← all at once
+└─────┴─────┴─────┘
+```
+
 ---
 
 ## Pub/Sub Architecture
 
+The broker enables publish/subscribe messaging between actors:
+
 ```mermaid
 graph TB
     subgraph Publishers
-        Pub1["Agent 1"]
-        Pub2["Agent 2"]
+        Pub1["Actor 1"]
+        Pub2["Actor 2"]
     end
 
-    subgraph BrokerSubgraph["AgentBroker"]
-        BrokerAgent["Broker Agent"]
+    subgraph BrokerSubgraph["ActorBroker"]
+        BrokerActor["Broker Actor"]
         SubRegistry["Subscription Registry"]
     end
 
     subgraph Subscribers
-        Sub1["Agent A"]
-        Sub2["Agent B"]
-        Sub3["Agent C"]
+        Sub1["Actor A"]
+        Sub2["Actor B"]
+        Sub3["Actor C"]
     end
 
-    Pub1 -->|broadcast| BrokerAgent
-    Pub2 -->|broadcast| BrokerAgent
+    Pub1 -->|broadcast| BrokerActor
+    Pub2 -->|broadcast| BrokerActor
 
-    BrokerAgent --> SubRegistry
+    BrokerActor --> SubRegistry
     SubRegistry -->|lookup| Sub1
     SubRegistry -->|lookup| Sub2
     SubRegistry -->|lookup| Sub3
@@ -339,51 +369,65 @@ graph TB
     Sub3 -.->|subscribe| SubRegistry
 ```
 
-### Subscription Flow
+### How Subscriptions Work
 
 ```mermaid
 sequenceDiagram
-    participant Agent
-    participant Broker as AgentBroker
+    participant Actor
+    participant Broker as ActorBroker
     participant Registry as Subscription Registry
     participant Publisher
 
-    Agent->>Broker: subscribe PriceUpdate
+    Actor->>Broker: subscribe PriceUpdate
     Broker->>Registry: register TypeId
     Registry-->>Broker: OK
-    Broker-->>Agent: Subscribed
+    Broker-->>Actor: Subscribed
 
-    Note over Agent,Registry: Later...
+    Note over Actor,Registry: Later...
 
     Publisher->>Broker: broadcast PriceUpdate
     Broker->>Registry: lookup subscribers
     Registry-->>Broker: subscriber list
-    Broker->>Agent: forward PriceUpdate
+    Broker->>Actor: forward PriceUpdate
+```
+
+**Important:** Subscribe *before* starting the actor if you want to catch all broadcasts:
+
+```rust
+// Good - subscribe before start
+actor.handle().subscribe::<MyEvent>().await;
+let handle = actor.start().await;
+
+// Risk - might miss early broadcasts
+let handle = actor.start().await;
+handle.subscribe::<MyEvent>().await;  // Could miss messages!
 ```
 
 ---
 
-## Supervision Hierarchy
+## Supervision (Parent-Child Actors)
+
+Actors can create and supervise child actors. When a parent stops, all children stop automatically.
 
 ```mermaid
 graph TB
     subgraph RootLevel["Root Level"]
-        Runtime["AgentRuntime"]
+        Runtime["ActorRuntime"]
         Roots["roots DashMap"]
     end
 
-    subgraph FirstLevel["First Level Agents"]
-        Parent1["Parent Agent 1"]
-        Parent2["Parent Agent 2"]
+    subgraph FirstLevel["First Level Actors"]
+        Parent1["Parent Actor 1"]
+        Parent2["Parent Actor 2"]
     end
 
-    subgraph ChildLevel["Child Agents"]
+    subgraph ChildLevel["Child Actors"]
         Child1A["Child 1A"]
         Child1B["Child 1B"]
         Child2A["Child 2A"]
     end
 
-    subgraph GrandchildLevel["Grandchild Agents"]
+    subgraph GrandchildLevel["Grandchild Actors"]
         GC1["Grandchild 1"]
     end
 
@@ -398,19 +442,21 @@ graph TB
     Child1A -->|supervise| GC1
 ```
 
-### ERN Hierarchy
+**ERN (Entity Resource Names)** reflect this hierarchy:
 
 ```text
-root_service/                    # Root agent ERN
-├── root_service/worker_1        # Child agent ERN
-├── root_service/worker_2        # Child agent ERN
-│   └── root_service/worker_2/validator   # Grandchild ERN
-└── root_service/worker_3        # Child agent ERN
+root_service/                    # Root actor
+├── root_service/worker_1        # Child
+├── root_service/worker_2        # Child
+│   └── root_service/worker_2/validator   # Grandchild
+└── root_service/worker_3        # Child
 ```
 
 ---
 
 ## IPC Architecture
+
+When the `ipc` feature is enabled, external processes can talk to actors:
 
 ```mermaid
 graph TB
@@ -432,11 +478,11 @@ graph TB
         Deserializer["Message Deserializer"]
     end
 
-    subgraph AgentSys["Agent System"]
-        Router["Agent Router"]
-        Agent1["Agent 1"]
-        Agent2["Agent 2"]
-        BrokerNode["AgentBroker"]
+    subgraph ActorSys["Actor System"]
+        Router["Actor Router"]
+        Actor1["Actor 1"]
+        Actor2["Actor 2"]
+        BrokerNode["ActorBroker"]
     end
 
     Client1 --> Socket
@@ -450,94 +496,102 @@ graph TB
     Registry --> Deserializer
     Deserializer --> Router
 
-    Router --> Agent1
-    Router --> Agent2
+    Router --> Actor1
+    Router --> Actor2
     Router --> BrokerNode
 ```
 
----
-
-## Design Patterns
-
-### Type-State Pattern
-
-```mermaid
-graph LR
-    subgraph CompileTime["Compile-Time Enforcement"]
-        IdleState["ManagedAgent - Idle"]
-        StartedState["ManagedAgent - Started"]
-    end
-
-    subgraph IdleMethods["Idle-Only Methods"]
-        MutateOn["mutate_on"]
-        ActOn["act_on"]
-        Hooks["lifecycle hooks"]
-    end
-
-    subgraph StartedMethods["Started-Only Methods"]
-        Model["model"]
-        ModelMut["model_mut"]
-        Send["send"]
-        Supervise["supervise"]
-    end
-
-    subgraph Trans["Transition"]
-        Start["start await"]
-    end
-
-    MutateOn --> IdleState
-    ActOn --> IdleState
-    Hooks --> IdleState
-
-    IdleState -->|start| Start
-    Start --> StartedState
-
-    Model --> StartedState
-    ModelMut --> StartedState
-    Send --> StartedState
-    Supervise --> StartedState
-```
+See the [IPC Communication](/docs/ipc) guide for details.
 
 ---
 
-## Key Architectural Decisions
+## Key Design Decisions
+
+These aren't just implementation details - they're intentional choices that affect how you use the framework.
 
 ### 1. Type-State for Lifecycle Safety
 
-The use of phantom type parameters (`Idle`/`Started`) ensures that configuration methods are only available before an agent starts, and runtime methods are only available after. This prevents entire classes of bugs at compile time.
+The `Idle`/`Started` type parameters mean you literally can't call the wrong methods at the wrong time. This catches bugs at compile time instead of runtime.
+
+**Trade-off:** Slightly more complex types, but impossible to misuse.
 
 ### 2. Arc-Based Message Sharing
 
-Messages are wrapped in `Arc<dyn ActonMessage>` for efficient broadcast distribution. When a message is broadcast to N subscribers, only one allocation occurs, and N Arc clones are created (cheap reference count increments).
+Messages are wrapped in `Arc<dyn ActonMessage>`. When you broadcast to N subscribers, only one allocation happens.
 
-### 3. Handler Concurrency Model
+**Trade-off:** Small overhead for direct messages, big win for broadcasts.
 
-- **Mutable handlers** (`mutate_on`): Execute with exclusive access, one at a time
-- **Read-only handlers** (`act_on`): Execute concurrently with high-water mark control
+### 3. Mutable vs Read-Only Handlers
 
-This allows maximum concurrency for read operations while maintaining safety for mutations.
+`mutate_on` runs sequentially (one at a time). `act_on` runs concurrently (many at once).
+
+**Trade-off:** You have to think about which one to use, but you get explicit control over concurrency.
 
 ### 4. Channel-Based Communication
 
-All inter-agent communication uses Tokio MPSC channels, providing:
-- Backpressure handling
+All actor communication goes through Tokio MPSC channels.
+
+**Benefits:**
+- Automatic backpressure (slow consumers don't break fast producers)
 - Non-blocking sends
-- Proper ordering guarantees
+- Guaranteed ordering within a single channel
 
 ### 5. XDG-Compliant Configuration
 
-Configuration follows the XDG Base Directory Specification for cross-platform compatibility:
+Config files live in standard locations:
 - Linux: `~/.config/acton/config.toml`
 - macOS: `~/Library/Application Support/acton/config.toml`
 - Windows: `%APPDATA%/acton/config.toml`
 
+**Benefit:** No surprises about where config lives.
+
 ### 6. Feature-Gated IPC
 
-IPC functionality is optional via feature flags, keeping the core library lean for applications that don't need external process communication.
+IPC is optional. If you don't need it, you don't pay for it (compile time or binary size).
 
 ---
 
-## Runtime Initialization Sequence
+## Module Structure
+
+For contributors or those who want to understand the codebase:
+
+```text
+acton-reactive/src/
+├── lib.rs                    # Public API & prelude
+├── actor/
+│   ├── mod.rs
+│   ├── managed_actor.rs      # Core ManagedActor type
+│   ├── actor_config.rs       # ActorConfig builder
+│   └── managed_actor/
+│       ├── idle.rs           # Idle state methods
+│       └── started.rs        # Started state methods
+├── common/
+│   ├── mod.rs
+│   ├── acton.rs              # ActonApp entry point
+│   ├── acton_inner.rs        # Internal runtime state
+│   ├── actor_runtime.rs      # ActorRuntime
+│   ├── actor_handle.rs       # ActorHandle
+│   ├── actor_broker.rs       # ActorBroker
+│   ├── actor_reply.rs        # ActorReply utility
+│   ├── config.rs             # ActonConfig
+│   └── ipc/                   # IPC module (feature-gated)
+├── message/
+│   ├── mod.rs
+│   ├── envelope.rs           # Internal Envelope
+│   ├── outbound_envelope.rs  # OutboundEnvelope
+│   ├── message_context.rs    # MessageContext<M>
+│   └── ...
+└── traits/
+    ├── mod.rs
+    ├── acton_message.rs      # ActonMessage trait
+    └── ...
+```
+
+---
+
+## Runtime Startup Sequence
+
+What happens when you call `ActonApp::launch()`:
 
 ```mermaid
 sequenceDiagram
@@ -545,8 +599,8 @@ sequenceDiagram
     participant ActonApp
     participant Config as ActonConfig
     participant Inner as ActonInner
-    participant Runtime as AgentRuntime
-    participant Broker as AgentBroker
+    participant Runtime as ActorRuntime
+    participant Broker as ActorBroker
 
     User->>ActonApp: launch
     ActonApp->>Config: load from XDG
@@ -554,8 +608,8 @@ sequenceDiagram
 
     ActonApp->>Inner: new
     Inner->>Inner: Create cancellation_token
-    Inner->>Broker: Create broker agent
-    Broker-->>Inner: AgentHandle
+    Inner->>Broker: Create broker actor
+    Broker-->>Inner: ActorHandle
 
     opt IPC Feature Enabled
         Inner->>Inner: Create IpcTypeRegistry
@@ -563,26 +617,28 @@ sequenceDiagram
 
     Inner-->>ActonApp: ActonInner
     ActonApp->>Runtime: new inner
-    Runtime-->>User: AgentRuntime
+    Runtime-->>User: ActorRuntime
 ```
 
 ---
 
 ## Shutdown Sequence
 
+What happens when you call `runtime.shutdown_all()`:
+
 ```mermaid
 sequenceDiagram
     participant User
-    participant Runtime as AgentRuntime
+    participant Runtime as ActorRuntime
     participant Token as CancellationToken
-    participant Roots as Root Agents
-    participant Children as Child Agents
+    participant Roots as Root Actors
+    participant Children as Child Actors
     participant Tracker as TaskTracker
 
     User->>Runtime: shutdown_all
     Runtime->>Token: cancel
 
-    loop For each root agent
+    loop For each root actor
         Runtime->>Roots: stop
         Roots->>Children: propagate stop
         Children-->>Roots: stopped
@@ -593,3 +649,5 @@ sequenceDiagram
     Tracker-->>Runtime: all tasks complete
     Runtime-->>User: Ok
 ```
+
+**Key behavior:** Stopping propagates down the supervision tree. Children stop before parents finish stopping.

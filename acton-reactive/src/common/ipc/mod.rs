@@ -24,11 +24,11 @@
 //! # Overview
 //!
 //! External processes cannot directly access Tokio MPSC channels used for internal
-//! agent communication. The IPC module bridges this gap by providing:
+//! actor communication. The IPC module bridges this gap by providing:
 //!
 //! - A type registry for mapping message type names to deserializers
 //! - Serializable envelope types for IPC message framing
-//! - An agent registry for mapping logical names to agent handles
+//! - An actor registry for mapping logical names to actor handles
 //! - A Unix Domain Socket listener for external process communication
 //! - A wire protocol with length-prefixed framing
 //!
@@ -38,7 +38,7 @@
 //!   Message types must be registered before they can be received via IPC.
 //!
 //! * [`IpcEnvelope`]: The standard envelope format for IPC messages, containing
-//!   correlation ID, target agent, message type, and serialized payload.
+//!   correlation ID, target actor, message type, and serialized payload.
 //!
 //! * [`IpcResponse`]: Response envelope format with correlation ID matching and
 //!   success/error reporting.
@@ -65,9 +65,9 @@
 //! let mut runtime = ActonApp::launch();
 //! runtime.ipc_registry().register::<PriceUpdate>("PriceUpdate");
 //!
-//! // Expose an agent for IPC access
-//! let agent = runtime.new_agent::<()>();
-//! let handle = agent.start().await;
+//! // Expose an actor for IPC access
+//! let actor = runtime.new_actor::<()>();
+//! let handle = actor.start().await;
 //! runtime.ipc_expose("price_service", handle);
 //!
 //! // Start the IPC listener (Phase 2)
@@ -94,9 +94,9 @@ pub use subscription_manager::{
 // IPC types - used by external clients for message serialization
 #[allow(unused_imports)]
 pub use types::{
-    AgentInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
-    IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
-    IpcSubscriptionResponse, IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
+    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
+    IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
+    IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
 };
 
 // Re-export config types for users who want to customize defaults

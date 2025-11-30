@@ -27,7 +27,7 @@ pub struct Pong;
 #[derive(Clone, Debug)]
 pub struct Ping;
 
-/// Represents different types of jokes a `Comedian` agent might tell.
+/// Represents different types of jokes a `Comedian` actor might tell.
 /// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
 pub enum FunnyJoke {
@@ -35,7 +35,7 @@ pub enum FunnyJoke {
     Pun,
 }
 
-/// Represents a joke targeted at a specific child agent or identified by a string.
+/// Represents a joke targeted at a specific child actor or identified by a string.
 /// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
 pub enum FunnyJokeFor {
@@ -56,12 +56,12 @@ pub enum AudienceReactionMsg {
 #[derive(Clone, Debug)]
 pub struct Joke;
 
-/// Message used to instruct the `Counter` agent to increment its count.
+/// Message used to instruct the `Counter` actor to increment its count.
 /// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
 pub struct Tally;
 
-/// Message used by an agent to report its status, often including a count.
+/// Message used by an actor to report its status, often including a count.
 /// Note: Relies on the blanket `impl<T> ActonMessage for T` in acton-core.
 #[derive(Clone, Debug)]
 pub enum StatusReport {

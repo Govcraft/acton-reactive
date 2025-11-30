@@ -30,13 +30,13 @@ use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, FmtSubscriber};
 
-use agents::ScaffoldAgent;
+use actors::ScaffoldActor;
 use messages::{InitProject, MenuMoveDown, MenuMoveUp};
-use crate::agents::ViewManager;
+use crate::actors::ViewManager;
 use crate::messages::MenuSelect;
 
 mod screens;
-mod agents;
+mod actors;
 mod messages;
 
 const FAILED_TO_DISABLE_RAW_MODE: &str = "Failed to disable raw mode";
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
     let mut app = ActonApp::launch();
     let view_manager = ViewManager::create(&mut app).await?;
-    let scaffold_agent = ScaffoldAgent::create(&mut app).await;
+    let scaffold_actor = ScaffoldActor::create(&mut app).await;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('s') => {
                         info!("'s' pressed. Starting project scaffold...");
-                        scaffold_agent.send(InitProject { project_name: PROJECT_NAME }).await;
+                        scaffold_actor.send(InitProject { project_name: PROJECT_NAME }).await;
                     }
                     KeyCode::Char('j') => {
                         view_manager.send(MenuMoveDown).await;
@@ -129,11 +129,11 @@ async fn main() -> Result<()> {
     stdout.flush()?;
     queue!(stdout, cursor::MoveTo(0, 1))?;
 
-    // Shutdown agents
+    // Shutdown actors
     if let Err(e) = app.shutdown_all().await {
-        error!("Error during agent shutdown: {:?}", e);
+        error!("Error during actor shutdown: {:?}", e);
     } else {
-        info!("All agents shut down successfully.");
+        info!("All actors shut down successfully.");
     }
 
     info!("** App shutdown complete **");

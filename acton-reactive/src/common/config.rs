@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 /// Configuration for the Acton Reactive framework
-/// 
+///
 /// This struct contains all configurable values for the Acton framework,
 /// loaded from TOML files in XDG-compliant directories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,8 +43,8 @@ pub struct ActonConfig {
 /// Timeout-related configuration values (all values in milliseconds)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeoutConfig {
-    /// Default agent shutdown timeout in milliseconds
-    pub agent_shutdown: u64,
+    /// Default actor shutdown timeout in milliseconds
+    pub actor_shutdown: u64,
     /// Default system-wide shutdown timeout in milliseconds
     pub system_shutdown: u64,
     /// Maximum wait time before flushing read-only handler futures (in milliseconds)
@@ -56,8 +56,8 @@ pub struct TimeoutConfig {
 pub struct LimitsConfig {
     /// Maximum concurrent read-only handlers before forced flush
     pub concurrent_handlers_high_water_mark: usize,
-    /// Default MPSC channel size for agent message inbox
-    pub agent_inbox_capacity: usize,
+    /// Default MPSC channel size for actor message inbox
+    pub actor_inbox_capacity: usize,
     /// Dummy channel size for closed/default channels
     pub dummy_channel_size: usize,
 }
@@ -65,8 +65,8 @@ pub struct LimitsConfig {
 /// Default configuration values
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultsConfig {
-    /// Default agent name when none provided
-    pub agent_name: String,
+    /// Default actor name when none provided
+    pub actor_name: String,
     /// Default root Ern identifier
     pub root_ern: String,
 }
@@ -104,11 +104,10 @@ pub struct BehaviorConfig {
     pub enable_metrics: bool,
 }
 
-
 impl Default for TimeoutConfig {
     fn default() -> Self {
         Self {
-            agent_shutdown: 10_000,
+            actor_shutdown: 10_000,
             system_shutdown: 30_000,
             read_only_handler_flush: 10,
         }
@@ -119,7 +118,7 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             concurrent_handlers_high_water_mark: 100,
-            agent_inbox_capacity: 255,
+            actor_inbox_capacity: 255,
             dummy_channel_size: 1,
         }
     }
@@ -128,7 +127,7 @@ impl Default for LimitsConfig {
 impl Default for DefaultsConfig {
     fn default() -> Self {
         Self {
-            agent_name: "agent".to_string(),
+            actor_name: "actor".to_string(),
             root_ern: "default".to_string(),
         }
     }
@@ -171,19 +170,19 @@ impl ActonConfig {
     }
 
     /// Load configuration from XDG-compliant locations
-    /// 
+    ///
     /// This function attempts to load configuration from the following locations
     /// in order of preference:
     /// 1. `$XDG_CONFIG_HOME/acton/config.toml` (Linux/macOS)
     /// 2. `~/.config/acton/config.toml` (Linux fallback)
     /// 3. `~/Library/Application Support/acton/config.toml` (macOS fallback)
     /// 4. `%APPDATA%/acton/config.toml` (Windows)
-    /// 
+    ///
     /// If no configuration file is found, returns the default configuration.
     /// If a configuration file exists but is malformed, logs an error and uses defaults.
     pub fn load() -> Self {
         use tracing::{error, info};
-        
+
         // Get the XDG base directories
         let xdg_dirs = match xdg::BaseDirectories::with_prefix("acton") {
             Ok(dirs) => dirs,
@@ -217,7 +216,11 @@ impl ActonConfig {
                         }
                     },
                     Err(e) => {
-                        error!("Failed to read configuration file {}: {}", path.display(), e);
+                        error!(
+                            "Failed to read configuration file {}: {}",
+                            path.display(),
+                            e
+                        );
                         Self::default()
                     }
                 }

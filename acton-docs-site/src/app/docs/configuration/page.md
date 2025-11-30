@@ -40,8 +40,8 @@ Control various timeout behaviors (all values in **milliseconds**).
 
 ```toml
 [timeouts]
-# Timeout for individual agent shutdown
-agent_shutdown = 10000      # 10 seconds
+# Timeout for individual actor shutdown
+actor_shutdown = 10000      # 10 seconds
 
 # Timeout for entire system shutdown
 system_shutdown = 30000     # 30 seconds
@@ -52,7 +52,7 @@ read_only_handler_flush = 10  # 10 milliseconds
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `agent_shutdown` | `u64` | `10000` | Maximum time to wait for a single agent to stop gracefully |
+| `actor_shutdown` | `u64` | `10000` | Maximum time to wait for a single actor to stop gracefully |
 | `system_shutdown` | `u64` | `30000` | Maximum time to wait for the entire system to shutdown |
 | `read_only_handler_flush` | `u64` | `10` | Timeout before forcing a flush of pending read-only handlers |
 
@@ -67,8 +67,8 @@ Control capacity and resource limits.
 # Maximum concurrent read-only handlers before forced flush
 concurrent_handlers_high_water_mark = 100
 
-# MPSC channel buffer size for agent message inboxes
-agent_inbox_capacity = 255
+# MPSC channel buffer size for actor message inboxes
+actor_inbox_capacity = 255
 
 # Size for dummy/placeholder channels
 dummy_channel_size = 1
@@ -77,7 +77,7 @@ dummy_channel_size = 1
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `concurrent_handlers_high_water_mark` | `usize` | `100` | Maximum number of concurrent `act_on` handlers before they're flushed |
-| `agent_inbox_capacity` | `usize` | `255` | Buffer size for agent message queues (backpressure threshold) |
+| `actor_inbox_capacity` | `usize` | `255` | Buffer size for actor message queues (backpressure threshold) |
 | `dummy_channel_size` | `usize` | `1` | Size for internal placeholder channels |
 
 #### Understanding Handler Limits
@@ -97,12 +97,12 @@ Messages arrive: M1, M2, M3, ... M100
 
 ### Defaults
 
-Default values used when creating agents.
+Default values used when creating actors.
 
 ```toml
 [defaults]
-# Default agent name when none provided
-agent_name = "agent"
+# Default actor name when none provided
+actor_name = "actor"
 
 # Default root ERN identifier
 root_ern = "default"
@@ -110,7 +110,7 @@ root_ern = "default"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `agent_name` | `String` | `"agent"` | Name assigned when `new_agent()` is called without a name |
+| `actor_name` | `String` | `"actor"` | Name assigned when `new_actor()` is called without a name |
 | `root_ern` | `String` | `"default"` | Base identifier for the root namespace |
 
 ---
@@ -192,17 +192,17 @@ enable_metrics = false
 # Place this file at: ~/.config/acton/config.toml
 
 [timeouts]
-agent_shutdown = 10000           # ms - Individual agent shutdown timeout
+actor_shutdown = 10000           # ms - Individual actor shutdown timeout
 system_shutdown = 30000          # ms - System-wide shutdown timeout
 read_only_handler_flush = 10     # ms - Read-only handler flush timeout
 
 [limits]
 concurrent_handlers_high_water_mark = 100  # Max concurrent act_on handlers
-agent_inbox_capacity = 255                  # Agent message queue size
+actor_inbox_capacity = 255                  # Actor message queue size
 dummy_channel_size = 1                      # Placeholder channel size
 
 [defaults]
-agent_name = "agent"             # Default agent name
+actor_name = "actor"             # Default actor name
 root_ern = "default"             # Default root ERN
 
 [tracing]
@@ -233,13 +233,13 @@ Optimized for development with more verbose logging and shorter timeouts:
 # ~/.config/acton/config.toml (Development)
 
 [timeouts]
-agent_shutdown = 5000            # 5 seconds - fail fast
+actor_shutdown = 5000            # 5 seconds - fail fast
 system_shutdown = 10000          # 10 seconds
 read_only_handler_flush = 5      # Faster flush
 
 [limits]
 concurrent_handlers_high_water_mark = 50   # Lower for debugging
-agent_inbox_capacity = 100                  # Smaller queues
+actor_inbox_capacity = 100                  # Smaller queues
 dummy_channel_size = 1
 
 [tracing]
@@ -260,13 +260,13 @@ Optimized for production with higher capacity and longer timeouts:
 # /etc/acton/config.toml (Production)
 
 [timeouts]
-agent_shutdown = 30000           # 30 seconds - graceful shutdown
+actor_shutdown = 30000           # 30 seconds - graceful shutdown
 system_shutdown = 60000          # 60 seconds
 read_only_handler_flush = 50     # More batching
 
 [limits]
 concurrent_handlers_high_water_mark = 500  # Higher throughput
-agent_inbox_capacity = 1000                 # Larger buffers
+actor_inbox_capacity = 1000                 # Larger buffers
 dummy_channel_size = 1
 
 [tracing]
@@ -301,7 +301,7 @@ fn example() {
     let shutdown_timeout = CONFIG.timeouts.system_shutdown;
 
     // Access limits
-    let inbox_size = CONFIG.limits.agent_inbox_capacity;
+    let inbox_size = CONFIG.limits.actor_inbox_capacity;
 
     // Access as Duration
     let duration = CONFIG.system_shutdown_timeout();
@@ -366,7 +366,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[cfg(feature = "ipc")]
-async fn setup_ipc(runtime: &mut AgentRuntime) {
+async fn setup_ipc(runtime: &mut ActorRuntime) {
     use acton_reactive::common::ipc::IpcConfig;
 
     let ipc_config = IpcConfig {
@@ -397,11 +397,11 @@ The default configuration works well for most use cases. Only override values wh
 ```toml
 # High-throughput scenarios
 [limits]
-agent_inbox_capacity = 1000
+actor_inbox_capacity = 1000
 
 # Memory-constrained scenarios
 [limits]
-agent_inbox_capacity = 50
+actor_inbox_capacity = 50
 ```
 
 ### 3. Set Appropriate Shutdown Timeouts
@@ -411,10 +411,10 @@ Consider your application's cleanup requirements:
 ```toml
 [timeouts]
 # Simple apps: shorter timeouts
-agent_shutdown = 5000
+actor_shutdown = 5000
 
 # Complex apps with DB connections, file I/O: longer timeouts
-agent_shutdown = 30000
+actor_shutdown = 30000
 ```
 
 ### 4. Monitor High Water Mark

@@ -17,12 +17,12 @@
 //! IPC Bidirectional Client Example
 //!
 //! This example demonstrates the client side of bidirectional IPC communication,
-//! sending request-response messages to agents and receiving their replies.
+//! sending request-response messages to actors and receiving their replies.
 //!
 //! # Features
 //!
 //! - **Request-Response**: Sends messages with `expects_reply: true` and waits
-//!   for agent responses.
+//!   for actor responses.
 //! - **Fire-and-Forget**: Shows contrast with regular one-way messages.
 //! - **Custom Timeouts**: Demonstrates configurable response timeouts.
 //!
@@ -116,7 +116,10 @@ fn display_response(response: &IpcResponse) {
                     println!("   {key}: {value}");
                 }
             } else {
-                println!("   {}", serde_json::to_string_pretty(payload).unwrap_or_default());
+                println!(
+                    "   {}",
+                    serde_json::to_string_pretty(payload).unwrap_or_default()
+                );
             }
         }
     } else {
@@ -275,8 +278,8 @@ async fn demo_error_handling(
     println!("║                  Error Handling Demo                          ║");
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
-    // Test: Send to non-existent agent
-    println!("❌ Test: Send to non-existent agent 'nonexistent'");
+    // Test: Send to non-existent actor
+    println!("❌ Test: Send to non-existent actor 'nonexistent'");
     let response = send_request(
         reader,
         writer,
@@ -304,7 +307,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if socket is available
     if !socket_exists(&socket_path) {
-        eprintln!("\n❌ Error: Socket does not exist at {}", socket_path.display());
+        eprintln!(
+            "\n❌ Error: Socket does not exist at {}",
+            socket_path.display()
+        );
         eprintln!("   Make sure the ipc_bidirectional server is running:");
         eprintln!("   cargo run --example ipc_bidirectional_server --features ipc");
         std::process::exit(1);

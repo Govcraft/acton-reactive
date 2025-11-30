@@ -23,13 +23,13 @@ use crate::common::BrokerRef;
 /// This is essential for components that need to interact with the broker, primarily
 /// for subscribing or unsubscribing from message types via the [`Subscribable`] trait.
 ///
-/// It is typically implemented by [`AgentHandle`](crate::common::AgentHandle).
+/// It is typically implemented by [`ActorHandle`](crate::common::ActorHandle).
 pub trait Subscriber {
     /// Retrieves an optional handle to the message broker associated with this entity.
     ///
     /// Implementations should return `Some(BrokerRef)` if the entity is configured
     /// with a connection to the system broker, and `None` otherwise. The [`BrokerRef`]
-    /// is an alias for [`AgentHandle`](crate::common::AgentHandle).
+    /// is an alias for [`ActorHandle`](crate::common::ActorHandle).
     ///
     /// # Returns
     ///

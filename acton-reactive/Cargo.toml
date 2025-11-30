@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Acton Reactive is the main crate of the Acton framework, designed for building reactive, event-driven, and asynchronous systems. It provides intuitive abstractions to make working with distributed agents seamless and efficient."
+description = "Acton Reactive is the main crate of the Acton framework, designed for building reactive, event-driven, and asynchronous systems. It provides intuitive abstractions to make working with distributed actors seamless and efficient."
 
 [dependencies]
 acton-macro.workspace = true
@@ -81,7 +81,7 @@ name = "ipc_bidirectional_client"
 path = "examples/ipc_bidirectional_demo/client.rs"
 required-features = ["ipc"]
 
-# IPC Multi-Service Demo (multiple agents with dashboard)
+# IPC Multi-Service Demo (multiple actors with dashboard)
 [[example]]
 name = "ipc_multi_service_server"
 path = "examples/ipc_multi_service/server.rs"

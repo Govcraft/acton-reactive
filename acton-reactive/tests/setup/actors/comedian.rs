@@ -20,9 +20,9 @@
 // Import the macro directly from the acton_macro crate
 use acton_macro::acton_actor;
 
-/// Represents the state (model) for a Comedian agent in tests.
+/// Represents the state (model) for a Comedian actor in tests.
 ///
-/// This agent state typically tracks joke delivery and audience reactions.
+/// This actor state typically tracks joke delivery and audience reactions.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 // #[derive(Default, Debug, Clone)] // Removed as #[acton_actor] likely provides these

@@ -169,7 +169,9 @@ impl SubscriptionManager {
                         self.type_to_connections.remove(type_name);
                     }
                 }
-                self.stats.subscriptions_removed.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .subscriptions_removed
+                    .fetch_add(1, Ordering::Relaxed);
             }
             debug!(
                 conn_id,
@@ -182,11 +184,7 @@ impl SubscriptionManager {
     /// Subscribes a connection to one or more message types.
     ///
     /// Returns the list of message types the connection is now subscribed to.
-    pub fn subscribe(
-        &self,
-        conn_id: ConnectionId,
-        message_types: &[String],
-    ) -> Vec<String> {
+    pub fn subscribe(&self, conn_id: ConnectionId, message_types: &[String]) -> Vec<String> {
         let Some(mut conn_entry) = self.connections.get_mut(&conn_id) else {
             warn!(conn_id, "Cannot subscribe: connection not registered");
             return Vec::new();
@@ -199,7 +197,9 @@ impl SubscriptionManager {
                     .entry(type_name.clone())
                     .or_default()
                     .insert(conn_id);
-                self.stats.subscriptions_added.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .subscriptions_added
+                    .fetch_add(1, Ordering::Relaxed);
                 trace!(conn_id, message_type = %type_name, "Added subscription");
             }
         }
@@ -211,11 +211,7 @@ impl SubscriptionManager {
     ///
     /// If `message_types` is empty, unsubscribes from all types.
     /// Returns the list of message types the connection is still subscribed to.
-    pub fn unsubscribe(
-        &self,
-        conn_id: ConnectionId,
-        message_types: &[String],
-    ) -> Vec<String> {
+    pub fn unsubscribe(&self, conn_id: ConnectionId, message_types: &[String]) -> Vec<String> {
         let Some(mut conn_entry) = self.connections.get_mut(&conn_id) else {
             warn!(conn_id, "Cannot unsubscribe: connection not registered");
             return Vec::new();
@@ -232,9 +228,15 @@ impl SubscriptionManager {
                         self.type_to_connections.remove(type_name);
                     }
                 }
-                self.stats.subscriptions_removed.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .subscriptions_removed
+                    .fetch_add(1, Ordering::Relaxed);
             }
-            trace!(conn_id, count = types_to_remove.len(), "Unsubscribed from all types");
+            trace!(
+                conn_id,
+                count = types_to_remove.len(),
+                "Unsubscribed from all types"
+            );
             return Vec::new();
         }
 
@@ -247,7 +249,9 @@ impl SubscriptionManager {
                         self.type_to_connections.remove(type_name);
                     }
                 }
-                self.stats.subscriptions_removed.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .subscriptions_removed
+                    .fetch_add(1, Ordering::Relaxed);
                 trace!(conn_id, message_type = %type_name, "Removed subscription");
             }
         }
@@ -299,15 +303,24 @@ impl SubscriptionManager {
                 let notification_clone = notification.clone();
                 match conn_info.push_sender.try_send(notification_clone) {
                     Ok(()) => {
-                        self.stats.push_notifications_sent.fetch_add(1, Ordering::Relaxed);
+                        self.stats
+                            .push_notifications_sent
+                            .fetch_add(1, Ordering::Relaxed);
                         trace!(conn_id, message_type, "Forwarded push notification");
                     }
                     Err(mpsc::error::TrySendError::Full(_)) => {
-                        self.stats.push_notifications_dropped.fetch_add(1, Ordering::Relaxed);
-                        warn!(conn_id, message_type, "Push channel full, dropping notification");
+                        self.stats
+                            .push_notifications_dropped
+                            .fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            conn_id,
+                            message_type, "Push channel full, dropping notification"
+                        );
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
-                        self.stats.push_notifications_dropped.fetch_add(1, Ordering::Relaxed);
+                        self.stats
+                            .push_notifications_dropped
+                            .fetch_add(1, Ordering::Relaxed);
                         trace!(conn_id, message_type, "Push channel closed");
                         // Connection will be cleaned up when it fully disconnects
                     }
@@ -354,7 +367,10 @@ pub struct PushReceiver {
 ///
 /// Returns a sender (for the subscription manager) and a receiver (for the connection handler).
 #[must_use]
-pub fn create_push_channel(conn_id: ConnectionId, buffer_size: usize) -> (PushSender, PushReceiver) {
+pub fn create_push_channel(
+    conn_id: ConnectionId,
+    buffer_size: usize,
+) -> (PushSender, PushReceiver) {
     let (sender, receiver) = mpsc::channel(buffer_size);
     (sender, PushReceiver { conn_id, receiver })
 }
@@ -476,11 +492,8 @@ mod tests {
     fn test_forward_no_subscribers() {
         let manager = Arc::new(SubscriptionManager::new());
 
-        let notification = IpcPushNotification::new(
-            "UnsubscribedType",
-            None,
-            serde_json::json!({}),
-        );
+        let notification =
+            IpcPushNotification::new("UnsubscribedType", None, serde_json::json!({}));
 
         // Should not panic, just do nothing
         manager.forward_to_subscribers(&notification);
@@ -495,7 +508,10 @@ mod tests {
         let type_id = TypeId::of::<TestMessage>();
 
         manager.register_type_mapping(type_id, "TestMessage".to_string());
-        assert_eq!(manager.get_type_name(&type_id), Some("TestMessage".to_string()));
+        assert_eq!(
+            manager.get_type_name(&type_id),
+            Some("TestMessage".to_string())
+        );
     }
 
     #[tokio::test]
@@ -511,7 +527,7 @@ mod tests {
         // Test that we can send through the channel
         let notification = IpcPushNotification::new(
             "TestMessage",
-            Some("test_agent".to_string()),
+            Some("test_actor".to_string()),
             serde_json::json!({ "test": true }),
         );
 

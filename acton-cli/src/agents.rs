@@ -1,5 +1,5 @@
-mod scaffold_agent;
+mod scaffold_actor;
 mod view_manager;
 
+pub use scaffold_actor::ScaffoldActor;
 pub use view_manager::ViewManager;
-pub use scaffold_agent::ScaffoldAgent;

@@ -27,7 +27,7 @@ use dyn_clone::DynClone; // Required for cloning trait objects
 ///
 /// The `as_any` and `as_any_mut` methods are crucial for the framework's ability
 /// to handle messages generically and perform type-based dispatch (e.g., in message
-/// handlers registered via [`ManagedAgent::act_on`](crate::actor::ManagedAgent::act_on)).
+/// handlers registered via [`ManagedActor::act_on`](crate::actor::ManagedActor::act_on)).
 ///
 /// A blanket implementation is provided, so any type `T` that satisfies the bounds
 /// (`T: Any + Send + Sync + Debug + DynClone + 'static`) automatically implements

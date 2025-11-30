@@ -53,7 +53,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use acton_reactive::ipc::protocol::{
-    read_frame, read_response, write_envelope, write_heartbeat, is_heartbeat, MAX_FRAME_SIZE,
+    is_heartbeat, read_frame, read_response, write_envelope, write_heartbeat, MAX_FRAME_SIZE,
 };
 use acton_reactive::ipc::{socket_exists, socket_is_alive, IpcConfig, IpcEnvelope};
 use tokio::net::UnixStream;
@@ -75,7 +75,8 @@ async fn send_heartbeat(
     write_heartbeat(writer).await?;
     println!("Sent heartbeat...");
 
-    let (msg_type, _format, _payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
+    let (msg_type, _format, _payload) =
+        timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE)).await??;
 
     if is_heartbeat(msg_type) {
         println!("Received heartbeat response - connection is healthy!");
@@ -86,7 +87,7 @@ async fn send_heartbeat(
     Ok(())
 }
 
-/// Sends a message to a target agent and displays the response.
+/// Sends a message to a target actor and displays the response.
 async fn send_message(
     reader: &mut tokio::net::unix::OwnedReadHalf,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
@@ -104,7 +105,11 @@ async fn send_message(
 
     write_envelope(writer, &envelope).await?;
 
-    let response = timeout(Duration::from_secs(10), read_response(reader, MAX_FRAME_SIZE)).await??;
+    let response = timeout(
+        Duration::from_secs(10),
+        read_response(reader, MAX_FRAME_SIZE),
+    )
+    .await??;
 
     println!("\n--- Response ---");
     println!("Success: {}", response.success);
@@ -119,18 +124,18 @@ async fn send_message(
     Ok(())
 }
 
-/// Demonstrates error handling by sending to a non-existent agent.
+/// Demonstrates error handling by sending to a non-existent actor.
 async fn demonstrate_error_handling(
     reader: &mut tokio::net::unix::OwnedReadHalf,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Error Handling Demonstration ===");
 
-    // Try to send to a non-existent agent
+    // Try to send to a non-existent actor
     send_message(
         reader,
         writer,
-        "nonexistent_agent",
+        "nonexistent_actor",
         "SomeMessage",
         serde_json::json!({"test": "data"}),
     )
@@ -185,13 +190,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if socket is available
     if !socket_exists(&socket_path) {
-        eprintln!("\nError: Socket does not exist at {}", socket_path.display());
+        eprintln!(
+            "\nError: Socket does not exist at {}",
+            socket_path.display()
+        );
         eprintln!("Make sure an IPC server is running (e.g., ipc_multi_service_server example).");
         std::process::exit(1);
     }
 
     if !socket_is_alive(&socket_path).await {
-        eprintln!("\nError: Socket exists but is not responding at {}", socket_path.display());
+        eprintln!(
+            "\nError: Socket exists but is not responding at {}",
+            socket_path.display()
+        );
         eprintln!("The IPC server may have crashed. Try removing the stale socket and restarting.");
         std::process::exit(1);
     }

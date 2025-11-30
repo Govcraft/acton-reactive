@@ -24,37 +24,37 @@ use dashmap::DashMap;
 use futures::future::join_all;
 use tracing::{instrument, trace};
 
-use crate::actor::{AgentConfig, Idle, ManagedAgent};
-use crate::common::{AgentHandle, AgentRuntime, BrokerRef};
+use crate::actor::{ActorConfig, Idle, ManagedActor};
+use crate::common::{ActorHandle, ActorRuntime, BrokerRef};
 use crate::message::{BrokerRequest, BrokerRequestEnvelope, SubscribeBroker};
-use crate::traits::AgentHandleInterface;
+use crate::traits::ActorHandleInterface;
 
 #[cfg(feature = "ipc")]
-use parking_lot::RwLock;
-#[cfg(feature = "ipc")]
 use crate::common::ipc::{IpcPushNotification, IpcTypeRegistry, SubscriptionManager};
+#[cfg(feature = "ipc")]
+use parking_lot::RwLock;
 
 /// Manages message subscriptions and broadcasts messages to interested subscribers.
 ///
-/// The `AgentBroker` acts as a central publish-subscribe hub within the Acton system.
-/// Agents can subscribe to specific message types using the [`Subscribable`](crate::traits::Subscribable)
-/// trait (typically via their [`AgentHandle`]). When a message is sent to the broker
-/// (usually wrapped in a [`BrokerRequest`]), the broker identifies all agents subscribed
+/// The `Broker` acts as a central publish-subscribe hub within the Acton system.
+/// Actors can subscribe to specific message types using the [`Subscribable`](crate::traits::Subscribable)
+/// trait (typically via their [`ActorHandle`]). When a message is sent to the broker
+/// (usually wrapped in a [`BrokerRequest`]), the broker identifies all actors subscribed
 /// to that message's type and forwards the message to them concurrently.
 ///
-/// Internally, the `AgentBroker` runs as a specialized [`ManagedAgent`] that handles
+/// Internally, the `Broker` runs as a specialized [`ManagedActor`] that handles
 /// [`SubscribeBroker`] messages to manage its subscription list and [`BrokerRequest`]
 /// messages to trigger broadcasts.
 ///
-/// It also dereferences ([`Deref`] and [`DerefMut`]) to its underlying [`AgentHandle`],
+/// It also dereferences ([`Deref`] and [`DerefMut`]) to its underlying [`ActorHandle`],
 /// allowing direct use of handle methods where appropriate.
 #[derive(Default, Debug, Clone)]
-pub struct AgentBroker {
+pub struct Broker {
     /// A thread-safe map storing subscribers keyed by message `TypeId`.
-    /// The value is a set of tuples containing the subscriber's ID (`Ern`) and its `AgentHandle`.
+    /// The value is a set of tuples containing the subscriber's ID (`Ern`) and its `ActorHandle`.
     subscribers: Subscribers,
-    /// The underlying handle for the broker agent itself.
-    agent_handle: AgentHandle,
+    /// The underlying handle for the broker actor itself.
+    actor_handle: ActorHandle,
     /// Reference to IPC subscription manager for forwarding broadcasts to external clients.
     #[cfg(feature = "ipc")]
     ipc_subscription_manager: Arc<RwLock<Option<Arc<SubscriptionManager>>>>,
@@ -64,76 +64,76 @@ pub struct AgentBroker {
 }
 
 /// Type alias for the internal storage of subscribers.
-/// `TypeId` maps to a `HashSet` of `(Ern, AgentHandle)` tuples.
-type Subscribers = Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>;
+/// `TypeId` maps to a `HashSet` of `(Ern, ActorHandle)` tuples.
+type Subscribers = Arc<DashMap<TypeId, HashSet<(Ern, ActorHandle)>>>;
 
-/// Allows immutable access to the underlying [`AgentHandle`] of the `AgentBroker`.
+/// Allows immutable access to the underlying [`ActorHandle`] of the `Broker`.
 ///
-/// This enables calling methods from [`AgentHandleInterface`] directly on an `AgentBroker` instance.
-impl Deref for AgentBroker {
-    type Target = AgentHandle;
+/// This enables calling methods from [`ActorHandleInterface`] directly on an `Broker` instance.
+impl Deref for Broker {
+    type Target = ActorHandle;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.agent_handle
+        &self.actor_handle
     }
 }
 
-/// Allows mutable access to the underlying [`AgentHandle`] of the `AgentBroker`.
+/// Allows mutable access to the underlying [`ActorHandle`] of the `Broker`.
 ///
-/// This enables modifying the internal state of the broker's `AgentHandle`. Use with caution,
+/// This enables modifying the internal state of the broker's `ActorHandle`. Use with caution,
 /// as direct mutable access might bypass intended broker logic if not used carefully.
-impl DerefMut for AgentBroker {
+impl DerefMut for Broker {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.agent_handle
+        &mut self.actor_handle
     }
 }
 
-impl AgentBroker {
-    /// Initializes the broker agent and starts its processing loop.
+impl Broker {
+    /// Initializes the broker actor and starts its processing loop.
     ///
-    /// This internal function creates the `ManagedAgent` for the broker, configures
+    /// This internal function creates the `ManagedActor` for the broker, configures
     /// its message handlers for `BrokerRequest` (triggering `broadcast`) and
-    /// `SubscribeBroker` (adding subscribers), and starts the agent.
+    /// `SubscribeBroker` (adding subscribers), and starts the actor.
     ///
-    /// Returns the `AgentHandle` of the initialized broker agent.
+    /// Returns the `ActorHandle` of the initialized broker actor.
     #[instrument]
-    pub(crate) async fn initialize(runtime: AgentRuntime) -> BrokerRef {
-        let actor_config = AgentConfig::new(Ern::with_root("broker_main").unwrap(), None, None)
+    pub(crate) async fn initialize(runtime: ActorRuntime) -> BrokerRef {
+        let actor_config = ActorConfig::new(Ern::with_root("broker_main").unwrap(), None, None)
             .expect("Couldn't create initial broker config");
 
-        // Assert that the cancellation_token in the runtime is not cancelled before agent creation.
+        // Assert that the cancellation_token in the runtime is not cancelled before actor creation.
         assert!(
             !runtime.0.cancellation_token.is_cancelled(),
-            "ActonInner cancellation_token must be present and active before creating ManagedAgent in AgentBroker::initialize"
+            "ActonInner cancellation_token must be present and active before creating ManagedActor in Broker::initialize"
         );
 
-        // Create the ManagedAgent for the broker. The model state *is* the AgentBroker itself.
-        let mut broker_agent: ManagedAgent<Idle, Self> =
-            ManagedAgent::new(Some(&runtime), Some(&actor_config));
+        // Create the ManagedActor for the broker. The model state *is* the Broker itself.
+        let mut broker_actor: ManagedActor<Idle, Self> =
+            ManagedActor::new(Some(&runtime), Some(&actor_config));
 
         // Set IPC-related fields on the broker model
         #[cfg(feature = "ipc")]
         {
-            broker_agent.model.ipc_subscription_manager =
+            broker_actor.model.ipc_subscription_manager =
                 runtime.0.ipc_subscription_manager.clone();
-            broker_agent.model.ipc_type_registry = runtime.0.ipc_type_registry.clone();
+            broker_actor.model.ipc_type_registry = runtime.0.ipc_type_registry.clone();
         }
 
-        // Configure the broker agent's message handlers.
-        broker_agent
-            .mutate_on::<BrokerRequest>(|agent, event| {
+        // Configure the broker actor's message handlers.
+        broker_actor
+            .mutate_on::<BrokerRequest>(|actor, event| {
                 // Handler for broadcast requests.
                 trace!(message_type = ?event.message.message_type_id, "Broker received BrokerRequest");
-                let subscribers = agent.model.subscribers.clone(); // Clone Arc<DashMap>
+                let subscribers = actor.model.subscribers.clone(); // Clone Arc<DashMap>
                 let message_to_broadcast = event.message.clone(); // Clone the BrokerRequest
 
                 // Clone IPC-related references for async block
                 #[cfg(feature = "ipc")]
-                let ipc_sub_mgr = agent.model.ipc_subscription_manager.clone();
+                let ipc_sub_mgr = actor.model.ipc_subscription_manager.clone();
                 #[cfg(feature = "ipc")]
-                let ipc_type_reg = agent.model.ipc_type_registry.clone();
+                let ipc_type_reg = actor.model.ipc_type_registry.clone();
 
                 Box::pin(async move {
                     // Call the static broadcast method.
@@ -144,7 +144,7 @@ impl AgentBroker {
                     Self::forward_to_ipc(&ipc_sub_mgr, &ipc_type_reg, &message_to_broadcast);
                 })
             })
-            .act_on::<SubscribeBroker>(|agent, event| {
+            .act_on::<SubscribeBroker>(|actor, event| {
                 // Handler for subscription requests.
                 let subscription_msg = event.message.clone();
                 let type_id = subscription_msg.message_type_id;
@@ -152,7 +152,7 @@ impl AgentBroker {
                 let subscriber_id = subscription_msg.subscriber_id;
                 trace!(subscriber = %subscriber_id, message_type = ?type_id, "Broker received SubscribeBroker");
 
-                let subscribers_map = agent.model.subscribers.clone(); // Clone Arc<DashMap>
+                let subscribers_map = actor.model.subscribers.clone(); // Clone Arc<DashMap>
                 Box::pin(async move {
                     let subscriber_id_for_insert = subscriber_id.clone(); // Clone before moving
                     // Insert the subscriber into the set for the given message TypeId.
@@ -164,11 +164,11 @@ impl AgentBroker {
                 })
             });
 
-        trace!("Starting the AgentBroker agent...");
-        let mut broker_handle = broker_agent.start().await;
+        trace!("Starting the Broker actor...");
+        let mut broker_handle = broker_actor.start().await;
         // The broker needs a reference to itself to function correctly via its handle.
         broker_handle.broker = Box::from(Some(broker_handle.clone()));
-        trace!("AgentBroker started with handle ID: {}", broker_handle.id());
+        trace!("Broker started with handle ID: {}", broker_handle.id());
         broker_handle
     }
 
@@ -180,7 +180,7 @@ impl AgentBroker {
     ///
     /// # Arguments
     ///
-    /// * `subscribers`: An `Arc<DashMap<TypeId, HashSet<(Ern, AgentHandle)>>>` containing the
+    /// * `subscribers`: An `Arc<DashMap<TypeId, HashSet<(Ern, ActorHandle)>>>` containing the
     ///   current subscription state.
     /// * `request`: The [`BrokerRequest`] containing the message payload and its `TypeId`.
     pub async fn broadcast(
@@ -247,10 +247,9 @@ impl AgentBroker {
         };
 
         // Serialize the message payload to JSON for IPC transmission
-        let payload_json = match ipc_type_reg.serialize_by_type_id(
-            &request.message_type_id,
-            request.message.as_ref(),
-        ) {
+        let payload_json = match ipc_type_reg
+            .serialize_by_type_id(&request.message_type_id, request.message.as_ref())
+        {
             Ok(json) => json,
             Err(e) => {
                 trace!(type_name, error = %e, "Failed to serialize payload for IPC forward");

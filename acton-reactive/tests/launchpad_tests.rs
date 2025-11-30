@@ -26,30 +26,30 @@ use acton_test::prelude::*;
 // Use direct paths as re-exports seem problematic in test context
 use crate::setup::{
     actors::{comedian::Comedian, counter::Counter, parent_child::Parent},
-    messages::{Ping, Pong},
     initialize_tracing,
+    messages::{Ping, Pong},
 };
 
 mod setup;
 
-/// Tests spawning agents using `spawn_agent_with_setup_fn`, including spawning a child agent
+/// Tests spawning actors using `spawn_actor_with_setup_fn`, including spawning a child actor
 /// from within the parent's setup function.
 ///
 /// **Scenario:**
 /// 1. Launch runtime and get broker handle.
-/// 2. Define a parent agent config.
-/// 3. Use `runtime.spawn_agent_with_setup_fn` to create the parent agent:
+/// 2. Define a parent actor config.
+/// 3. Use `runtime.spawn_actor_with_setup_fn` to create the parent actor:
 ///    - Inside the parent's setup closure:
-///        - Define a child agent config.
-///        - Clone the runtime handle (`agent.runtime()`).
-///        - Use the cloned runtime handle to `spawn_agent_with_setup_fn` for the child agent.
+///        - Define a child actor config.
+///        - Clone the runtime handle (`actor.runtime()`).
+///        - Use the cloned runtime handle to `spawn_actor_with_setup_fn` for the child actor.
 ///        - Inside the child's setup closure:
 ///            - Configure a `Pong` handler.
 ///            - Subscribe the child to `Pong`.
-///            - Start the child agent (`child_builder.start().await`).
+///            - Start the child actor (`child_builder.start().await`).
 ///        - Configure `Ping` and `Pong` handlers for the parent. The `Pong` handler uses an async block with a delay.
 ///        - Subscribe the parent to `Ping` and `Pong`.
-///        - Start the parent agent (`parent_builder.start().await`).
+///        - Start the parent actor (`parent_builder.start().await`).
 /// 4. Broadcast `Ping` and `Pong` messages using the main broker handle.
 /// 5. Shut down the runtime.
 ///
@@ -61,71 +61,73 @@ mod setup;
 #[acton_test]
 async fn test_launch_passing_acton() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
     let broker_handle = runtime.broker();
 
-    // Configuration for the parent agent.
-    let parent_config = AgentConfig::new(Ern::with_root("parent")?, None, None)?;
+    // Configuration for the parent actor.
+    let parent_config = ActorConfig::new(Ern::with_root("parent")?, None, None)?;
 
     // Clone broker handle for broadcasting later.
     let broker_handle_clone = broker_handle.clone();
 
-    // Spawn the parent agent using a setup function. This allows complex initialization logic,
-    // including spawning other agents, before the parent agent starts its main loop.
-    // The function returns the handle of the started agent.
+    // Spawn the parent actor using a setup function. This allows complex initialization logic,
+    // including spawning other actors, before the parent actor starts its main loop.
+    // The function returns the handle of the started actor.
     let _parent_handle = runtime
-        .spawn_agent_with_setup_fn::<Parent>(parent_config, |mut parent_builder| {
-            // This async block is the setup function for the parent agent.
-            // It receives the `ManagedAgent` builder (`parent_builder`) in its `Idle` state.
+        .spawn_actor_with_setup_fn::<Parent>(parent_config, |mut parent_builder| {
+            // This async block is the setup function for the parent actor.
+            // It receives the `ManagedActor` builder (`parent_builder`) in its `Idle` state.
             Box::pin(async move {
-                // Configuration for the child agent.
-                let child_config = AgentConfig::new(
+                // Configuration for the child actor.
+                let child_config = ActorConfig::new(
                     Ern::with_root("child").expect("Could not create child ARN root"),
                     None,
                     None,
                 )
-                     .expect("Couldn't create child config");
+                .expect("Couldn't create child config");
 
                 // Get a clone of the runtime handle from the parent builder's context.
-                // This is needed to spawn the child agent.
+                // This is needed to spawn the child actor.
                 let mut runtime_clone = parent_builder.runtime().clone();
 
-                // Spawn the child agent using the cloned runtime handle and another setup function.
+                // Spawn the child actor using the cloned runtime handle and another setup function.
                 let _child_handle = runtime_clone
-                    .spawn_agent_with_setup_fn::<Parent>(child_config, |mut child_builder| {
-                        // This async block is the setup function for the child agent.
+                    .spawn_actor_with_setup_fn::<Parent>(child_config, |mut child_builder| {
+                        // This async block is the setup function for the child actor.
                         Box::pin(async move {
                             // Configure child's Pong handler.
-                            child_builder.mutate_on::<Pong>(|_agent, _envelope| {
+                            child_builder.mutate_on::<Pong>(|_actor, _envelope| {
                                 info!("CHILD SUCCESS! PONG!");
-                                AgentReply::immediate()
+                                ActorReply::immediate()
                             });
 
                             // Subscribe child to Pong messages using its builder handle.
                             let child_builder_handle = &child_builder.handle().clone();
                             child_builder_handle.subscribe::<Pong>().await;
-                            // Start the child agent from within its setup function.
+                            // Start the child actor from within its setup function.
                             child_builder.start().await
                         })
                     })
                     .await
                     .expect("Couldn't create child actor");
-                
+
                 // Configure parent's handlers.
                 parent_builder
-                    .mutate_on::<Ping>(|_agent, _envelope| {
+                    .mutate_on::<Ping>(|_actor, _envelope| {
                         info!("SUCCESS! PING!");
-                        AgentReply::immediate()
+                        ActorReply::immediate()
                     })
                     // Pong handler includes an async delay.
-                    .mutate_on::<Pong>(|_agent, _envelope| AgentReply::from_async(wait_and_respond()));
+                    .mutate_on::<Pong>(|_actor, _envelope| {
+                        ActorReply::from_async(wait_and_respond())
+                    });
 
                 // Subscribe parent to messages using its builder handle.
                 let parent_builder_handle = &parent_builder.handle().clone();
                 parent_builder_handle.subscribe::<Ping>().await;
                 parent_builder_handle.subscribe::<Pong>().await;
 
-                // Start the parent agent from within its setup function.
+                // Start the parent actor from within its setup function.
                 parent_builder.start().await
             })
         })
@@ -145,78 +147,81 @@ async fn wait_and_respond() {
     info!("Waited, then...SUCCESS! PONG!");
 }
 
-/// Tests spawning agents using the simpler `spawn_agent` method, which takes a setup closure
-/// but doesn't require explicit agent configuration beforehand (uses defaults).
+/// Tests spawning actors using the simpler `spawn_actor` method, which takes a setup closure
+/// but doesn't require explicit actor configuration beforehand (uses defaults).
 ///
 /// **Scenario:**
 /// 1. Launch runtime and get broker handle.
-/// 2. Use `runtime.spawn_agent` for a `Comedian` agent:
+/// 2. Use `runtime.spawn_actor` for a `Comedian` actor:
 ///    - Inside the setup closure:
 ///        - Configure `Ping` and `Pong` handlers.
 ///        - Subscribe to `Ping` and `Pong`.
-///        - Start the agent (`agent_builder.start().await`).
-/// 3. Use `runtime.spawn_agent` for a `Counter` agent:
+///        - Start the actor (`actor_builder.start().await`).
+/// 3. Use `runtime.spawn_actor` for a `Counter` actor:
 ///    - Inside the setup closure:
 ///        - Configure a `Pong` handler.
 ///        - Subscribe to `Pong`.
-///        - Start the agent (`agent_builder.start().await`).
-/// 4. Assert that the runtime now has more than 0 agents (implicitly, the broker + 2 spawned).
+///        - Start the actor (`actor_builder.start().await`).
+/// 4. Assert that the runtime now has more than 0 actors (implicitly, the broker + 2 spawned).
 /// 5. Broadcast `Ping` and `Pong` messages.
 /// 6. Shut down the runtime.
 ///
 /// **Verification:**
 /// - `Comedian` receives `Ping` and `Pong`.
 /// - `Counter` receives `Pong`.
-/// - `agent_count` assertion passes.
+/// - `actor_count` assertion passes.
 /// - Tracing logs confirm message flow.
 #[acton_test]
 async fn test_launchpad() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: AgentRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch();
     let broker_handle = runtime.broker();
 
     // Spawn Comedian using default config + setup function.
     let _comedian_handle = runtime
-        .spawn_agent::<Comedian>(|mut agent_builder| {
+        .spawn_actor::<Comedian>(|mut actor_builder| {
             // Setup closure for Comedian.
             Box::pin(async move {
-                agent_builder
-                    .mutate_on::<Ping>(|_agent, _envelope| {
+                actor_builder
+                    .mutate_on::<Ping>(|_actor, _envelope| {
                         info!("SUCCESS! PING!");
-                        AgentReply::immediate()
+                        ActorReply::immediate()
                     })
-                    .mutate_on::<Pong>(|_agent, _envelope| {
+                    .mutate_on::<Pong>(|_actor, _envelope| {
                         Box::pin(async move {
                             info!("SUCCESS! PONG!");
                         })
                     });
 
-                agent_builder.handle().subscribe::<Ping>().await;
-                agent_builder.handle().subscribe::<Pong>().await;
-                agent_builder.start().await // Start the agent within the setup closure
+                actor_builder.handle().subscribe::<Ping>().await;
+                actor_builder.handle().subscribe::<Pong>().await;
+                actor_builder.start().await // Start the actor within the setup closure
             })
         })
         .await?;
 
     // Spawn Counter using default config + setup function.
     let _counter_handle = runtime
-        .spawn_agent::<Counter>(|mut agent_builder| {
+        .spawn_actor::<Counter>(|mut actor_builder| {
             // Setup closure for Counter.
             Box::pin(async move {
-                agent_builder.mutate_on::<Pong>(|_agent, _envelope| {
+                actor_builder.mutate_on::<Pong>(|_actor, _envelope| {
                     Box::pin(async move {
                         info!("SUCCESS! PONG!");
                     })
                 });
 
-                agent_builder.handle().subscribe::<Pong>().await;
-                agent_builder.start().await // Start the agent within the setup closure
+                actor_builder.handle().subscribe::<Pong>().await;
+                actor_builder.start().await // Start the actor within the setup closure
             })
         })
         .await?;
 
-    // Verify agents were actually spawned (broker counts as 1, so > 1 means success).
-    assert!(runtime.agent_count() > 1, "Expected more than 1 agent (broker + spawned)");
+    // Verify actors were actually spawned (broker counts as 1, so > 1 means success).
+    assert!(
+        runtime.actor_count() > 1,
+        "Expected more than 1 actor (broker + spawned)"
+    );
 
     // Broadcast messages.
     broker_handle.broadcast(Ping).await; // To Comedian

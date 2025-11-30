@@ -101,7 +101,7 @@ impl CapabilityFlags {
 
     /// All v2 capabilities.
     pub const V2_ALL: Self = Self(
-        Self::FORMAT_BYTE | Self::MESSAGEPACK | Self::STREAMING | Self::PUSH | Self::DISCOVERY
+        Self::FORMAT_BYTE | Self::MESSAGEPACK | Self::STREAMING | Self::PUSH | Self::DISCOVERY,
     );
 
     /// Check if a capability is supported.
@@ -121,11 +121,31 @@ impl CapabilityFlags {
     #[must_use]
     pub const fn as_array(self) -> [Option<ProtocolCapability>; 5] {
         [
-            if self.0 & Self::FORMAT_BYTE != 0 { Some(ProtocolCapability::FormatByte) } else { None },
-            if self.0 & Self::MESSAGEPACK != 0 { Some(ProtocolCapability::MessagePack) } else { None },
-            if self.0 & Self::STREAMING != 0 { Some(ProtocolCapability::Streaming) } else { None },
-            if self.0 & Self::PUSH != 0 { Some(ProtocolCapability::Push) } else { None },
-            if self.0 & Self::DISCOVERY != 0 { Some(ProtocolCapability::Discovery) } else { None },
+            if self.0 & Self::FORMAT_BYTE != 0 {
+                Some(ProtocolCapability::FormatByte)
+            } else {
+                None
+            },
+            if self.0 & Self::MESSAGEPACK != 0 {
+                Some(ProtocolCapability::MessagePack)
+            } else {
+                None
+            },
+            if self.0 & Self::STREAMING != 0 {
+                Some(ProtocolCapability::Streaming)
+            } else {
+                None
+            },
+            if self.0 & Self::PUSH != 0 {
+                Some(ProtocolCapability::Push)
+            } else {
+                None
+            },
+            if self.0 & Self::DISCOVERY != 0 {
+                Some(ProtocolCapability::Discovery)
+            } else {
+                None
+            },
         ]
     }
 }
@@ -373,7 +393,7 @@ pub const MSG_TYPE_SUBSCRIBE: u8 = 0x06;
 /// Message type: Unsubscribe request (client → server, for broker subscriptions).
 pub const MSG_TYPE_UNSUBSCRIBE: u8 = 0x07;
 
-/// Message type: Discovery request (client → server, for agent/type discovery).
+/// Message type: Discovery request (client → server, for actor/type discovery).
 pub const MSG_TYPE_DISCOVER: u8 = 0x08;
 
 /// Message type: Stream frame (server → client, for streaming responses).
@@ -452,7 +472,12 @@ where
         }
     })?;
 
-    let length = u32::from_be_bytes([base_header[0], base_header[1], base_header[2], base_header[3]]);
+    let length = u32::from_be_bytes([
+        base_header[0],
+        base_header[1],
+        base_header[2],
+        base_header[3],
+    ]);
     let version = base_header[4];
     let msg_type = base_header[5];
 
@@ -636,10 +661,7 @@ where
 }
 
 /// Write an IPC envelope (request) to the stream using JSON format.
-pub async fn write_envelope<W>(
-    writer: &mut W,
-    envelope: &IpcEnvelope,
-) -> Result<(), IpcError>
+pub async fn write_envelope<W>(writer: &mut W, envelope: &IpcEnvelope) -> Result<(), IpcError>
 where
     W: AsyncWrite + Unpin,
 {
@@ -660,10 +682,7 @@ where
 }
 
 /// Read an IPC response from the stream.
-pub async fn read_response<R>(
-    reader: &mut R,
-    max_size: usize,
-) -> Result<IpcResponse, IpcError>
+pub async fn read_response<R>(reader: &mut R, max_size: usize) -> Result<IpcResponse, IpcError>
 where
     R: AsyncRead + Unpin,
 {
@@ -679,10 +698,7 @@ where
 }
 
 /// Write an IPC response to the stream using JSON format.
-pub async fn write_response<W>(
-    writer: &mut W,
-    response: &IpcResponse,
-) -> Result<(), IpcError>
+pub async fn write_response<W>(writer: &mut W, response: &IpcResponse) -> Result<(), IpcError>
 where
     W: AsyncWrite + Unpin,
 {
@@ -880,7 +896,7 @@ pub const fn is_discover(msg_type: u8) -> bool {
 
 /// Write a discovery request to the stream using JSON format.
 ///
-/// This is used by IPC clients to discover available agents and message types.
+/// This is used by IPC clients to discover available actors and message types.
 #[allow(dead_code)]
 pub async fn write_discover<W>(
     writer: &mut W,
@@ -1005,7 +1021,7 @@ mod tests {
         let mut buffer = Vec::new();
         let envelope = IpcEnvelope::with_correlation_id(
             "test_123",
-            "agent",
+            "actor",
             "TestMessage",
             serde_json::json!({ "value": 42 }),
         );
@@ -1019,17 +1035,15 @@ mod tests {
 
         assert_eq!(format, Format::Json);
         assert_eq!(read_envelope.correlation_id, "test_123");
-        assert_eq!(read_envelope.target, "agent");
+        assert_eq!(read_envelope.target, "actor");
         assert_eq!(read_envelope.message_type, "TestMessage");
     }
 
     #[tokio::test]
     async fn test_write_read_response() {
         let mut buffer = Vec::new();
-        let response = IpcResponse::success(
-            "test_123",
-            Some(serde_json::json!({ "result": "ok" })),
-        );
+        let response =
+            IpcResponse::success("test_123", Some(serde_json::json!({ "result": "ok" })));
 
         // Write response
         write_response(&mut buffer, &response).await.unwrap();
@@ -1195,7 +1209,7 @@ mod tests {
         buffer.push(PROTOCOL_VERSION);
         buffer.push(MSG_TYPE_REQUEST);
         buffer.push(Format::JSON_BYTE); // Format
-        // Don't add payload - we'll fail on size check
+                                        // Don't add payload - we'll fail on size check
 
         let mut reader = Cursor::new(buffer);
         let result = read_frame(&mut reader, 100).await; // Small max size
@@ -1239,7 +1253,10 @@ mod tests {
 
     #[test]
     fn test_format_roundtrip() {
-        assert_eq!(Format::from_byte(Format::Json.to_byte()), Some(Format::Json));
+        assert_eq!(
+            Format::from_byte(Format::Json.to_byte()),
+            Some(Format::Json)
+        );
         #[cfg(feature = "ipc-messagepack")]
         assert_eq!(
             Format::from_byte(Format::MessagePack.to_byte()),
@@ -1278,7 +1295,10 @@ mod tests {
         let read_notification = read_push(&mut reader, 1024).await.unwrap();
 
         assert_eq!(read_notification.message_type, "PriceUpdate");
-        assert_eq!(read_notification.source_agent, Some("price_service".to_string()));
+        assert_eq!(
+            read_notification.source_actor,
+            Some("price_service".to_string())
+        );
         assert_eq!(read_notification.payload["price"], 100.50);
     }
 
@@ -1287,10 +1307,8 @@ mod tests {
         use super::super::types::IpcSubscribeRequest;
 
         let mut buffer = Vec::new();
-        let request = IpcSubscribeRequest::new(vec![
-            "PriceUpdate".to_string(),
-            "OrderStatus".to_string(),
-        ]);
+        let request =
+            IpcSubscribeRequest::new(vec!["PriceUpdate".to_string(), "OrderStatus".to_string()]);
 
         // Write subscribe request
         write_subscribe(&mut buffer, &request).await.unwrap();

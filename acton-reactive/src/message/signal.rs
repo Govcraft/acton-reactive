@@ -15,10 +15,10 @@
  */
 use std::fmt::Debug;
 
-/// Represents system-level signals used to manage agent lifecycles.
+/// Represents system-level signals used to manage actor lifecycles.
 ///
 /// These signals are distinct from regular application messages and are typically
-/// handled internally by the Acton framework or specific agent implementations
+/// handled internally by the Acton framework or specific actor implementations
 /// to control behavior like termination.
 ///
 /// This enum is marked `#[non_exhaustive]` to indicate that more signal types
@@ -26,9 +26,9 @@ use std::fmt::Debug;
 #[derive(Debug, Clone, PartialEq, Eq)] // Added PartialEq, Eq for potential use
 #[non_exhaustive]
 pub enum SystemSignal {
-    /// Instructs an agent to initiate a graceful shutdown.
+    /// Instructs an actor to initiate a graceful shutdown.
     ///
-    /// Upon receiving `Terminate`, an agent should:
+    /// Upon receiving `Terminate`, an actor should:
     /// 1. Stop accepting new work (if applicable).
     /// 2. Complete any in-progress tasks.
     /// 3. Signal its children to terminate.
@@ -36,8 +36,8 @@ pub enum SystemSignal {
     /// 5. Clean up its own resources.
     /// 6. Stop its message processing loop.
     ///
-    /// The exact shutdown sequence is managed by the agent's `wake` loop and
-    /// the `stop` method on its [`AgentHandle`](crate::common::AgentHandle).
+    /// The exact shutdown sequence is managed by the actor's `wake` loop and
+    /// the `stop` method on its [`ActorHandle`](crate::common::ActorHandle).
     Terminate,
     // Other potential signals (commented out in original code):
     // Wake, Recreate, Suspend, Resume, Supervise, Watch, Unwatch, Failed,

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Acton Macro provides procedural macros that simplify the creation of messages and agents in the Acton framework, enabling more concise and expressive code."
+description = "Acton Macro provides procedural macros that simplify the creation of messages and actors in the Acton framework, enabling more concise and expressive code."
 
 [lib]
 proc-macro = true

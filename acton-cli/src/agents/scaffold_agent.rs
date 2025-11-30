@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use acton_reactive::prelude::{acton_actor, AgentHandle, AgentReply, AgentRuntime};
+use acton_reactive::prelude::{acton_actor, ActorHandle, ActorReply, ActorRuntime};
 use handlebars::Handlebars;
 use crate::messages::InitProject;
 use tracing::{error, info};
 
 #[acton_actor]
-pub struct ScaffoldAgent;
+pub struct ScaffoldActor;
 
-impl ScaffoldAgent {
-    pub async fn create(runtime: &mut AgentRuntime) -> AgentHandle {
-        let mut agent = runtime.new_agent::<Self>();
-        agent.mutate_on::<InitProject<'_>>(|_agent, context| {
+impl ScaffoldActor {
+    pub async fn create(runtime: &mut ActorRuntime) -> ActorHandle {
+        let mut actor = runtime.new_actor::<Self>();
+        actor.mutate_on::<InitProject<'_>>(|_actor, context| {
             let project_name = context.message().project_name;
             let base_path = Path::new(project_name);
 
@@ -21,8 +21,8 @@ impl ScaffoldAgent {
                 error!("Error creating project directory: {}", e);
             }
 
-            // Create subdirectories for agents, messages, and examples
-            let subdirectories = ["src/agents", "src/messages", "examples"];
+            // Create subdirectories for actors, messages, and examples
+            let subdirectories = ["src/actors", "src/messages", "examples"];
             for sub in &subdirectories {
                 let sub_path = base_path.join(sub);
                 if let Err(e) = fs::create_dir_all(&sub_path) {
@@ -36,15 +36,15 @@ impl ScaffoldAgent {
             // Register templates
             let cargo_toml_template = include_str!("../templates/basic/Cargo.toml.hbs");
             let main_rs_template = include_str!("../templates/basic/main.rs.hbs");
-            let agents_mod_template = include_str!("../templates/basic/agents.rs.hbs");
-            let my_agent_template = include_str!("../templates/basic/agents/my_agent.rs.hbs");
+            let actors_mod_template = include_str!("../templates/basic/actors.rs.hbs");
+            let my_actor_template = include_str!("../templates/basic/actors/my_actor.rs.hbs");
             let messages_mod_template = include_str!("../templates/basic/messages.rs.hbs");
             let my_message_template = include_str!("../templates/basic/messages/my_message.rs.hbs");
 
             handlebars.register_template_string("Cargo.toml", cargo_toml_template).unwrap();
             handlebars.register_template_string("main.rs", main_rs_template).unwrap();
-            handlebars.register_template_string("agents.rs", agents_mod_template).unwrap();
-            handlebars.register_template_string("agents/my_agent.rs", my_agent_template).unwrap();
+            handlebars.register_template_string("actors.rs", actors_mod_template).unwrap();
+            handlebars.register_template_string("actors/my_actor.rs", my_actor_template).unwrap();
             handlebars.register_template_string("messages.rs", messages_mod_template).unwrap();
             handlebars.register_template_string("messages/my_message.rs", my_message_template).unwrap();
 
@@ -64,17 +64,17 @@ impl ScaffoldAgent {
                 error!("Error writing main.rs: {}", e);
             }
 
-            // Create the agents module files
-            let agents_mod_path = base_path.join("src/agents.rs");
-            let agents_mod_content = handlebars.render("agents.rs", &data).unwrap();
-            if let Err(e) = fs::write(&agents_mod_path, agents_mod_content) {
-                error!("Error writing agents/mod.rs: {}", e);
+            // Create the actors module files
+            let actors_mod_path = base_path.join("src/actors.rs");
+            let actors_mod_content = handlebars.render("actors.rs", &data).unwrap();
+            if let Err(e) = fs::write(&actors_mod_path, actors_mod_content) {
+                error!("Error writing actors/mod.rs: {}", e);
             }
 
-            let my_agent_path = base_path.join("src/agents/my_agent.rs");
-            let my_agent_content = handlebars.render("agents/my_agent.rs", &data).unwrap();
-            if let Err(e) = fs::write(&my_agent_path, my_agent_content) {
-                error!("Error writing agents/my_agent.rs: {}", e);
+            let my_actor_path = base_path.join("src/actors/my_actor.rs");
+            let my_actor_content = handlebars.render("actors/my_actor.rs", &data).unwrap();
+            if let Err(e) = fs::write(&my_actor_path, my_actor_content) {
+                error!("Error writing actors/my_actor.rs: {}", e);
             }
 
             // Create the messages module files
@@ -90,9 +90,9 @@ impl ScaffoldAgent {
                 error!("Error writing messages/my_message.rs: {}", e);
             }
 
-            info!("Project '{}' created successfully!", project_name);            AgentReply::immediate()
+            info!("Project '{}' created successfully!", project_name);            ActorReply::immediate()
         });
 
-        agent.start().await
+        actor.start().await
     }
 }

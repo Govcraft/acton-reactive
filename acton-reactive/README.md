@@ -4,11 +4,11 @@
 
 ## Key Features
 
-- **Agent-Based Architecture**: Build systems using agents (actors) that communicate via message passing.
+- **Actor-Based Architecture**: Build systems using actors (actors) that communicate via message passing.
 - **Async First**: Built on top of Tokio for highly concurrent and efficient applications.
-- **Type-Safe Lifecycle**: Type-state pattern ensures agents follow proper lifecycle transitions.
+- **Type-Safe Lifecycle**: Type-state pattern ensures actors follow proper lifecycle transitions.
 - **Pub/Sub Messaging**: Built-in broker for topic-based message distribution.
-- **Supervision**: Hierarchical agent supervision for fault-tolerant systems.
+- **Supervision**: Hierarchical actor supervision for fault-tolerant systems.
 
 ## Quick Start
 

@@ -34,6 +34,7 @@ from typing import Any, AsyncIterator, Callable, TypeVar
 # Optional MessagePack support
 try:
     import msgpack
+
     HAS_MSGPACK = True
 except ImportError:
     HAS_MSGPACK = False
@@ -44,14 +45,17 @@ except ImportError:
 # Protocol Constants
 # =============================================================================
 
+
 class ProtocolVersion(IntEnum):
     """IPC protocol version."""
+
     V1 = 0x01  # Legacy: 6-byte header, JSON only
     V2 = 0x02  # Current: 7-byte header, multi-format
 
 
 class MessageType(IntEnum):
     """Wire protocol message types."""
+
     REQUEST = 0x01
     RESPONSE = 0x02
     ERROR = 0x03
@@ -65,6 +69,7 @@ class MessageType(IntEnum):
 
 class Format(IntEnum):
     """Serialization format."""
+
     JSON = 0x01
     MESSAGEPACK = 0x02
 
@@ -82,28 +87,34 @@ DEFAULT_TIMEOUT_MS = 30000
 # Error Types
 # =============================================================================
 
+
 class IpcError(Exception):
     """Base IPC error."""
+
     pass
 
 
 class ConnectionError(IpcError):
     """Connection-related errors."""
+
     pass
 
 
 class ProtocolError(IpcError):
     """Protocol violation errors."""
+
     pass
 
 
 class TimeoutError(IpcError):
     """Request timeout errors."""
+
     pass
 
 
 class ServerError(IpcError):
     """Server-side errors."""
+
     def __init__(self, message: str, code: str | None = None):
         super().__init__(message)
         self.code = code
@@ -112,6 +123,7 @@ class ServerError(IpcError):
 # =============================================================================
 # Correlation ID Generation (MTI-compatible)
 # =============================================================================
+
 
 def generate_correlation_id(prefix: str = "req") -> str:
     """
@@ -131,6 +143,7 @@ def generate_correlation_id(prefix: str = "req") -> str:
 # =============================================================================
 # Serialization
 # =============================================================================
+
 
 class Serializer(ABC):
     """Abstract serializer interface."""
@@ -160,10 +173,10 @@ class JsonSerializer(Serializer):
         return Format.JSON
 
     def serialize(self, data: Any) -> bytes:
-        return json.dumps(data, separators=(',', ':')).encode('utf-8')
+        return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
     def deserialize(self, data: bytes) -> Any:
-        return json.loads(data.decode('utf-8'))
+        return json.loads(data.decode("utf-8"))
 
 
 class MessagePackSerializer(Serializer):
@@ -191,9 +204,11 @@ class MessagePackSerializer(Serializer):
 # Frame Encoding/Decoding
 # =============================================================================
 
+
 @dataclass
 class Frame:
     """A wire protocol frame."""
+
     version: ProtocolVersion
     message_type: MessageType
     format: Format
@@ -216,7 +231,7 @@ class Frame:
         if version == ProtocolVersion.V2:
             # V2: 7-byte header
             header = struct.pack(
-                '>IBBB',
+                ">IBBB",
                 payload_len,
                 version,
                 message_type,
@@ -225,7 +240,7 @@ class Frame:
         else:
             # V1: 6-byte header (JSON only)
             header = struct.pack(
-                '>IBB',
+                ">IBB",
                 payload_len,
                 version,
                 message_type,
@@ -234,11 +249,11 @@ class Frame:
         return header + payload
 
     @classmethod
-    async def decode_async(cls, reader: asyncio.StreamReader) -> 'Frame':
+    async def decode_async(cls, reader: asyncio.StreamReader) -> "Frame":
         """Decode a frame from an async stream."""
         # Read first 6 bytes (common to v1 and v2)
         header_start = await reader.readexactly(6)
-        payload_len, version, message_type = struct.unpack('>IBB', header_start)
+        payload_len, version, message_type = struct.unpack(">IBB", header_start)
 
         if payload_len > MAX_FRAME_SIZE:
             raise ProtocolError(f"Frame too large: {payload_len}")
@@ -247,7 +262,7 @@ class Frame:
         if version == ProtocolVersion.V2:
             # Read format byte
             format_byte = await reader.readexactly(1)
-            format_ = Format(struct.unpack('B', format_byte)[0])
+            format_ = Format(struct.unpack("B", format_byte)[0])
         else:
             # V1 is always JSON
             format_ = Format.JSON
@@ -263,10 +278,11 @@ class Frame:
         )
 
     @classmethod
-    def decode_sync(cls, sock: socket.socket) -> 'Frame':
+    def decode_sync(cls, sock: socket.socket) -> "Frame":
         """Decode a frame from a synchronous socket."""
+
         def recv_exact(n: int) -> bytes:
-            data = b''
+            data = b""
             while len(data) < n:
                 chunk = sock.recv(n - len(data))
                 if not chunk:
@@ -276,7 +292,7 @@ class Frame:
 
         # Read first 6 bytes
         header_start = recv_exact(6)
-        payload_len, version, message_type = struct.unpack('>IBB', header_start)
+        payload_len, version, message_type = struct.unpack(">IBB", header_start)
 
         if payload_len > MAX_FRAME_SIZE:
             raise ProtocolError(f"Frame too large: {payload_len}")
@@ -284,7 +300,7 @@ class Frame:
         # Determine format
         if version == ProtocolVersion.V2:
             format_byte = recv_exact(1)
-            format_ = Format(struct.unpack('B', format_byte)[0])
+            format_ = Format(struct.unpack("B", format_byte)[0])
         else:
             format_ = Format.JSON
 
@@ -303,9 +319,11 @@ class Frame:
 # Message Types
 # =============================================================================
 
+
 @dataclass
 class IpcEnvelope:
     """Request envelope sent to the server."""
+
     correlation_id: str
     target: str
     message_type: str
@@ -316,19 +334,20 @@ class IpcEnvelope:
 
     def to_dict(self) -> dict:
         return {
-            'correlation_id': self.correlation_id,
-            'target': self.target,
-            'message_type': self.message_type,
-            'payload': self.payload,
-            'expects_reply': self.expects_reply,
-            'expects_stream': self.expects_stream,
-            'response_timeout_ms': self.response_timeout_ms,
+            "correlation_id": self.correlation_id,
+            "target": self.target,
+            "message_type": self.message_type,
+            "payload": self.payload,
+            "expects_reply": self.expects_reply,
+            "expects_stream": self.expects_stream,
+            "response_timeout_ms": self.response_timeout_ms,
         }
 
 
 @dataclass
 class IpcResponse:
     """Response from the server."""
+
     correlation_id: str
     success: bool
     payload: Any = None
@@ -336,19 +355,20 @@ class IpcResponse:
     error_code: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'IpcResponse':
+    def from_dict(cls, data: dict) -> "IpcResponse":
         return cls(
-            correlation_id=data.get('correlation_id', ''),
-            success=data.get('success', False),
-            payload=data.get('payload'),
-            error=data.get('error'),
-            error_code=data.get('error_code'),
+            correlation_id=data.get("correlation_id", ""),
+            success=data.get("success", False),
+            payload=data.get("payload"),
+            error=data.get("error"),
+            error_code=data.get("error_code"),
         )
 
 
 @dataclass
 class StreamFrame:
     """A streaming response frame."""
+
     correlation_id: str
     sequence: int
     payload: Any = None
@@ -357,56 +377,59 @@ class StreamFrame:
     error_code: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'StreamFrame':
+    def from_dict(cls, data: dict) -> "StreamFrame":
         return cls(
-            correlation_id=data.get('correlation_id', ''),
-            sequence=data.get('sequence', 0),
-            payload=data.get('payload'),
-            is_final=data.get('is_final', False),
-            error=data.get('error'),
-            error_code=data.get('error_code'),
+            correlation_id=data.get("correlation_id", ""),
+            sequence=data.get("sequence", 0),
+            payload=data.get("payload"),
+            is_final=data.get("is_final", False),
+            error=data.get("error"),
+            error_code=data.get("error_code"),
         )
 
 
 @dataclass
 class PushNotification:
     """Push notification from subscriptions."""
+
     notification_id: str
     message_type: str
     payload: Any
-    source_agent: str | None = None
+    source_actor: str | None = None
     timestamp_ms: int = 0
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'PushNotification':
+    def from_dict(cls, data: dict) -> "PushNotification":
         return cls(
-            notification_id=data.get('notification_id', ''),
-            message_type=data.get('message_type', ''),
-            payload=data.get('payload'),
-            source_agent=data.get('source_agent'),
-            timestamp_ms=data.get('timestamp_ms', 0),
+            notification_id=data.get("notification_id", ""),
+            message_type=data.get("message_type", ""),
+            payload=data.get("payload"),
+            source_actor=data.get("source_actor"),
+            timestamp_ms=data.get("timestamp_ms", 0),
         )
 
 
 @dataclass
 class DiscoveryResponse:
     """Service discovery response."""
+
     protocol_version: dict
-    agents: list[dict]
+    actors: list[dict]
     message_types: list[str]
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'DiscoveryResponse':
+    def from_dict(cls, data: dict) -> "DiscoveryResponse":
         return cls(
-            protocol_version=data.get('protocol_version', {}),
-            agents=data.get('agents', []),
-            message_types=data.get('message_types', []),
+            protocol_version=data.get("protocol_version", {}),
+            actors=data.get("actors", []),
+            message_types=data.get("message_types", []),
         )
 
 
 # =============================================================================
 # Socket Path Resolution
 # =============================================================================
+
 
 def get_default_socket_path(app_name: str) -> Path:
     """
@@ -415,13 +438,13 @@ def get_default_socket_path(app_name: str) -> Path:
     Path: $XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock
     Fallback: /tmp/acton/<app_name>/ipc.sock
     """
-    runtime_dir = os.environ.get('XDG_RUNTIME_DIR')
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
         base = Path(runtime_dir)
     else:
-        base = Path('/tmp')
+        base = Path("/tmp")
 
-    return base / 'acton' / app_name / 'ipc.sock'
+    return base / "acton" / app_name / "ipc.sock"
 
 
 def socket_exists(path: Path | str) -> bool:
@@ -443,13 +466,14 @@ async def socket_is_alive(path: Path | str, timeout: float = 1.0) -> bool:
 # Async IPC Client
 # =============================================================================
 
+
 class ActonIpcClient:
     """
     Async IPC client for acton-reactive.
 
     Usage:
         async with ActonIpcClient('/path/to/socket') as client:
-            response = await client.request('agent', 'MessageType', {'key': 'value'})
+            response = await client.request('actor', 'MessageType', {'key': 'value'})
     """
 
     def __init__(
@@ -475,7 +499,7 @@ class ActonIpcClient:
         else:
             self._serializer = JsonSerializer()
 
-    async def __aenter__(self) -> 'ActonIpcClient':
+    async def __aenter__(self) -> "ActonIpcClient":
         await self.connect()
         return self
 
@@ -551,7 +575,7 @@ class ActonIpcClient:
 
     def _handle_response(self, data: dict) -> None:
         """Handle a response frame."""
-        correlation_id = data.get('correlation_id', '')
+        correlation_id = data.get("correlation_id", "")
         if correlation_id in self._pending:
             future = self._pending.pop(correlation_id)
             if not future.done():
@@ -559,22 +583,22 @@ class ActonIpcClient:
 
     def _handle_error(self, data: dict) -> None:
         """Handle an error frame."""
-        correlation_id = data.get('correlation_id', '')
+        correlation_id = data.get("correlation_id", "")
         if correlation_id in self._pending:
             future = self._pending.pop(correlation_id)
             if not future.done():
-                future.set_exception(ServerError(
-                    data.get('error', 'Unknown error'),
-                    data.get('error_code'),
-                ))
+                future.set_exception(
+                    ServerError(
+                        data.get("error", "Unknown error"),
+                        data.get("error_code"),
+                    )
+                )
 
     async def _handle_stream_frame(self, data: dict) -> None:
         """Handle a streaming response frame."""
-        correlation_id = data.get('correlation_id', '')
+        correlation_id = data.get("correlation_id", "")
         if correlation_id in self._stream_queues:
-            await self._stream_queues[correlation_id].put(
-                StreamFrame.from_dict(data)
-            )
+            await self._stream_queues[correlation_id].put(StreamFrame.from_dict(data))
 
     def _handle_push(self, data: dict) -> None:
         """Handle a push notification."""
@@ -617,7 +641,7 @@ class ActonIpcClient:
         Send a request and wait for a response.
 
         Args:
-            target: Target agent name
+            target: Target actor name
             message_type: Message type name
             payload: Message payload
             timeout_ms: Request timeout in milliseconds
@@ -625,7 +649,7 @@ class ActonIpcClient:
         Returns:
             IpcResponse with the server's response
         """
-        correlation_id = generate_correlation_id('req')
+        correlation_id = generate_correlation_id("req")
 
         envelope = IpcEnvelope(
             correlation_id=correlation_id,
@@ -660,11 +684,11 @@ class ActonIpcClient:
         Send a message without waiting for a response.
 
         Args:
-            target: Target agent name
+            target: Target actor name
             message_type: Message type name
             payload: Message payload
         """
-        correlation_id = generate_correlation_id('req')
+        correlation_id = generate_correlation_id("req")
 
         envelope = IpcEnvelope(
             correlation_id=correlation_id,
@@ -688,7 +712,7 @@ class ActonIpcClient:
         Send a streaming request and yield response frames.
 
         Args:
-            target: Target agent name
+            target: Target actor name
             message_type: Message type name
             payload: Message payload
             timeout_ms: Total stream timeout in milliseconds
@@ -696,7 +720,7 @@ class ActonIpcClient:
         Yields:
             StreamFrame objects until is_final=True
         """
-        correlation_id = generate_correlation_id('str')
+        correlation_id = generate_correlation_id("str")
 
         envelope = IpcEnvelope(
             correlation_id=correlation_id,
@@ -748,11 +772,11 @@ class ActonIpcClient:
         Returns:
             True if subscription was successful
         """
-        correlation_id = generate_correlation_id('sub')
+        correlation_id = generate_correlation_id("sub")
 
         data = {
-            'correlation_id': correlation_id,
-            'message_types': message_types,
+            "correlation_id": correlation_id,
+            "message_types": message_types,
         }
 
         future: asyncio.Future[IpcResponse] = asyncio.get_event_loop().create_future()
@@ -777,11 +801,11 @@ class ActonIpcClient:
         Returns:
             True if unsubscription was successful
         """
-        correlation_id = generate_correlation_id('unsub')
+        correlation_id = generate_correlation_id("unsub")
 
         data = {
-            'correlation_id': correlation_id,
-            'message_types': message_types,
+            "correlation_id": correlation_id,
+            "message_types": message_types,
         }
 
         future: asyncio.Future[IpcResponse] = asyncio.get_event_loop().create_future()
@@ -807,17 +831,17 @@ class ActonIpcClient:
 
     async def discover(self) -> DiscoveryResponse:
         """
-        Discover available agents and message types.
+        Discover available actors and message types.
 
         Returns:
-            DiscoveryResponse with available agents and types
+            DiscoveryResponse with available actors and types
         """
-        correlation_id = generate_correlation_id('disc')
+        correlation_id = generate_correlation_id("disc")
 
         data = {
-            'correlation_id': correlation_id,
-            'include_agents': True,
-            'include_message_types': True,
+            "correlation_id": correlation_id,
+            "include_actors": True,
+            "include_message_types": True,
         }
 
         future: asyncio.Future[IpcResponse] = asyncio.get_event_loop().create_future()
@@ -839,13 +863,14 @@ class ActonIpcClient:
 # Synchronous Client (for simpler use cases)
 # =============================================================================
 
+
 class ActonIpcClientSync:
     """
     Synchronous IPC client for simpler use cases.
 
     Usage:
         with ActonIpcClientSync('/path/to/socket') as client:
-            response = client.request('agent', 'MessageType', {'key': 'value'})
+            response = client.request('actor', 'MessageType', {'key': 'value'})
     """
 
     def __init__(
@@ -862,7 +887,7 @@ class ActonIpcClientSync:
         else:
             self._serializer = JsonSerializer()
 
-    def __enter__(self) -> 'ActonIpcClientSync':
+    def __enter__(self) -> "ActonIpcClientSync":
         self.connect()
         return self
 
@@ -895,7 +920,7 @@ class ActonIpcClientSync:
         if not self._sock:
             raise ConnectionError("Not connected")
 
-        correlation_id = generate_correlation_id('req')
+        correlation_id = generate_correlation_id("req")
 
         envelope = IpcEnvelope(
             correlation_id=correlation_id,
@@ -929,8 +954,8 @@ class ActonIpcClientSync:
 
             if response_frame.message_type == MessageType.ERROR:
                 raise ServerError(
-                    data.get('error', 'Unknown error'),
-                    data.get('error_code'),
+                    data.get("error", "Unknown error"),
+                    data.get("error_code"),
                 )
 
             return IpcResponse.from_dict(data)
@@ -947,7 +972,7 @@ class ActonIpcClientSync:
         if not self._sock:
             raise ConnectionError("Not connected")
 
-        correlation_id = generate_correlation_id('req')
+        correlation_id = generate_correlation_id("req")
 
         envelope = IpcEnvelope(
             correlation_id=correlation_id,
@@ -970,28 +995,29 @@ class ActonIpcClientSync:
 # Example Usage
 # =============================================================================
 
+
 async def example_usage():
     """Example demonstrating client usage."""
-    socket_path = get_default_socket_path('my_app')
+    socket_path = get_default_socket_path("my_app")
 
     print(f"Connecting to: {socket_path}")
 
     async with ActonIpcClient(socket_path) as client:
         # Discover available services
         discovery = await client.discover()
-        print(f"Available agents: {discovery.agents}")
+        print(f"Available actors: {discovery.actors}")
         print(f"Message types: {discovery.message_types}")
 
         # Send a request
         response = await client.request(
-            target='calculator',
-            message_type='Add',
-            payload={'a': 5, 'b': 3},
+            target="calculator",
+            message_type="Add",
+            payload={"a": 5, "b": 3},
         )
         print(f"Response: {response.payload}")
 
         # Subscribe to notifications
-        await client.subscribe(['PriceUpdate'])
+        await client.subscribe(["PriceUpdate"])
 
         # Register push handler
         def on_price(notification: PushNotification):
@@ -1001,16 +1027,16 @@ async def example_usage():
 
         # Stream results
         async for frame in client.stream(
-            target='search',
-            message_type='Query',
-            payload={'q': 'test'},
+            target="search",
+            message_type="Query",
+            payload={"q": "test"},
         ):
             print(f"Stream frame {frame.sequence}: {frame.payload}")
             if frame.is_final:
                 break
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("Acton IPC Client Library for Python")
     print("=====================================")
     print()
@@ -1020,6 +1046,8 @@ if __name__ == '__main__':
     print("  from acton_ipc import ActonIpcClient")
     print()
     print("  async with ActonIpcClient('/path/to/socket') as client:")
-    print("      response = await client.request('agent', 'MessageType', {'data': 'value'})")
+    print(
+        "      response = await client.request('actor', 'MessageType', {'data': 'value'})"
+    )
     print()
     print("For MessagePack support, install: pip install msgpack")

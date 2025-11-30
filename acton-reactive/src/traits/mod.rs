@@ -1,21 +1,21 @@
 //! Defines the core traits that establish the fundamental contracts of the Acton framework.
 //!
 //! This module aggregates the essential traits that define the capabilities and interactions
-//! within the Acton agent system. These traits ensure composability and provide a clear
-//! interface for messages, agent handles, the message broker, and the subscription mechanism.
+//! within the Acton actor system. These traits ensure composability and provide a clear
+//! interface for messages, actor handles, the message broker, and the subscription mechanism.
 //!
 //! # Key Traits
 //!
 //! *   [`ActonMessage`]: A marker trait required for all types used as messages within the system.
 //!     Ensures messages are `Send`, `Sync`, `Debug`, `Clone`, and support downcasting via `Any`.
-//! *   [`AgentHandleInterface`]: Defines the primary asynchronous interface for interacting with
-//!     agents via their handles ([`AgentHandle`](crate::common::AgentHandle)), including sending messages,
+//! *   [`ActorHandleInterface`]: Defines the primary asynchronous interface for interacting with
+//!     actors via their handles ([`ActorHandle`](crate::common::ActorHandle)), including sending messages,
 //!     managing lifecycle, and accessing metadata.
-//! *   [`Broker`]: Defines the interface for broadcasting messages throughout the system,
-//!     typically implemented by [`AgentHandle`](crate::common::AgentHandle) which delegates to the
-//!     central [`AgentBroker`](crate::common::AgentBroker).
+//! *   [`Broadcaster`]: Defines the interface for broadcasting messages throughout the system,
+//!     typically implemented by [`ActorHandle`](crate::common::ActorHandle) which delegates to the
+//!     central [`Broker`](crate::common::Broker).
 //! *   [`Subscriber`]: Defines the interface for accessing the system's message broker handle.
-//! *   [`Subscribable`]: Defines the interface for agents to manage their subscriptions to
+//! *   [`Subscribable`]: Defines the interface for actors to manage their subscriptions to
 //!     message types via the broker.
 
 /*
@@ -37,8 +37,8 @@
 // --- Public Re-exports ---
 pub use acton_message::ActonMessage;
 pub use acton_message_reply::ActonMessageReply;
-pub use agent_handle_interface::AgentHandleInterface;
-pub use broker::Broker;
+pub use actor_handle_interface::ActorHandleInterface;
+pub use broker::Broadcaster;
 pub use subscribable::Subscribable;
 pub use subscriber::Subscriber;
 
@@ -47,9 +47,9 @@ pub use subscriber::Subscriber;
 /// Defines the [`ActonMessage`] marker trait.
 mod acton_message;
 mod acton_message_reply;
-/// Defines the [`AgentHandleInterface`] trait for agent interaction.
-mod agent_handle_interface;
-/// Defines the [`Broker`] trait for message broadcasting.
+/// Defines the [`ActorHandleInterface`] trait for actor interaction.
+mod actor_handle_interface;
+/// Defines the [`Broadcaster`] trait for message broadcasting.
 mod broker;
 /// Defines the [`Subscribable`] trait for managing subscriptions.
 mod subscribable;

@@ -20,25 +20,25 @@
 //! # Acton Reactive
 //!
 //! This crate provides the foundational components for the Acton asynchronous
-//! agent system, built on top of Tokio. It establishes a robust, message-passing
-//! framework with clear separation of concerns for agent state, runtime management,
+//! actor system, built on top of Tokio. It establishes a robust, message-passing
+//! framework with clear separation of concerns for actor state, runtime management,
 //! communication, and lifecycle.
 //!
 //! ## Key Concepts
 //!
-//! - **Agents (`ManagedAgent`)**: Core computational units wrapping user-defined state
+//! - **Actors (`ManagedActor`)**: Core computational units wrapping user-defined state
 //!   and logic, managed by the runtime.
-//! - **Handles (`AgentHandle`)**: External references for interacting with agents
+//! - **Handles (`ActorHandle`)**: External references for interacting with actors
 //!   (sending messages, stopping, supervising).
 //! - **Messaging**: Asynchronous communication via Tokio MPSC channels, using
 //!   messages implementing the `ActonMessage` trait.
-//! - **Broker (`AgentBroker`)**: Central publish-subscribe mechanism for topic-based
+//! - **Broker (`Broker`)**: Central publish-subscribe mechanism for topic-based
 //!   message distribution.
-//! - **Lifecycle & Supervision**: Type-state pattern (`Idle`, `Started`) for agents,
+//! - **Lifecycle & Supervision**: Type-state pattern (`Idle`, `Started`) for actors,
 //!   lifecycle hooks, and hierarchical supervision.
-//! - **Runtime (`AgentRuntime`)**: Manages the overall system, including agent
+//! - **Runtime (`ActorRuntime`)**: Manages the overall system, including actor
 //!   creation and shutdown.
-//! - **Traits**: Core interfaces (`AgentHandleInterface`, `Broker`, `Subscriber`, etc.)
+//! - **Traits**: Core interfaces (`ActorHandleInterface`, `Broker`, `Subscriber`, etc.)
 //!   define the framework's capabilities.
 //!
 //! ## Quick Start
@@ -55,7 +55,7 @@
 /// Internal utilities and structures used throughout the Acton framework.
 pub(crate) mod common;
 
-/// Defines the core agent structures and logic.
+/// Defines the core actor structures and logic.
 pub(crate) mod actor;
 
 /// Defines message types and envelopes used for communication.
@@ -67,7 +67,7 @@ pub(crate) mod traits;
 /// IPC (Inter-Process Communication) module for external process integration.
 ///
 /// This module provides Unix Domain Socket communication infrastructure for
-/// sending messages to agents from external processes.
+/// sending messages to actors from external processes.
 ///
 /// This module provides all the public IPC types and functions for building
 /// IPC clients and working with the IPC infrastructure.
@@ -78,7 +78,7 @@ pub(crate) mod traits;
 #[cfg(feature = "ipc")]
 pub mod ipc {
     pub use crate::common::ipc::{
-        socket_exists, socket_is_alive, start_listener, AgentInfo, IpcConfig,
+        socket_exists, socket_is_alive, start_listener, ActorInfo, IpcConfig,
         IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcListenerHandle,
         IpcListenerStats, IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
         IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest, ProtocolCapabilities,
@@ -124,21 +124,21 @@ pub mod ipc {
 /// *   [`async_trait::async_trait`](https://docs.rs/async-trait/latest/async_trait/attr.async_trait.html): The macro for defining async functions in traits.
 ///
 /// ## Core Types
-/// *   [`crate::actor::AgentConfig`]: Configuration for creating new agents.
-/// *   [`crate::actor::Idle`]: Type-state marker for an agent before it starts.
-/// *   [`crate::actor::ManagedAgent`]: The core agent structure managing state and runtime.
-/// *   [`crate::actor::Started`]: Type-state marker for a running agent.
+/// *   [`crate::actor::ActorConfig`]: Configuration for creating new actors.
+/// *   [`crate::actor::Idle`]: Type-state marker for an actor before it starts.
+/// *   [`crate::actor::ManagedActor`]: The core actor structure managing state and runtime.
+/// *   [`crate::actor::Started`]: Type-state marker for a running actor.
 /// *   [`crate::common::ActonApp`]: Entry point for initializing the Acton system.
-/// *   [`crate::common::AgentBroker`]: The central message broker implementation.
-/// *   [`crate::common::AgentHandle`]: Handle for interacting with an agent.
-/// *   [`crate::common::AgentReply`]: Utility for creating standard message handler return types.
-/// *   [`crate::common::AgentRuntime`]: Represents the initialized Acton runtime.
+/// *   [`crate::common::Broker`]: The central message broker implementation.
+/// *   [`crate::common::ActorHandle`]: Handle for interacting with an actor.
+/// *   [`crate::common::ActorReply`]: Utility for creating standard message handler return types.
+/// *   [`crate::common::ActorRuntime`]: Represents the initialized Acton runtime.
 /// *   [`crate::message::BrokerRequest`]: Wrapper for messages intended for broadcast.
 /// *   [`crate::message::BrokerRequestEnvelope`]: Specialized envelope for broadcast messages.
-/// *   [`crate::message::MessageAddress`]: Addressable endpoint of an agent.
+/// *   [`crate::message::MessageAddress`]: Addressable endpoint of an actor.
 /// *   [`crate::message::OutboundEnvelope`]: Represents a message prepared for sending.
 /// *   [`crate::traits::ActonMessage`]: Marker trait for all valid messages.
-/// *   [`crate::traits::AgentHandleInterface`]: Core trait defining agent interaction methods.
+/// *   [`crate::traits::ActorHandleInterface`]: Core trait defining actor interaction methods.
 /// *   [`crate::traits::Broker`]: Trait defining message broadcasting capabilities.
 /// *   [`crate::traits::Subscribable`]: Trait for managing message subscriptions.
 /// *   [`crate::traits::Subscriber`]: Trait for accessing the message broker.
@@ -160,10 +160,10 @@ pub mod prelude {
     pub use async_trait::async_trait;
 
     // Core types
-    pub use crate::actor::{AgentConfig, Idle, ManagedAgent, Started};
-    pub use crate::common::{ActonApp, AgentBroker, AgentHandle, AgentReply, AgentRuntime};
+    pub use crate::actor::{ActorConfig, Idle, ManagedActor, Started};
+    pub use crate::common::{ActonApp, Broker, ActorHandle, ActorReply, ActorRuntime};
     pub use crate::message::{BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope};
-    pub use crate::traits::{ActonMessage, AgentHandleInterface, Broker, Subscribable, Subscriber};
+    pub use crate::traits::{ActonMessage, ActorHandleInterface, Broadcaster, Subscribable, Subscriber};
 
     // IPC types (feature-gated)
     #[cfg(feature = "ipc")]

@@ -17,7 +17,7 @@
 //! IPC Streaming Response Example (Server)
 //!
 //! This example demonstrates the request-stream pattern in acton-reactive IPC,
-//! where a single request triggers multiple streaming responses from an agent.
+//! where a single request triggers multiple streaming responses from an actor.
 //!
 //! # Features
 //!
@@ -30,10 +30,10 @@
 //!
 //! 1. IPC client sends `IpcEnvelope` with `expects_stream: true`
 //! 2. IPC listener creates a temporary MPSC channel (proxy)
-//! 3. Message is sent to agent with proxy as `reply_to` address
-//! 4. Agent handler sends multiple responses via `envelope.reply_envelope().send()`
+//! 3. Message is sent to actor with proxy as `reply_to` address
+//! 4. Actor handler sends multiple responses via `envelope.reply_envelope().send()`
 //! 5. Listener receives each response and serializes it as an `IpcStreamFrame`
-//! 6. When the agent finishes, listener sends a final frame with `is_final: true`
+//! 6. When the actor finishes, listener sends a final frame with `is_final: true`
 //!
 //! # Running This Example
 //!
@@ -100,7 +100,7 @@ struct ItemPage {
 }
 
 // ============================================================================
-// Agent States
+// Actor States
 // ============================================================================
 
 /// Countdown service - streams countdown numbers.
@@ -132,23 +132,23 @@ const SAMPLE_ITEMS: &[&str] = &[
 ];
 
 // ============================================================================
-// Agent Creation Functions
+// Actor Creation Functions
 // ============================================================================
 
-/// Creates the countdown service agent that streams countdown ticks.
-async fn create_countdown_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut countdown = runtime.new_agent_with_name::<CountdownState>("countdown".to_string());
+/// Creates the countdown service actor that streams countdown ticks.
+async fn create_countdown_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut countdown = runtime.new_actor_with_name::<CountdownState>("countdown".to_string());
 
     // Handle countdown requests - send multiple responses over time
-    countdown.mutate_on::<CountdownRequest>(|agent, envelope| {
+    countdown.mutate_on::<CountdownRequest>(|actor, envelope| {
         let msg = envelope.message();
         let start = msg.start;
         let delay_ms = msg.delay_ms;
-        agent.model.countdowns_started += 1;
+        actor.model.countdowns_started += 1;
 
         println!(
             "  [Countdown] Starting countdown from {} with {}ms delay (#{})...",
-            start, delay_ms, agent.model.countdowns_started
+            start, delay_ms, actor.model.countdowns_started
         );
 
         // Get the reply envelope to send multiple responses
@@ -174,12 +174,13 @@ async fn create_countdown_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     countdown.start().await
 }
 
-/// Creates the list service agent that streams paginated items.
-async fn create_list_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut list_service = runtime.new_agent_with_name::<ListServiceState>("list_service".to_string());
+/// Creates the list service actor that streams paginated items.
+async fn create_list_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut list_service =
+        runtime.new_actor_with_name::<ListServiceState>("list_service".to_string());
 
     // Handle list requests - stream pages of items
-    list_service.act_on::<ListItemsRequest>(|_agent, envelope| {
+    list_service.act_on::<ListItemsRequest>(|_actor, envelope| {
         let msg = envelope.message();
         let page_size = msg.page_size.max(1); // At least 1 item per page
 
@@ -257,17 +258,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📝 Registered {} IPC message types", registry.len());
 
-    // Create service agents
-    let countdown = create_countdown_agent(&mut runtime).await;
+    // Create service actors
+    let countdown = create_countdown_actor(&mut runtime).await;
     println!("⏱️  Countdown service started");
 
-    let list_service = create_list_agent(&mut runtime).await;
+    let list_service = create_list_actor(&mut runtime).await;
     println!("📋 List service started");
 
-    // Expose agents for IPC access
+    // Expose actors for IPC access
     runtime.ipc_expose("countdown", countdown.clone());
     runtime.ipc_expose("list_service", list_service.clone());
-    println!("🔗 Exposed agents: countdown, list_service");
+    println!("🔗 Exposed actors: countdown, list_service");
 
     // Start the IPC listener
     let ipc_config = IpcConfig::load();

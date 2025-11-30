@@ -16,14 +16,13 @@
 
 use acton_macro::acton_actor;
 
-
-/// Represents the state (model) for a generic "Pool Item" agent in tests.
+/// Represents the state (model) for a generic "Pool Item" actor in tests.
 ///
-/// This is often used in scenarios involving multiple child agents managed by a parent,
-/// or simply as a basic agent that needs to count received messages.
+/// This is often used in scenarios involving multiple child actors managed by a parent,
+/// or simply as a basic actor that needs to count received messages.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 pub struct PoolItem {
-    /// Tracks the number of messages (typically `Ping`) received by this agent.
+    /// Tracks the number of messages (typically `Ping`) received by this actor.
     pub receive_count: usize, // Tracks the number of received events
 }

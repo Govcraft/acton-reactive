@@ -14,9 +14,9 @@ async fn test_default_configuration_loading() -> Result<(), anyhow::Error> {
     // Launch ActonApp which should load defaults
     let mut app = ActonApp::launch();
 
-    // Verify the app started successfully by creating an agent
-    let agent_builder = app.new_agent::<TestAgent>();
-    let _handle = agent_builder.start().await;
+    // Verify the app started successfully by creating an actor
+    let actor_builder = app.new_actor::<TestActor>();
+    let _handle = actor_builder.start().await;
 
     // Clean up
     temp_dir.close().unwrap();
@@ -33,15 +33,15 @@ async fn test_custom_configuration_override() -> anyhow::Result<()> {
     // Create a custom config file
     let config_content = r#"
         [timeouts]
-        agent_shutdown = 5000
+        actor_shutdown = 5000
         system_shutdown = 15000
 
         [limits]
-        agent_inbox_capacity = 512
+        actor_inbox_capacity = 512
         concurrent_handlers_high_water_mark = 50
 
         [defaults]
-        agent_name = "custom_agent"
+        actor_name = "custom_actor"
 
         [tracing]
         debug = "info"
@@ -53,9 +53,9 @@ async fn test_custom_configuration_override() -> anyhow::Result<()> {
     // Launch ActonApp which should load the custom config
     let mut app = ActonApp::launch();
 
-    // Create a test agent to verify the custom config is used
-    let agent_builder = app.new_agent::<TestAgent>();
-    let _handle = agent_builder.start().await;
+    // Create a test actor to verify the custom config is used
+    let actor_builder = app.new_actor::<TestActor>();
+    let _handle = actor_builder.start().await;
 
     // Clean up
     temp_dir.close().unwrap();
@@ -72,7 +72,7 @@ async fn test_xdg_directory_resolution() -> Result<(), anyhow::Error> {
     // Create a config file
     let config_content = r"
         [timeouts]
-        agent_shutdown = 7500
+        actor_shutdown = 7500
     ";
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
@@ -82,8 +82,8 @@ async fn test_xdg_directory_resolution() -> Result<(), anyhow::Error> {
 
     // Launch and verify it uses the config
     let mut app = ActonApp::launch();
-    let agent_builder = app.new_agent::<TestAgent>();
-    let _handle = agent_builder.start().await;
+    let actor_builder = app.new_actor::<TestActor>();
+    let _handle = actor_builder.start().await;
 
     temp_dir.close().unwrap();
     Ok(())
@@ -99,10 +99,10 @@ async fn test_malformed_config_handling() -> Result<(), anyhow::Error> {
     // Create a malformed config file
     let malformed_content = r#"
         [timeouts]
-        agent_shutdown = "not_a_number"
+        actor_shutdown = "not_a_number"
 
         [limits]
-        agent_inbox_capacity = -1
+        actor_inbox_capacity = -1
     "#;
 
     fs::write(config_dir.join("config.toml"), malformed_content).unwrap();
@@ -110,8 +110,8 @@ async fn test_malformed_config_handling() -> Result<(), anyhow::Error> {
 
     // Should still launch successfully with defaults
     let mut app = ActonApp::launch();
-    let agent_builder = app.new_agent::<TestAgent>();
-    let _handle = agent_builder.start().await;
+    let actor_builder = app.new_actor::<TestActor>();
+    let _handle = actor_builder.start().await;
 
     temp_dir.close().unwrap();
     Ok(())
@@ -124,13 +124,13 @@ async fn test_backward_compatibility() -> Result<(), anyhow::Error> {
     let mut app = ActonApp::launch();
 
     // Verify basic functionality still works
-    let mut agent_builder = app.new_agent::<CounterAgent>();
-    agent_builder.mutate_on::<Increment>(|agent, _| {
-        agent.model.count += 1;
-        AgentReply::immediate()
+    let mut actor_builder = app.new_actor::<CounterActor>();
+    actor_builder.mutate_on::<Increment>(|actor, _| {
+        actor.model.count += 1;
+        ActorReply::immediate()
     });
 
-    let handle = agent_builder.start().await;
+    let handle = actor_builder.start().await;
     handle.send(Increment).await;
 
     // Should work exactly as before
@@ -138,7 +138,7 @@ async fn test_backward_compatibility() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-/// Test configuration values are actually used in agent behavior
+/// Test configuration values are actually used in actor behavior
 #[acton_test]
 async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
     let temp_dir = TempDir::new().unwrap();
@@ -148,7 +148,7 @@ async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
     // Create config with very small inbox capacity
     let config_content = r"
         [limits]
-        agent_inbox_capacity = 2
+        actor_inbox_capacity = 2
     ";
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
@@ -156,35 +156,35 @@ async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
 
     let mut app = ActonApp::launch();
 
-    // Create agent that should use the small inbox capacity
-    let mut agent_builder = app.new_agent::<CounterAgent>();
-    agent_builder.mutate_on::<Increment>(|agent, _| {
-        agent.model.count += 1;
-        AgentReply::immediate()
+    // Create actor that should use the small inbox capacity
+    let mut actor_builder = app.new_actor::<CounterActor>();
+    actor_builder.mutate_on::<Increment>(|actor, _| {
+        actor.model.count += 1;
+        ActorReply::immediate()
     });
 
-    let handle = agent_builder.start().await;
+    let handle = actor_builder.start().await;
 
     // Send multiple messages to test capacity
     for _ in 0..5 {
         handle.send(Increment).await;
     }
 
-    // Verify agent still works (backpressure should handle capacity)
+    // Verify actor still works (backpressure should handle capacity)
     temp_dir.close().unwrap();
     Ok(())
 }
 
-/// Test multiple agents use consistent configuration
+/// Test multiple actors use consistent configuration
 #[acton_test]
-async fn test_consistent_config_across_agents() -> Result<(), anyhow::Error> {
+async fn test_consistent_config_across_actors() -> Result<(), anyhow::Error> {
     let temp_dir = TempDir::new().unwrap();
     let config_dir = temp_dir.path().join("acton");
     fs::create_dir_all(&config_dir).unwrap();
 
     let config_content = r#"
         [defaults]
-        agent_name = "test_agent"
+        actor_name = "test_actor"
     "#;
 
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
@@ -192,11 +192,11 @@ async fn test_consistent_config_across_agents() -> Result<(), anyhow::Error> {
 
     let mut app = ActonApp::launch();
 
-    // Create multiple agents
-    let builder1 = app.new_agent::<CounterAgent>();
+    // Create multiple actors
+    let builder1 = app.new_actor::<CounterActor>();
     let _handle1 = builder1.start().await;
 
-    let builder2 = app.new_agent::<CounterAgent>();
+    let builder2 = app.new_actor::<CounterActor>();
     let _handle2 = builder2.start().await;
 
     // Both should work with same configuration
@@ -206,10 +206,10 @@ async fn test_consistent_config_across_agents() -> Result<(), anyhow::Error> {
 
 // Test helper structs
 #[derive(Debug, Default)]
-struct TestAgent;
+struct TestActor;
 
 #[derive(Debug, Default)]
-struct CounterAgent {
+struct CounterActor {
     count: i32,
 }
 

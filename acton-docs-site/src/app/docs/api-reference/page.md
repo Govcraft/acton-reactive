@@ -23,24 +23,24 @@ use acton_reactive::prelude::*;
 | Type | Module | Description |
 |------|--------|-------------|
 | `ActonApp` | `common` | Entry point for system initialization |
-| `AgentRuntime` | `common` | Runtime manager for agent system |
-| `ManagedAgent` | `actor` | Core agent wrapper with type-state pattern |
+| `ActorRuntime` | `common` | Runtime manager for actor system |
+| `ManagedActor` | `actor` | Core actor wrapper with type-state pattern |
 | `Idle` | `actor` | Type-state marker for configuration phase |
-| `Started` | `actor` | Type-state marker for active agent |
-| `AgentHandle` | `common` | External reference to agent |
-| `AgentBroker` | `common` | Central pub/sub message broker |
-| `AgentConfig` | `actor` | Configuration builder for agents |
-| `MessageAddress` | `message` | Agent endpoint address |
+| `Started` | `actor` | Type-state marker for active actor |
+| `ActorHandle` | `common` | External reference to actor |
+| `ActorBroker` | `common` | Central pub/sub message broker |
+| `ActorConfig` | `actor` | Configuration builder for actors |
+| `MessageAddress` | `message` | Actor endpoint address |
 | `OutboundEnvelope` | `message` | Message wrapper for sending |
 | `BrokerRequest` | `message` | Broadcast message wrapper |
-| `AgentReply` | `common` | Utility for handler return types |
+| `ActorReply` | `common` | Utility for handler return types |
 
 ### Included Traits
 
 | Trait | Description |
 |-------|-------------|
 | `ActonMessage` | Marker trait for message payloads |
-| `AgentHandleInterface` | Primary trait for agent interaction |
+| `ActorHandleInterface` | Primary trait for actor interaction |
 | `Broker` | Message broadcasting capability |
 | `Subscriber` | Broker access capability |
 | `Subscribable` | Subscription management |
@@ -51,14 +51,14 @@ use acton_reactive::prelude::*;
 
 ### ActonApp
 
-Entry point for initializing the agent system.
+Entry point for initializing the actor system.
 
 ```rust
 pub struct ActonApp;
 
 impl ActonApp {
-    /// Initialize the agent runtime
-    pub fn launch() -> AgentRuntime;
+    /// Initialize the actor runtime
+    pub fn launch() -> ActorRuntime;
 }
 ```
 
@@ -69,65 +69,65 @@ let runtime = ActonApp::launch();
 
 ---
 
-### AgentRuntime
+### ActorRuntime
 
-Manages the active system and provides methods for creating top-level agents.
+Manages the active system and provides methods for creating top-level actors.
 
 ```rust
-pub struct AgentRuntime {
-    pub broker: AgentHandle,
+pub struct ActorRuntime {
+    pub broker: ActorHandle,
     // ... internal fields
 }
 
-impl AgentRuntime {
-    /// Create a new agent with default name
-    pub fn new_agent<Model>(&mut self) -> ManagedAgent<Idle, Model>
+impl ActorRuntime {
+    /// Create a new actor with default name
+    pub fn new_actor<Model>(&mut self) -> ManagedActor<Idle, Model>
     where
         Model: Default + Clone + Send + Sync + 'static;
 
-    /// Create a new agent with custom name
-    pub fn new_agent_with_name<Model>(
+    /// Create a new actor with custom name
+    pub fn new_actor_with_name<Model>(
         &mut self,
         name: String,
-    ) -> ManagedAgent<Idle, Model>
+    ) -> ManagedActor<Idle, Model>
     where
         Model: Default + Clone + Send + Sync + 'static;
 
-    /// Gracefully shutdown all agents
+    /// Gracefully shutdown all actors
     pub async fn shutdown_all(&mut self) -> anyhow::Result<()>;
 
     /// Get the system broker
-    pub fn get_broker(&self) -> &AgentHandle;
+    pub fn get_broker(&self) -> &ActorHandle;
 }
 ```
 
 **Example:**
 ```rust
 let mut runtime = ActonApp::launch();
-let mut agent = runtime.new_agent::<MyState>();
-// ... configure and start agent
+let mut actor = runtime.new_actor::<MyState>();
+// ... configure and start actor
 runtime.shutdown_all().await?;
 ```
 
 ---
 
-### ManagedAgent<AgentState, Model>
+### ManagedActor<ActorState, Model>
 
-Core agent wrapper using the type-state pattern to enforce valid operations at compile time.
+Core actor wrapper using the type-state pattern to enforce valid operations at compile time.
 
 #### Type Parameters
 
-- `AgentState`: Either `Idle` or `Started`
+- `ActorState`: Either `Idle` or `Started`
 - `Model`: User-defined state type (must implement `Default + Clone + Send + Sync + 'static`)
 
 #### Methods (Idle State)
 
 ```rust
-impl<Model> ManagedAgent<Idle, Model> {
+impl<Model> ManagedActor<Idle, Model> {
     /// Register a mutable message handler
     pub fn mutate_on<M>(
         &mut self,
-        handler: impl Fn(&mut ManagedAgent<Started, Model>, &mut MessageContext<M>)
+        handler: impl Fn(&mut ManagedActor<Started, Model>, &mut MessageContext<M>)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self
     where
@@ -136,7 +136,7 @@ impl<Model> ManagedAgent<Idle, Model> {
     /// Register a read-only message handler (concurrent execution)
     pub fn act_on<M>(
         &mut self,
-        handler: impl Fn(&ManagedAgent<Started, Model>, &mut MessageContext<M>)
+        handler: impl Fn(&ManagedActor<Started, Model>, &mut MessageContext<M>)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self
     where
@@ -145,7 +145,7 @@ impl<Model> ManagedAgent<Idle, Model> {
     /// Register a fallible mutable handler
     pub fn mutate_on_fallible<M>(
         &mut self,
-        handler: impl Fn(&mut ManagedAgent<Started, Model>, &mut MessageContext<M>)
+        handler: impl Fn(&mut ManagedActor<Started, Model>, &mut MessageContext<M>)
             -> impl Future<Output = Result<Box<dyn ActonMessageReply>, Box<dyn Error>>>
             + Send + Sync + 'static,
     ) -> &mut Self
@@ -155,7 +155,7 @@ impl<Model> ManagedAgent<Idle, Model> {
     /// Register a fallible read-only handler
     pub fn act_on_fallible<M>(
         &mut self,
-        handler: impl Fn(&ManagedAgent<Started, Model>, &mut MessageContext<M>)
+        handler: impl Fn(&ManagedActor<Started, Model>, &mut MessageContext<M>)
             -> impl Future<Output = Result<Box<dyn ActonMessageReply>, Box<dyn Error>>>
             + Send + Sync + 'static,
     ) -> &mut Self
@@ -165,7 +165,7 @@ impl<Model> ManagedAgent<Idle, Model> {
     /// Register an error handler for a specific message and error type
     pub fn on_error<M, E>(
         &mut self,
-        handler: impl Fn(&mut ManagedAgent<Started, Model>, &mut MessageContext<M>, &E)
+        handler: impl Fn(&mut ManagedActor<Started, Model>, &mut MessageContext<M>, &E)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self
     where
@@ -175,65 +175,65 @@ impl<Model> ManagedAgent<Idle, Model> {
     /// Lifecycle hook: runs before message loop starts
     pub fn before_start(
         &mut self,
-        hook: impl Fn(&ManagedAgent<Started, Model>)
+        hook: impl Fn(&ManagedActor<Started, Model>)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self;
 
     /// Lifecycle hook: runs after message loop starts
     pub fn after_start(
         &mut self,
-        hook: impl Fn(&ManagedAgent<Started, Model>)
+        hook: impl Fn(&ManagedActor<Started, Model>)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self;
 
     /// Lifecycle hook: runs before message loop stops
     pub fn before_stop(
         &mut self,
-        hook: impl Fn(&ManagedAgent<Started, Model>)
+        hook: impl Fn(&ManagedActor<Started, Model>)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self;
 
     /// Lifecycle hook: runs after message loop stops
     pub fn after_stop(
         &mut self,
-        hook: impl Fn(&ManagedAgent<Started, Model>)
+        hook: impl Fn(&ManagedActor<Started, Model>)
             -> impl Future<Output = ()> + Send + Sync + 'static,
     ) -> &mut Self;
 
-    /// Start the agent, transitioning from Idle to Started
-    pub async fn start(self) -> AgentHandle;
+    /// Start the actor, transitioning from Idle to Started
+    pub async fn start(self) -> ActorHandle;
 }
 ```
 
 #### Methods (Started State)
 
 ```rust
-impl<Model> ManagedAgent<Started, Model> {
-    /// Get the agent's state
+impl<Model> ManagedActor<Started, Model> {
+    /// Get the actor's state
     pub fn model(&self) -> &Model;
 
-    /// Get mutable access to the agent's state
+    /// Get mutable access to the actor's state
     pub fn model_mut(&mut self) -> &mut Model;
 
     /// Create a new outbound envelope for sending messages
     pub fn new_envelope(&self) -> OutboundEnvelope;
 
-    /// Get the agent's handle
-    pub fn handle(&self) -> &AgentHandle;
+    /// Get the actor's handle
+    pub fn handle(&self) -> &ActorHandle;
 
     /// Access supervised children
-    pub fn children(&self) -> &DashMap<String, AgentHandle>;
+    pub fn children(&self) -> &DashMap<String, ActorHandle>;
 
-    /// Supervise a new child agent
+    /// Supervise a new child actor
     pub async fn supervise<ChildModel>(
         &self,
-        child: ManagedAgent<Idle, ChildModel>,
-    ) -> anyhow::Result<AgentHandle>
+        child: ManagedActor<Idle, ChildModel>,
+    ) -> anyhow::Result<ActorHandle>
     where
         ChildModel: Default + Clone + Send + Sync + 'static;
 
     /// Find a child by Ern
-    pub fn find_child(&self, id: &Ern) -> Option<AgentHandle>;
+    pub fn find_child(&self, id: &Ern) -> Option<ActorHandle>;
 }
 ```
 
@@ -247,61 +247,61 @@ struct CounterState {
 #[derive(Clone, Debug)]
 struct Increment(u32);
 
-let mut agent = runtime.new_agent::<CounterState>();
+let mut actor = runtime.new_actor::<CounterState>();
 
-agent
-    .mutate_on::<Increment>(|agent, ctx| {
+actor
+    .mutate_on::<Increment>(|actor, ctx| {
         Box::pin(async move {
-            agent.model_mut().count += ctx.message().0;
+            actor.model_mut().count += ctx.message().0;
         })
     })
-    .before_start(|agent| {
+    .before_start(|actor| {
         Box::pin(async move {
-            println!("Agent starting with count: {}", agent.model().count);
+            println!("Actor starting with count: {}", actor.model().count);
         })
     });
 
-let handle = agent.start().await;
+let handle = actor.start().await;
 ```
 
 ---
 
-### AgentHandle
+### ActorHandle
 
-External reference to an agent for sending messages and managing lifecycle.
+External reference to an actor for sending messages and managing lifecycle.
 
 ```rust
-pub struct AgentHandle {
+pub struct ActorHandle {
     // ... internal fields
 }
 
-impl AgentHandle {
-    /// Send a message to this agent
+impl ActorHandle {
+    /// Send a message to this actor
     pub async fn send(&self, message: impl ActonMessage);
 
     /// Send a message synchronously (spawns runtime if needed)
     pub fn send_sync(&self, message: impl ActonMessage, recipient: &MessageAddress);
 
-    /// Stop the agent gracefully
+    /// Stop the actor gracefully
     pub async fn stop(&self) -> anyhow::Result<()>;
 
-    /// Get the agent's Ern identifier
+    /// Get the actor's Ern identifier
     pub fn id(&self) -> Ern;
 
-    /// Get the agent's name
+    /// Get the actor's name
     pub fn name(&self) -> String;
 
-    /// Get the agent's reply address
+    /// Get the actor's reply address
     pub fn reply_address(&self) -> MessageAddress;
 
     /// Create an envelope for sending to a specific recipient
     pub fn create_envelope(&self, recipient: &MessageAddress) -> OutboundEnvelope;
 
     /// Access supervised children
-    pub fn children(&self) -> &DashMap<String, AgentHandle>;
+    pub fn children(&self) -> &DashMap<String, ActorHandle>;
 
     /// Find a child by Ern
-    pub fn find_child(&self, id: &Ern) -> Option<AgentHandle>;
+    pub fn find_child(&self, id: &Ern) -> Option<ActorHandle>;
 
     /// Clone the handle reference
     pub fn clone_ref(&self) -> Self;
@@ -310,20 +310,20 @@ impl AgentHandle {
 
 ---
 
-### AgentBroker
+### ActorBroker
 
 Central pub/sub message broker for broadcasting messages to subscribers.
 
 ```rust
-pub struct AgentBroker {
-    // Derefs to AgentHandle
+pub struct ActorBroker {
+    // Derefs to ActorHandle
 }
 
-impl Deref for AgentBroker {
-    type Target = AgentHandle;
+impl Deref for ActorBroker {
+    type Target = ActorHandle;
 }
 
-impl AgentBroker {
+impl ActorBroker {
     /// Broadcast a message to all subscribers of that message type
     pub async fn broadcast(&self, message: impl ActonMessage);
 
@@ -338,7 +338,7 @@ impl AgentBroker {
 
 ### ActonMessage
 
-Marker trait for types that can be sent as messages between agents.
+Marker trait for types that can be sent as messages between actors.
 
 ```rust
 pub trait ActonMessage: DynClone + Any + Send + Sync + Debug {
@@ -362,34 +362,34 @@ struct MyMessage {
 
 ---
 
-### AgentHandleInterface
+### ActorHandleInterface
 
-Primary trait for agent interaction, implemented by `AgentHandle` and `AgentBroker`.
+Primary trait for actor interaction, implemented by `ActorHandle` and `ActorBroker`.
 
 ```rust
-pub trait AgentHandleInterface: Clone + Debug + Send + Sync + 'static {
-    /// Get the agent's reply address
+pub trait ActorHandleInterface: Clone + Debug + Send + Sync + 'static {
+    /// Get the actor's reply address
     fn reply_address(&self) -> MessageAddress;
 
-    /// Send a message to the agent
+    /// Send a message to the actor
     fn send(&self, message: impl ActonMessage) -> impl Future<Output = ()> + Send + Sync;
 
     /// Send synchronously
     fn send_sync(&self, message: impl ActonMessage, recipient: &MessageAddress);
 
-    /// Stop the agent
+    /// Stop the actor
     fn stop(&self) -> impl Future<Output = anyhow::Result<()>> + Send + Sync;
 
     /// Access children
-    fn children(&self) -> &DashMap<String, AgentHandle>;
+    fn children(&self) -> &DashMap<String, ActorHandle>;
 
     /// Find a child
-    fn find_child(&self, id: &Ern) -> Option<AgentHandle>;
+    fn find_child(&self, id: &Ern) -> Option<ActorHandle>;
 
-    /// Get agent identifier
+    /// Get actor identifier
     fn id(&self) -> Ern;
 
-    /// Get agent name
+    /// Get actor name
     fn name(&self) -> String;
 
     /// Clone the handle
@@ -420,7 +420,7 @@ pub trait Broker: Clone + Debug + Default + Send + Sync + 'static {
     /// Broadcast synchronously
     fn broadcast_sync(&self, message: impl ActonMessage) -> anyhow::Result<()>
     where
-        Self: AgentHandleInterface + Sized;
+        Self: ActorHandleInterface + Sized;
 }
 ```
 
@@ -431,7 +431,7 @@ pub trait Broker: Clone + Debug + Default + Send + Sync + 'static {
 Trait for managing pub/sub subscriptions.
 
 ```rust
-pub trait Subscribable: AgentHandleInterface + Subscriber {
+pub trait Subscribable: ActorHandleInterface + Subscriber {
     /// Subscribe to a message type
     fn subscribe<M>(&self) -> impl Future<Output = ()> + Send + Sync
     where
@@ -513,9 +513,9 @@ System-level control signals.
 ```rust
 #[derive(Clone, Debug)]
 pub enum SystemSignal {
-    /// Request agent shutdown
+    /// Request actor shutdown
     Stop,
-    /// Agent has stopped
+    /// Actor has stopped
     Stopped,
     /// Custom signal with payload
     Custom(Box<dyn ActonMessage>),
@@ -595,7 +595,7 @@ Inbound message envelope from IPC.
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcEnvelope {
-    /// Target agent identifier
+    /// Target actor identifier
     pub target: String,
     /// Message type name
     pub message_type: String,
@@ -639,11 +639,11 @@ IPC-specific error type.
 pub enum IpcError {
     /// Unknown message type
     UnknownMessageType(String),
-    /// Target agent not found
-    AgentNotFound(String),
+    /// Target actor not found
+    ActorNotFound(String),
     /// Serialization/deserialization error
     SerializationError(String),
-    /// Target agent backpressure
+    /// Target actor backpressure
     TargetBusy(String),
     /// Protocol error
     ProtocolError(String),

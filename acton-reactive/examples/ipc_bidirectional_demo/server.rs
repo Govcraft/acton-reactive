@@ -17,11 +17,11 @@
 //! IPC Bidirectional Communication Example
 //!
 //! This example demonstrates the request-response pattern in acton-reactive IPC,
-//! where external clients can send queries and receive responses from agents.
+//! where external clients can send queries and receive responses from actors.
 //!
 //! # Features
 //!
-//! - **Request-Response Pattern**: External process sends a query, agent processes it,
+//! - **Request-Response Pattern**: External process sends a query, actor processes it,
 //!   and returns a response via the IPC proxy channel.
 //! - **Calculator Service**: A simple arithmetic service that demonstrates
 //!   synchronous response generation.
@@ -32,8 +32,8 @@
 //!
 //! 1. IPC client sends `IpcEnvelope` with `expects_reply: true`
 //! 2. IPC listener creates a temporary MPSC channel (proxy)
-//! 3. Message is sent to agent with proxy as `reply_to` address
-//! 4. Agent handler uses `envelope.reply_envelope().send(response)` to reply
+//! 3. Message is sent to actor with proxy as `reply_to` address
+//! 4. Actor handler uses `envelope.reply_envelope().send(response)` to reply
 //! 5. Listener receives response on proxy channel and serializes it back to client
 //!
 //! # Running This Example
@@ -117,7 +117,7 @@ struct SetAcknowledgment {
 }
 
 // ============================================================================
-// Agent States
+// Actor States
 // ============================================================================
 
 /// Calculator service - stateless arithmetic operations.
@@ -133,18 +133,18 @@ struct KeyValueState {
 }
 
 // ============================================================================
-// Agent Creation Functions
+// Actor Creation Functions
 // ============================================================================
 
-/// Creates the calculator service agent that responds to arithmetic queries.
-async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut calculator = runtime.new_agent_with_name::<CalculatorState>("calculator".to_string());
+/// Creates the calculator service actor that responds to arithmetic queries.
+async fn create_calculator_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut calculator = runtime.new_actor_with_name::<CalculatorState>("calculator".to_string());
 
     // Handle addition requests and reply with result
-    calculator.mutate_on::<AddRequest>(|agent, envelope| {
+    calculator.mutate_on::<AddRequest>(|actor, envelope| {
         let msg = envelope.message();
         let result = msg.a + msg.b;
-        agent.model.operations_performed += 1;
+        actor.model.operations_performed += 1;
 
         let response = CalculationResult {
             result,
@@ -153,7 +153,7 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
 
         println!(
             "  [Calculator] Add: {} + {} = {} (op #{})",
-            msg.a, msg.b, result, agent.model.operations_performed
+            msg.a, msg.b, result, actor.model.operations_performed
         );
 
         // Send the response back to the IPC client via reply_envelope
@@ -164,10 +164,10 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     });
 
     // Handle multiplication requests and reply with result
-    calculator.mutate_on::<MultiplyRequest>(|agent, envelope| {
+    calculator.mutate_on::<MultiplyRequest>(|actor, envelope| {
         let msg = envelope.message();
         let result = msg.a * msg.b;
-        agent.model.operations_performed += 1;
+        actor.model.operations_performed += 1;
 
         let response = CalculationResult {
             result,
@@ -176,7 +176,7 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
 
         println!(
             "  [Calculator] Multiply: {} × {} = {} (op #{})",
-            msg.a, msg.b, result, agent.model.operations_performed
+            msg.a, msg.b, result, actor.model.operations_performed
         );
 
         // Send the response back to the IPC client
@@ -189,17 +189,17 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     calculator.start().await
 }
 
-/// Creates the key-value store agent that responds to get/set queries.
-async fn create_kv_store_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut kv_store = runtime.new_agent_with_name::<KeyValueState>("kv_store".to_string());
+/// Creates the key-value store actor that responds to get/set queries.
+async fn create_kv_store_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut kv_store = runtime.new_actor_with_name::<KeyValueState>("kv_store".to_string());
 
     // Handle set requests - stores value and acknowledges
-    kv_store.mutate_on::<SetValue>(|agent, envelope| {
+    kv_store.mutate_on::<SetValue>(|actor, envelope| {
         let msg = envelope.message();
         let key = msg.key.clone();
         let value = msg.value.clone();
 
-        agent.model.store.insert(key.clone(), value.clone());
+        actor.model.store.insert(key.clone(), value.clone());
 
         let response = SetAcknowledgment {
             key: key.clone(),
@@ -215,10 +215,10 @@ async fn create_kv_store_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     });
 
     // Handle get requests - retrieves value and responds
-    kv_store.mutate_on::<GetValue>(|agent, envelope| {
+    kv_store.mutate_on::<GetValue>(|actor, envelope| {
         let msg = envelope.message();
         let key = msg.key.clone();
-        let value = agent.model.store.get(&key).cloned();
+        let value = actor.model.store.get(&key).cloned();
 
         let response = ValueResponse {
             key: key.clone(),
@@ -275,17 +275,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📝 Registered {} IPC message types", registry.len());
 
-    // Create service agents
-    let calculator = create_calculator_agent(&mut runtime).await;
+    // Create service actors
+    let calculator = create_calculator_actor(&mut runtime).await;
     println!("🧮 Calculator service started");
 
-    let kv_store = create_kv_store_agent(&mut runtime).await;
+    let kv_store = create_kv_store_actor(&mut runtime).await;
     println!("📦 Key-Value store service started");
 
-    // Expose agents for IPC access
+    // Expose actors for IPC access
     runtime.ipc_expose("calculator", calculator.clone());
     runtime.ipc_expose("kv_store", kv_store.clone());
-    println!("🔗 Exposed agents: calculator, kv_store");
+    println!("🔗 Exposed actors: calculator, kv_store");
 
     // Start the IPC listener
     let ipc_config = IpcConfig::load();

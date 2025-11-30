@@ -49,12 +49,12 @@ pub fn initialize_tracing() {
 
         let filter = EnvFilter::new("trace")
             .add_directive(
-                "acton_reactive::actor::managed_agent::started[wake]=trace"
+                "acton_reactive::actor::managed_actor::started[wake]=trace"
                     .parse()
                     .unwrap(),
             )
             .add_directive(
-                "acton_reactive::actor::managed_agent::started=trace"
+                "acton_reactive::actor::managed_actor::started=trace"
                     .parse()
                     .unwrap(),
             )

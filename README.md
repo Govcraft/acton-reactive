@@ -2,13 +2,13 @@
 
 Welcome to Acton Reactive! This framework helps you build fast, concurrent Rust applications without getting tangled in complex threading or locking code.
 
-Think of your application's logic broken down into independent workers called **Agents**. Each agent manages its own state and communicates with others by sending **Messages**. Acton Reactive handles the tricky parts of making these agents run concurrently and talk to each other efficiently, letting you focus on your application's features. It's built on top of [Tokio](https://tokio.rs/), Rust's powerful asynchronous runtime.
+Think of your application's logic broken down into independent workers called **Actors**. Each actor manages its own state and communicates with others by sending **Messages**. Acton Reactive handles the tricky parts of making these actors run concurrently and talk to each other efficiently, letting you focus on your application's features. It's built on top of [Tokio](https://tokio.rs/), Rust's powerful asynchronous runtime.
 
 ## Why Acton Reactive?
 
-*   **Simplified Concurrency:** Forget manual thread management and complex locking. Agents run independently, managing their own data. Acton ensures messages are processed safely, making concurrent programming more approachable.
+*   **Simplified Concurrency:** Forget manual thread management and complex locking. Actors run independently, managing their own data. Acton ensures messages are processed safely, making concurrent programming more approachable.
 *   **Asynchronous & Performant:** Leverages Rust's `async/await` and Tokio for high-performance, non-blocking operations. Your application stays responsive, even under load.
-*   **Organized & Maintainable Code:** Encourages breaking down complex problems into smaller, self-contained agents. This makes your codebase easier to understand, test, and maintain.
+*   **Organized & Maintainable Code:** Encourages breaking down complex problems into smaller, self-contained actors. This makes your codebase easier to understand, test, and maintain.
 *   **Type-Safe Communication:** Define clear message types. Rust's compiler helps ensure you're sending and receiving the right kinds of messages, catching errors before runtime.
 *   **Built-in Observability:** Integrates with the `tracing` crate, providing insights into your application's behavior for easier debugging and performance monitoring.
 
@@ -16,50 +16,50 @@ Think of your application's logic broken down into independent workers called **
 
 Before diving into code, let's understand the main building blocks:
 
-1.  **Agent:** The fundamental unit. It's a Rust struct (that implements `Default` and `Debug`) which holds some internal state (its `model`) and reacts to incoming messages. Think of it as an independent worker or service.
-2.  **Message:** A simple Rust struct (that implements `Debug` and `Clone`) used for communication. Agents send messages to other agents (or themselves) to trigger actions or share information. The `#[acton_message]` macro helps derive the required traits easily.
-3.  **Handler:** A piece of code you define for an agent that specifies *how* it should react when it receives a particular type of message. There are two types:
-    *   **`mutate_on`**: For operations that need to modify the agent's internal state (`&mut agent.model`). These run sequentially to ensure state consistency.
-    *   **`act_on`**: For read-only operations that only need to inspect the agent's state (`&agent.model`). These run concurrently for better performance.
-    Both types return an `AgentReply`.
-4.  **Handle (`AgentHandle`):** An inexpensive, cloneable reference to an agent. You use an agent's handle to send messages *to* it from outside, or from other agents.
-5.  **Runtime (`ActonApp` / `AgentRuntime`):** The Acton system environment. You launch it using `ActonApp::launch()`. It manages the agents, their communication channels, and the central message broker.
+1.  **Actor:** The fundamental unit. It's a Rust struct (that implements `Default` and `Debug`) which holds some internal state (its `model`) and reacts to incoming messages. Think of it as an independent worker or service.
+2.  **Message:** A simple Rust struct (that implements `Debug` and `Clone`) used for communication. Actors send messages to other actors (or themselves) to trigger actions or share information. The `#[acton_message]` macro helps derive the required traits easily.
+3.  **Handler:** A piece of code you define for an actor that specifies *how* it should react when it receives a particular type of message. There are two types:
+    *   **`mutate_on`**: For operations that need to modify the actor's internal state (`&mut actor.model`). These run sequentially to ensure state consistency.
+    *   **`act_on`**: For read-only operations that only need to inspect the actor's state (`&actor.model`). These run concurrently for better performance.
+    Both types return an `ActorReply`.
+4.  **Handle (`ActorHandle`):** An inexpensive, cloneable reference to an actor. You use an actor's handle to send messages *to* it from outside, or from other actors.
+5.  **Runtime (`ActonApp` / `ActorRuntime`):** The Acton system environment. You launch it using `ActonApp::launch()`. It manages the actors, their communication channels, and the central message broker.
 
 ## Version 5.0 API Changes
 
 **Acton Reactive v5.0 introduces breaking changes** to better support concurrent operations while maintaining state safety:
 
-- **`act_on` is now for read-only concurrent handlers** - operates on `&agent.model` (immutable)
-- **`mutate_on` is now for mutable sequential handlers** - operates on `&mut agent.model` (mutable)
+- **`act_on` is now for read-only concurrent handlers** - operates on `&actor.model` (immutable)
+- **`mutate_on` is now for mutable sequential handlers** - operates on `&mut actor.model` (mutable)
 
 ### Migration Guide from v4.x
 
 **Before (v4.x):**
 ```rust
-builder.act_on::<MyMessage>(|agent, _| {
-    agent.model.value += 1;  // mutation
-    AgentReply::immediate()
+builder.act_on::<MyMessage>(|actor, _| {
+    actor.model.value += 1;  // mutation
+    ActorReply::immediate()
 });
 ```
 
 **After (v5.0):**
 ```rust
 // For mutations
-builder.mutate_on::<MyMessage>(|agent, _| {
-    agent.model.value += 1;  // mutation
-    AgentReply::immediate()
+builder.mutate_on::<MyMessage>(|actor, _| {
+    actor.model.value += 1;  // mutation
+    ActorReply::immediate()
 });
 
 // For read-only operations
-builder.act_on::<QueryMessage>(|agent, _| {
-    let value = agent.model.value;  // read-only
-    AgentReply::immediate()
+builder.act_on::<QueryMessage>(|actor, _| {
+    let value = actor.model.value;  // read-only
+    ActorReply::immediate()
 });
 ```
 
 ## Getting Started: A Basic Example
 
-Let's build a simple counter agent.
+Let's build a simple counter actor.
 
 1.  **Add Acton Reactive to your `Cargo.toml`:**
 
@@ -77,9 +77,9 @@ Let's build a simple counter agent.
     use std::time::Duration;
     use anyhow::Result;
 
-    // 1. Define the Agent's state (must be Default + Debug)
+    // 1. Define the Actor's state (must be Default + Debug)
     #[derive(Debug, Default)]
-    struct CounterAgent {
+    struct CounterActor {
         count: i32,
     }
 
@@ -99,45 +99,45 @@ Let's build a simple counter agent.
         // 4. Launch the Acton Runtime
         let mut app = ActonApp::launch();
 
-        // 5. Create an Agent Builder
-        // This prepares an agent but doesn't start its processing loop yet.
-        let mut counter_builder = app.new_agent::<CounterAgent>();
-        println!("Created agent builder for: {}", counter_builder.id());
+        // 5. Create an Actor Builder
+        // This prepares an actor but doesn't start its processing loop yet.
+        let mut counter_builder = app.new_actor::<CounterActor>();
+        println!("Created actor builder for: {}", counter_builder.id());
 
         // 6. Define Message Handlers
         // For state mutations, use mutate_on (sequential execution)
         counter_builder
-            .mutate_on::<IncrementMsg>(|agent, _context| {
-                // This code runs when the agent receives an IncrementMsg.
-                // We can safely mutate the agent's internal state (`model`).
-                agent.model.count += 1;
-                println!("Agent {}: Incremented count to {}", agent.id(), agent.model.count);
+            .mutate_on::<IncrementMsg>(|actor, _context| {
+                // This code runs when the actor receives an IncrementMsg.
+                // We can safely mutate the actor's internal state (`model`).
+                actor.model.count += 1;
+                println!("Actor {}: Incremented count to {}", actor.id(), actor.model.count);
                 // No async work needed here, return immediately.
-                AgentReply::immediate()
+                ActorReply::immediate()
             })
             // For read-only operations, use act_on (concurrent execution)
-            .act_on::<PrintMsg>(|agent, _context| {
-                // This code runs when the agent receives a PrintMsg.
+            .act_on::<PrintMsg>(|actor, _context| {
+                // This code runs when the actor receives a PrintMsg.
                 // This is a read-only operation - we only read the state
-                println!("Agent {}: Current count is {}", agent.id(), agent.model.count);
+                println!("Actor {}: Current count is {}", actor.id(), actor.model.count);
                 // We can also perform async operations within a handler.
-                AgentReply::from_async(async move {
+                ActorReply::from_async(async move {
                     // Example: Simulate some async work
                     tokio::time::sleep(Duration::from_millis(50)).await;
-                    println!("Agent {}: Finished async work in PrintMsg handler.", agent.id());
+                    println!("Actor {}: Finished async work in PrintMsg handler.", actor.id());
                     // No need to explicitly send anything back here for this example.
                 })
             })
             // Optional: Define lifecycle hooks
-            .after_stop(|agent| {
-                 println!("Agent {}: Final count is {}. Stopping.", agent.id(), agent.model.count);
-                 AgentReply::immediate()
+            .after_stop(|actor| {
+                 println!("Actor {}: Final count is {}. Stopping.", actor.id(), actor.model.count);
+                 ActorReply::immediate()
             });
 
-        // 7. Start the Agent
-        // This spawns the agent's task and returns a handle for sending messages.
+        // 7. Start the Actor
+        // This spawns the actor's task and returns a handle for sending messages.
         let counter_handle = counter_builder.start().await;
-        println!("Started agent: {}", counter_handle.id());
+        println!("Started actor: {}", counter_handle.id());
 
         // 8. Send Messages using the Handle
         println!("Sending IncrementMsg...");
@@ -149,11 +149,11 @@ Let's build a simple counter agent.
         println!("Sending another IncrementMsg...");
         counter_handle.send(IncrementMsg).await;
 
-        // Give the agent a moment to process the last message and its async handler
+        // Give the actor a moment to process the last message and its async handler
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // 9. Shut down the application gracefully
-        // This stops all agents and waits for them to finish.
+        // This stops all actors and waits for them to finish.
         println!("Shutting down application...");
         app.shutdown_all().await?;
         println!("Application shut down.");
@@ -164,18 +164,18 @@ Let's build a simple counter agent.
 
 3.  **Run it:** `cargo run`
 
-You should see output showing the agent being created, handling messages, incrementing its count, and finally stopping.
+You should see output showing the actor being created, handling messages, incrementing its count, and finally stopping.
 
 ## Common Patterns
 
 While the example above covers the basics, Acton Reactive supports more patterns:
 
 *   **Replying to Messages:** Inside a handler, use `context.reply_envelope()` to get an envelope addressed back to the original sender, then use `.send(YourReplyMessage).await`.
-*   **Sending to Specific Agents:** If an agent has the `AgentHandle` of another agent, it can create a new envelope using `context.new_envelope(&target_handle.reply_address())` and then `.send(YourMessage).await`.
-*   **Asynchronous Operations:** As shown in the `PrintMsg` handler, use `AgentReply::from_async(async move { ... })` to perform non-blocking tasks (like I/O) within your handlers.
-*   **Lifecycle Hooks:** Use `.before_start()`, `.after_start()`, `.before_stop()`, and `.after_stop()` on the agent builder to run code during agent initialization or shutdown.
-*   **Publish/Subscribe (Broadcasting):** Agents can subscribe to specific message types using `agent_handle.subscribe::<MyMessageType>().await`. Anyone (often the central `AgentBroker` obtained via `app.broker()` or `agent.broker()`) can then `broadcast(MyMessageType)` to notify all subscribers. This is great for system-wide events.
-*   **Supervision (Parent/Child Agents):** Agents can create and manage child agents using `agent_handle.supervise(child_builder).await`. Stopping the parent will automatically stop its children.
+*   **Sending to Specific Actors:** If an actor has the `ActorHandle` of another actor, it can create a new envelope using `context.new_envelope(&target_handle.reply_address())` and then `.send(YourMessage).await`.
+*   **Asynchronous Operations:** As shown in the `PrintMsg` handler, use `ActorReply::from_async(async move { ... })` to perform non-blocking tasks (like I/O) within your handlers.
+*   **Lifecycle Hooks:** Use `.before_start()`, `.after_start()`, `.before_stop()`, and `.after_stop()` on the actor builder to run code during actor initialization or shutdown.
+*   **Publish/Subscribe (Broadcasting):** Actors can subscribe to specific message types using `actor_handle.subscribe::<MyMessageType>().await`. Anyone (often the central `ActorBroker` obtained via `app.broker()` or `actor.broker()`) can then `broadcast(MyMessageType)` to notify all subscribers. This is great for system-wide events.
+*   **Supervision (Parent/Child Actors):** Actors can create and manage child actors using `actor_handle.supervise(child_builder).await`. Stopping the parent will automatically stop its children.
 
 ## Configuration
 
@@ -195,11 +195,11 @@ Acton Reactive supports configuration via TOML files using the XDG Base Director
 2. **Customize settings**:
    ```toml
    [timeouts]
-   agent_shutdown = 5000
+   actor_shutdown = 5000
    system_shutdown = 15000
 
    [limits]
-   agent_inbox_capacity = 512
+   actor_inbox_capacity = 512
    concurrent_handlers_high_water_mark = 50
 
    [tracing]
@@ -213,9 +213,9 @@ Acton Reactive supports configuration via TOML files using the XDG Base Director
 
 ### Configuration Categories
 
-- **Timeouts**: Agent and system shutdown timeouts
+- **Timeouts**: Actor and system shutdown timeouts
 - **Limits**: Buffer sizes and capacity limits
-- **Defaults**: Default agent names and identifiers
+- **Defaults**: Default actor names and identifiers
 - **Tracing**: Logging levels and configuration
 - **Paths**: Custom directory locations
 - **Behavior**: Feature toggles and settings
@@ -224,7 +224,7 @@ See `docs/CONFIGURATION.md` for the complete configuration guide.
 
 ## Explore More Examples
 
-For more detailed examples demonstrating patterns like broadcasting, replies, agent lifecycles, and configuration usage, check out the `acton-reactive/examples/` directory in this repository.
+For more detailed examples demonstrating patterns like broadcasting, replies, actor lifecycles, and configuration usage, check out the `acton-reactive/examples/` directory in this repository.
 
 ## Contributing
 

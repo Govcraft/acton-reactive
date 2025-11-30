@@ -14,21 +14,21 @@
  * limitations under that License.
  */
 
-use crate::common::AgentRuntime;
+use crate::common::ActorRuntime;
 
-/// Represents the entry point for initializing the Acton agent system.
+/// Represents the entry point for initializing the Acton actor system.
 ///
 /// This struct serves as a marker type to initiate the system bootstrap process.
 /// The primary way to use it is via the associated function [`ActonApp::launch`],
 /// which sets up the core components like the message broker and returns an
-/// [`AgentRuntime`] instance representing the active system.
+/// [`ActorRuntime`] instance representing the active system.
 ///
 /// Creating an `ActonApp` instance directly is typically not necessary; use [`ActonApp::launch`] instead.
 #[derive(Default, Debug, Clone)]
 pub struct ActonApp;
 
 impl ActonApp {
-    /// Initializes and launches the Acton agent system.
+    /// Initializes and launches the Acton actor system.
     ///
     /// This is the main entry point for starting the Acton framework. It performs
     /// the necessary setup, including initializing the system message broker
@@ -37,18 +37,18 @@ impl ActonApp {
     /// The process involves:
     /// 1. Loading configuration from XDG-compliant locations using [`ActonConfig::load()`].
     /// 2. Creating a default `ActonApp` instance.
-    /// 3. Converting this instance into an [`AgentRuntime`] via the `From<ActonApp>` trait.
+    /// 3. Converting this instance into an [`ActorRuntime`] via the `From<ActonApp>` trait.
     ///    This conversion triggers the actual initialization logic (e.g., broker setup)
-    ///    defined within the `From` implementation for `AgentRuntime`.
+    ///    defined within the `From` implementation for `ActorRuntime`.
     ///
     /// # Returns
     ///
-    /// An [`AgentRuntime`] instance representing the successfully launched and operational
-    /// Acton system. This runtime can then be used to spawn top-level agents.
-    #[must_use] 
-    pub fn launch() -> AgentRuntime {
+    /// An [`ActorRuntime`] instance representing the successfully launched and operational
+    /// Acton system. This runtime can then be used to spawn top-level actors.
+    #[must_use]
+    pub fn launch() -> ActorRuntime {
         let system = Self;
-        // The .into() call triggers the From<ActonApp> for AgentRuntime,
+        // The .into() call triggers the From<ActonApp> for ActorRuntime,
         // which performs the actual system initialization.
         system.into()
     }

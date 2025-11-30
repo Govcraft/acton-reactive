@@ -21,38 +21,38 @@ use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::{instrument, trace}; // Removed unused error import
 
-use crate::actor::ManagedAgent;
-use crate::common::{Envelope, OutboundEnvelope, ReactorItem, ReactorMap};
+use crate::actor::ManagedActor;
 use crate::common::config::CONFIG;
+use crate::common::{Envelope, OutboundEnvelope, ReactorItem, ReactorMap};
 use crate::message::{BrokerRequestEnvelope, MessageAddress, SystemSignal};
-use crate::traits::AgentHandleInterface;
+use crate::traits::ActorHandleInterface;
 
-/// Type-state marker for a [`ManagedAgent`] that is actively running and processing messages.
+/// Type-state marker for a [`ManagedActor`] that is actively running and processing messages.
 ///
-/// When a `ManagedAgent` is in the `Started` state, its main asynchronous task (`wake`)
+/// When a `ManagedActor` is in the `Started` state, its main asynchronous task (`wake`)
 /// is running, receiving messages from its inbox and dispatching them to the appropriate
 /// handlers registered during the [`Idle`](super::Idle) state.
 ///
-/// Agents in this state can create message envelopes using methods like [`ManagedAgent::new_envelope`]
-/// and [`ManagedAgent::new_parent_envelope`]. Interaction typically occurs via the agent's
-/// [`AgentHandle`].
+/// Actors in this state can create message envelopes using methods like [`ManagedActor::new_envelope`]
+/// and [`ManagedActor::new_parent_envelope`]. Interaction typically occurs via the actor's
+/// [`ActorHandle`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Started;
 
-/// Implements methods specific to a `ManagedAgent` in the `Started` state.
-impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
-    /// Creates a new [`OutboundEnvelope`] originating from this agent.
+/// Implements methods specific to a `ManagedActor` in the `Started` state.
+impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
+    /// Creates a new [`OutboundEnvelope`] originating from this actor.
     ///
     /// This helper function constructs an envelope suitable for sending a message
-    /// from this agent to another recipient. The envelope's `return_address`
-    /// will be set to this agent's [`MessageAddress`]. The `recipient_address`
+    /// from this actor to another recipient. The envelope's `return_address`
+    /// will be set to this actor's [`MessageAddress`]. The `recipient_address`
     /// field will be `None` initially and should typically be set using the
     /// envelope's methods before sending.
     ///
     /// # Returns
     ///
-    /// An [`OutboundEnvelope`] configured with this agent as the sender.
-    /// Returns `None` only if the agent's handle somehow lacks an outbox, which
+    /// An [`OutboundEnvelope`] configured with this actor as the sender.
+    /// Returns `None` only if the actor's handle somehow lacks an outbox, which
     /// should not occur under normal circumstances.
     pub fn new_envelope(&self) -> Option<OutboundEnvelope> {
         self.cancellation_token.clone().map(|cancellation_token| {
@@ -63,18 +63,18 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         })
     }
 
-    /// Creates a new [`OutboundEnvelope`] addressed to this agent's parent.
+    /// Creates a new [`OutboundEnvelope`] addressed to this actor's parent.
     ///
     /// This is a convenience method for creating an envelope specifically for
-    /// replying or sending a message to the agent that supervises this one.
+    /// replying or sending a message to the actor that supervises this one.
     /// It clones the parent's return address information.
     ///
     /// # Returns
     ///
     /// *   `Some(OutboundEnvelope)`: An envelope configured to be sent to the parent,
-    ///     if this agent has a parent. The `return_address` will be the parent's address,
-    ///     and the `recipient_address` will be this agent's address.
-    /// *   `None`: If this agent does not have a parent (i.e., it's a top-level agent).
+    ///     if this actor has a parent. The `return_address` will be the parent's address,
+    ///     and the `recipient_address` will be this actor's address.
+    /// *   `None`: If this actor does not have a parent (i.e., it's a top-level actor).
     pub fn new_parent_envelope(&self) -> Option<OutboundEnvelope> {
         // Only construct if both parent and cancellation_token exist
         let cancellation_token = self.cancellation_token.clone()?;
@@ -90,7 +90,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     /// Handles dispatching a mutable reactor with error handling
     async fn dispatch_mutable_handler(
         &mut self,
-        reactor: &ReactorItem<Agent>,
+        reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
     ) {
         match reactor {
@@ -101,14 +101,16 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                 let result = fut(self, envelope).await;
                 if let Err((err, error_type_id)) = result {
                     let message_type_id = envelope.message.as_any().type_id();
-                    if let Some(handler) =
-                        self.error_handler_map.remove(&(message_type_id, error_type_id))
+                    if let Some(handler) = self
+                        .error_handler_map
+                        .remove(&(message_type_id, error_type_id))
                     {
                         handler(self, envelope, err.as_ref()).await;
-                        self.error_handler_map.insert((message_type_id, error_type_id), handler);
+                        self.error_handler_map
+                            .insert((message_type_id, error_type_id), handler);
                     } else {
                         tracing::error!(
-                            "Unhandled error from message handler in agent {}: {:?}",
+                            "Unhandled error from message handler in actor {}: {:?}",
                             self.id(),
                             err
                         );
@@ -124,20 +126,25 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     /// Spawns a read-only handler as a concurrent task
     fn spawn_read_only_handler(
         &self,
-        reactor: &ReactorItem<Agent>,
+        reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
         read_only_futures: &FuturesUnordered<tokio::task::JoinHandle<()>>,
     ) {
         match reactor {
             ReactorItem::ReadOnly(fut) => {
                 let fut = fut(self, envelope);
-                read_only_futures.push(tokio::spawn(async move { fut.await; }));
+                read_only_futures.push(tokio::spawn(async move {
+                    fut.await;
+                }));
             }
             ReactorItem::ReadOnlyFallible(fut) => {
                 let fut = fut(self, envelope);
                 read_only_futures.push(tokio::spawn(async move {
                     if let Err((err, _)) = fut.await {
-                        tracing::error!("Unhandled error from read-only message handler: {:?}", err);
+                        tracing::error!(
+                            "Unhandled error from read-only message handler: {:?}",
+                            err
+                        );
                     }
                 }));
             }
@@ -152,13 +159,13 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
     #[instrument(skip(mutable_reactors, read_only_reactors, self))]
     pub(crate) async fn wake(
         &mut self,
-        mutable_reactors: ReactorMap<Agent>,
-        read_only_reactors: ReactorMap<Agent>,
+        mutable_reactors: ReactorMap<Actor>,
+        read_only_reactors: ReactorMap<Actor>,
     ) {
         (self.after_start)(self).await;
         assert!(
             self.cancellation_token.is_some(),
-            "ManagedAgent in Started state must always have a cancellation_token"
+            "ManagedActor in Started state must always have a cancellation_token"
         );
         let cancel_token = self.cancellation_token.clone().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
@@ -171,7 +178,7 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
         loop {
             tokio::select! {
                 () = &mut cancel => {
-                    trace!("Forceful cancellation triggered for agent: {}", self.id());
+                    trace!("Forceful cancellation triggered for actor: {}", self.id());
                     while read_only_futures.next().await.is_some() {}
                     break;
                 }
@@ -211,36 +218,39 @@ impl<Agent: Default + Send + Debug + 'static> ManagedAgent<Started, Agent> {
                         }
                     } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate)) {
                         while read_only_futures.next().await.is_some() {}
-                        trace!("Terminate signal received for agent: {}. Closing inbox.", self.id());
+                        trace!("Terminate signal received for actor: {}. Closing inbox.", self.id());
                         (self.before_stop)(self).await;
                         self.inbox.close();
                     } else {
-                        trace!("No handler found for message type {:?} for agent {}", type_id, self.id());
+                        trace!("No handler found for message type {:?} for actor {}", type_id, self.id());
                     }
                 }
             }
         }
 
-        trace!("Message loop finished for agent: {}. Initiating final termination.", self.id());
+        trace!(
+            "Message loop finished for actor: {}. Initiating final termination.",
+            self.id()
+        );
         while read_only_futures.next().await.is_some() {}
         terminate_children(&self.handle, self.id()).await;
         (self.after_stop)(self).await;
-        trace!("Agent {} stopped.", self.id());
+        trace!("Actor {} stopped.", self.id());
     }
 }
 
-/// Terminates all child agents of the given handle concurrently.
+/// Terminates all child actors of the given handle concurrently.
 ///
 /// This is a standalone async function to avoid the `&mut self` / `&self` async borrow
 /// checker constraints that would require `State: Sync`.
 #[instrument(skip(handle))]
-async fn terminate_children(handle: &crate::common::AgentHandle, agent_id: &acton_ern::Ern) {
+async fn terminate_children(handle: &crate::common::ActorHandle, actor_id: &acton_ern::Ern) {
     use std::time::Duration;
     use tokio::time::timeout as tokio_timeout;
 
-    trace!("Terminating children for agent: {}", agent_id);
+    trace!("Terminating children for actor: {}", actor_id);
 
-    let timeout_ms = CONFIG.timeouts.agent_shutdown;
+    let timeout_ms = CONFIG.timeouts.actor_shutdown;
 
     let stop_futures: Vec<_> = handle
         .children()
@@ -279,5 +289,5 @@ async fn terminate_children(handle: &crate::common::AgentHandle, agent_id: &acto
 
     join_all(stop_futures).await; // Wait for all stop signals to be sent/processed.
 
-    trace!("All children stopped for agent: {}.", agent_id);
+    trace!("All children stopped for actor: {}.", actor_id);
 }

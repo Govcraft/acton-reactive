@@ -1,9 +1,9 @@
 use acton_reactive::prelude::*;
 use tracing_subscriber;
-mod agents;
+mod actors;
 mod messages;
 
-use agents::MyAgent;
+use actors::MyActor;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,9 +15,9 @@ tracing_subscriber::fmt()
 
 let mut app = ActonApp::launch();
 
-// Example agent setup
-let my_agent = app.new_agent::<MyAgent>();
-    my_agent.start().await;
+// Example actor setup
+let my_actor = app.new_actor::<MyActor>();
+    my_actor.start().await;
 
     // Shut down Acton system
     app.shutdown_all().await?;

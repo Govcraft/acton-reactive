@@ -1,7 +1,7 @@
 function LogomarkPaths() {
   return (
     <g fill="none" stroke="#38BDF8" strokeLinejoin="round" strokeWidth={2}>
-      {/* Stylized "A" representing an Agent */}
+      {/* Stylized "A" representing an Actor */}
       <path d="M18 6 L6 30 M18 6 L30 30 M10 22 L26 22" />
       {/* Message arrow flowing through */}
       <path d="M14 14 L22 14 L20 11 M22 14 L20 17" strokeWidth={1.5} />

@@ -25,12 +25,12 @@ from pathlib import Path
 from acton_ipc import (
     ActonIpcClient,
     ActonIpcClientSync,
+    ConnectionError,
     PushNotification,
-    get_default_socket_path,
-    socket_exists,
     ServerError,
     TimeoutError,
-    ConnectionError,
+    get_default_socket_path,
+    socket_exists,
 )
 
 
@@ -40,9 +40,9 @@ async def demo_basic_request(client: ActonIpcClient):
 
     try:
         response = await client.request(
-            target='calculator',
-            message_type='Add',
-            payload={'a': 42, 'b': 8},
+            target="calculator",
+            message_type="Add",
+            payload={"a": 42, "b": 8},
             timeout_ms=5000,
         )
 
@@ -62,11 +62,11 @@ async def demo_fire_and_forget(client: ActonIpcClient):
     print("\n=== Fire and Forget ===")
 
     await client.fire_and_forget(
-        target='logger',
-        message_type='LogEvent',
+        target="logger",
+        message_type="LogEvent",
         payload={
-            'level': 'info',
-            'message': 'Hello from Python client!',
+            "level": "info",
+            "message": "Hello from Python client!",
         },
     )
     print("  Message sent (no response expected)")
@@ -79,9 +79,9 @@ async def demo_streaming(client: ActonIpcClient):
     try:
         frame_count = 0
         async for frame in client.stream(
-            target='search',
-            message_type='SearchQuery',
-            payload={'query': 'test', 'limit': 5},
+            target="search",
+            message_type="SearchQuery",
+            payload={"query": "test", "limit": 5},
             timeout_ms=10000,
         ):
             frame_count += 1
@@ -108,7 +108,7 @@ async def demo_discovery(client: ActonIpcClient):
 
         print(f"  Protocol: v{discovery.protocol_version.get('current', '?')}")
         print(f"  Capabilities: {discovery.protocol_version.get('capabilities', {})}")
-        print(f"  Agents: {[a.get('name') for a in discovery.agents]}")
+        print(f"  Actors: {[a.get('name') for a in discovery.actors]}")
         print(f"  Message Types: {discovery.message_types}")
 
     except Exception as e:
@@ -128,7 +128,7 @@ async def demo_subscriptions(client: ActonIpcClient):
     client.on_push(on_notification)
 
     # Subscribe to message types
-    success = await client.subscribe(['PriceUpdate', 'StatusChange'])
+    success = await client.subscribe(["PriceUpdate", "StatusChange"])
     print(f"  Subscription result: {'success' if success else 'failed'}")
 
     # In a real scenario, we would wait for push notifications here
@@ -139,14 +139,14 @@ async def demo_subscriptions(client: ActonIpcClient):
     print(f"  Received {len(received_notifications)} notifications")
 
     # Unsubscribe
-    await client.unsubscribe(['PriceUpdate', 'StatusChange'])
+    await client.unsubscribe(["PriceUpdate", "StatusChange"])
     print("  Unsubscribed")
 
 
 async def main_async():
     """Async main entry point."""
     # Determine socket path
-    socket_path = get_default_socket_path('ipc_client_example')
+    socket_path = get_default_socket_path("ipc_client_example")
 
     # Allow override via command line
     if len(sys.argv) > 1:
@@ -183,7 +183,7 @@ async def main_async():
 
 def main_sync():
     """Synchronous main entry point (alternative)."""
-    socket_path = get_default_socket_path('ipc_client_example')
+    socket_path = get_default_socket_path("ipc_client_example")
 
     if len(sys.argv) > 1:
         socket_path = Path(sys.argv[1])
@@ -201,13 +201,13 @@ def main_sync():
 
         # Basic request
         response = client.request(
-            target='calculator',
-            message_type='Add',
-            payload={'a': 10, 'b': 20},
+            target="calculator",
+            message_type="Add",
+            payload={"a": 10, "b": 20},
         )
         print(f"Result: {response.payload}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Use async version by default
     asyncio.run(main_async())

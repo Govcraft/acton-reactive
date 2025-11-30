@@ -23,32 +23,31 @@ use acton_test::prelude::*;
 
 // Use direct paths as re-exports seem problematic in test context
 use crate::setup::{
-    messages::{Ping, Pong},
     initialize_tracing,
+    messages::{Ping, Pong},
 };
 
 mod setup;
 
-// Represents the internal state (model) for the Shopping Cart agent.
+// Represents the internal state (model) for the Shopping Cart actor.
 #[derive(Default, Debug, Clone)]
 pub(crate) struct ShoppingCart {
-    // Note: Storing the agent's own handle in its state is generally discouraged.
-    // It's usually accessed via `agent.handle()` within handlers.
+    // Note: Storing the actor's own handle in its state is generally discouraged.
+    // It's usually accessed via `actor.handle()` within handlers.
     // This might be leftover from an older pattern or for a specific reason not obvious here.
     // We keep it for now as refactoring it out is beyond the scope of renaming/commenting.
-    agent_handle: AgentHandle,
-    // Handle to the PriceService agent needed for communication.
-    pub(crate) price_service_handle: AgentHandle,
+    actor_handle: ActorHandle,
+    // Handle to the PriceService actor needed for communication.
+    pub(crate) price_service_handle: ActorHandle,
 }
 
-
-/// Tests direct message passing and reply mechanism between two agents.
+/// Tests direct message passing and reply mechanism between two actors.
 ///
 /// **Scenario:**
-/// 1. A `PriceService` agent is created and started. It handles `Pong` messages by replying with `PongResponse(100)`.
-/// 2. A `ShoppingCart` agent is created and started. It holds a handle to the `PriceService`.
-/// 3. The `ShoppingCart` agent handles `Ping` messages by sending a `Pong` message directly to the `PriceService`.
-/// 4. The `ShoppingCart` agent handles `PongResponse` messages (replies from `PriceService`) by asserting the received price is 100.
+/// 1. A `PriceService` actor is created and started. It handles `Pong` messages by replying with `PongResponse(100)`.
+/// 2. A `ShoppingCart` actor is created and started. It holds a handle to the `PriceService`.
+/// 3. The `ShoppingCart` actor handles `Ping` messages by sending a `Pong` message directly to the `PriceService`.
+/// 4. The `ShoppingCart` actor handles `PongResponse` messages (replies from `PriceService`) by asserting the received price is 100.
 /// 5. The test triggers the interaction by calling `shopping_cart_context.trigger()` three times, which sends `Ping` messages from the `ShoppingCart` to itself.
 /// 6. The runtime is shut down.
 ///
@@ -62,11 +61,11 @@ async fn test_reply() -> anyhow::Result<()> {
     // Launch the runtime environment.
     let mut runtime = ActonApp::launch();
 
-    // Create and start the PriceService agent. The `new` function returns a context struct holding the handle.
+    // Create and start the PriceService actor. The `new` function returns a context struct holding the handle.
     let price_service_context = PriceService::new(&mut runtime).await;
     // Clone the handle for the ShoppingCart.
-    let price_service_handle = price_service_context.agent_handle.clone();
-    // Create and start the ShoppingCart agent, providing the PriceService handle.
+    let price_service_handle = price_service_context.actor_handle.clone();
+    // Create and start the ShoppingCart actor, providing the PriceService handle.
     let shopping_cart_context = ShoppingCart::new(price_service_handle, &mut runtime).await;
 
     // Trigger the interaction multiple times. Each trigger sends Ping -> Pong -> PongResponse.
@@ -74,8 +73,11 @@ async fn test_reply() -> anyhow::Result<()> {
     shopping_cart_context.trigger().await;
     shopping_cart_context.trigger().await;
 
-    // Shut down the system and all agents
-    runtime.shutdown_all().await.expect("Failed to shut down system");
+    // Shut down the system and all actors
+    runtime
+        .shutdown_all()
+        .await
+        .expect("Failed to shut down system");
     Ok(())
 }
 
@@ -87,102 +89,107 @@ pub struct PongResponse(i8);
 #[derive(Default, Debug, Clone)]
 pub struct Trigger;
 
-// Represents the internal state (model) for the Price Service agent.
+// Represents the internal state (model) for the Price Service actor.
 #[derive(Default, Debug, Clone)]
 pub(crate) struct PriceService {
     // See note in ShoppingCart struct about storing own handle.
-    pub(crate) agent_handle: AgentHandle,
+    pub(crate) actor_handle: ActorHandle,
 }
 
 impl PriceService {
-    /// Creates, configures, and starts a new `PriceService` agent.
-    /// Returns a struct containing the handle to the started agent.
-    pub(crate) async fn new(runtime: &mut AgentRuntime) -> Self {
-        let config = AgentConfig::new(Ern::with_root("price_service").unwrap(), None, None).expect("Failed to create actor config");
-        // Create the agent builder.
-        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config);
-        // Configure the agent's behavior.
+    /// Creates, configures, and starts a new `PriceService` actor.
+    /// Returns a struct containing the handle to the started actor.
+    pub(crate) async fn new(runtime: &mut ActorRuntime) -> Self {
+        let config = ActorConfig::new(Ern::with_root("price_service").unwrap(), None, None)
+            .expect("Failed to create actor config");
+        // Create the actor builder.
+        let mut price_service_builder = runtime.new_actor_with_config::<Self>(config);
+        // Configure the actor's behavior.
         price_service_builder
             // Handler for `Pong` messages (sent by ShoppingCart).
-            .mutate_on::<Pong>(|_agent, envelope| {
+            .mutate_on::<Pong>(|_actor, envelope| {
                 trace!("Received Pong");
                 // Get an envelope pre-addressed to reply to the sender of the incoming `Pong` message.
                 let reply_envelope = envelope.reply_envelope();
                 // Perform the reply asynchronously.
-                AgentReply::from_async(
-                    async move {
-                        trace!("Sending PriceResponse");
-                        // Send the PongResponse back to the original sender (ShoppingCart).
-                        reply_envelope.send(PongResponse(100)).await;
-                    }
-                )
+                ActorReply::from_async(async move {
+                    trace!("Sending PriceResponse");
+                    // Send the PongResponse back to the original sender (ShoppingCart).
+                    reply_envelope.send(PongResponse(100)).await;
+                })
             });
 
-        // Start the agent and get its handle.
-        let agent_handle = price_service_builder.start().await;
+        // Start the actor and get its handle.
+        let actor_handle = price_service_builder.start().await;
         // Return the context struct containing the handle.
-        Self {
-            agent_handle,
-        }
+        Self { actor_handle }
     }
 }
 
 impl ShoppingCart {
-    /// Creates, configures, and starts a new `ShoppingCart` agent.
-    /// Returns a struct containing the handle to the started agent and the `PriceService` handle.
-    pub(crate) async fn new(price_service_handle: AgentHandle, runtime: &mut AgentRuntime) -> Self {
-        let config = AgentConfig::new(Ern::with_root("shopping_cart").unwrap(), None, None).expect("Failed to create actor config");
-        // Create the agent builder.
-        let mut shopping_cart_builder = runtime.new_agent_with_config::<Self>(config);
-        // Configure agent behavior
+    /// Creates, configures, and starts a new `ShoppingCart` actor.
+    /// Returns a struct containing the handle to the started actor and the `PriceService` handle.
+    pub(crate) async fn new(price_service_handle: ActorHandle, runtime: &mut ActorRuntime) -> Self {
+        let config = ActorConfig::new(Ern::with_root("shopping_cart").unwrap(), None, None)
+            .expect("Failed to create actor config");
+        // Create the actor builder.
+        let mut shopping_cart_builder = runtime.new_actor_with_config::<Self>(config);
+        // Configure actor behavior
         shopping_cart_builder
             // Handler for `Ping` messages (sent by the `trigger` method).
-            .mutate_on::<Ping>(|agent, envelope| {
-                // Get a reference to the PriceService handle stored in the agent's state.
-                let price_service_handle_ref = &agent.model.price_service_handle;
-                // Create a new envelope specifically addressed to the PriceService agent.
+            .mutate_on::<Ping>(|actor, envelope| {
+                // Get a reference to the PriceService handle stored in the actor's state.
+                let price_service_handle_ref = &actor.model.price_service_handle;
+                // Create a new envelope specifically addressed to the PriceService actor.
                 // `reply_address()` provides the necessary `MessageAddress`.
-                let request_envelope = envelope.new_envelope(&price_service_handle_ref.reply_address());
+                let request_envelope =
+                    envelope.new_envelope(&price_service_handle_ref.reply_address());
                 let target_name = price_service_handle_ref.name();
                 // Send the `Pong` message asynchronously.
-                AgentReply::from_async(async move {
-                    trace!( "Sending Pong to price_service id: {:?}", target_name);
+                ActorReply::from_async(async move {
+                    trace!("Sending Pong to price_service id: {:?}", target_name);
                     // Send the Pong message directly to the PriceService.
                     request_envelope.send(Pong).await;
                 })
             })
             // Handler for `PongResponse` messages (replies from PriceService).
-            .mutate_on::<PongResponse>(|_agent, envelope| {
+            .mutate_on::<PongResponse>(|_actor, envelope| {
                 // Extract the price from the message content.
                 let price = envelope.message().0;
                 // Assert that the received price is correct.
                 assert_eq!(price, 100);
                 info!("fin. price: {}", price);
-                AgentReply::immediate()
+                ActorReply::immediate()
             });
 
-        // Set the PriceService handle in the agent's state before starting.
+        // Set the PriceService handle in the actor's state before starting.
         shopping_cart_builder.model.price_service_handle = price_service_handle.clone();
 
-        // Start the agent and get its handle.
+        // Start the actor and get its handle.
         let shopping_cart_handle = shopping_cart_builder.start().await;
 
         // Return the context struct containing the handles.
         Self {
-            agent_handle: shopping_cart_handle, // Store own handle (see note above)
+            actor_handle: shopping_cart_handle, // Store own handle (see note above)
             price_service_handle,
         }
     }
 
-    /// Sends a `Ping` message to this `ShoppingCart` agent itself to initiate the
+    /// Sends a `Ping` message to this `ShoppingCart` actor itself to initiate the
     /// price request sequence.
     #[instrument(skip(self), level = "debug")]
     pub(crate) async fn trigger(&self) {
         // Note: No need for &mut self because internal state mutation happens
         // via message handlers, not direct struct modification here.
-        trace!("agent_handle id is {}", self.agent_handle.id().root.to_string());
-        trace!("and pricing_service id is {}", self.price_service_handle.id().root.to_string());
+        trace!(
+            "actor_handle id is {}",
+            self.actor_handle.id().root.to_string()
+        );
+        trace!(
+            "and pricing_service id is {}",
+            self.price_service_handle.id().root.to_string()
+        );
         // Send Ping to self to kick off the process defined in the Ping handler.
-        self.agent_handle.send(Ping).await;
+        self.actor_handle.send(Ping).await;
     }
 }

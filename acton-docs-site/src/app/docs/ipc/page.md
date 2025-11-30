@@ -3,16 +3,16 @@ title: IPC Communication
 nextjs:
   metadata:
     title: IPC Communication - acton-reactive
-    description: Inter-Process Communication in acton-reactive, enabling external processes to communicate with agents via Unix Domain Sockets.
+    description: Inter-Process Communication in acton-reactive, enabling external processes to communicate with actors via Unix Domain Sockets.
 ---
 
-This guide covers Inter-Process Communication (IPC) in `acton-reactive`, enabling external processes to communicate with agents via Unix Domain Sockets.
+This guide covers Inter-Process Communication (IPC) in `acton-reactive`, enabling external processes to communicate with actors via Unix Domain Sockets.
 
 ---
 
 ## Overview
 
-The IPC module allows external processes (written in any language) to communicate with `acton-reactive` agents via Unix Domain Sockets.
+The IPC module allows external processes (written in any language) to communicate with `acton-reactive` actors via Unix Domain Sockets.
 
 ### Capabilities
 
@@ -49,9 +49,9 @@ The IPC module allows external processes (written in any language) to communicat
 │  └──────────────────────────┬──────────────────────────┘   │
 │                             │                               │
 │  ┌──────────────────────────┴──────────────────────────┐   │
-│  │                    Agent System                      │   │
+│  │                    Actor System                      │   │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐             │   │
-│  │  │ Agent A │  │ Agent B │  │  Broker │             │   │
+│  │  │ Actor A │  │ Actor B │  │  Broker │             │   │
 │  │  └─────────┘  └─────────┘  └─────────┘             │   │
 │  └─────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────┘
@@ -105,11 +105,11 @@ async fn main() -> anyhow::Result<()> {
     registry.register::<MyRequest>("MyRequest");
     registry.register::<MyResponse>("MyResponse");
 
-    // 4. Create and start agents
-    let agent = runtime.new_agent::<MyState>().start().await;
+    // 4. Create and start actors
+    let actor = runtime.new_actor::<MyState>().start().await;
 
-    // 5. Expose agents via IPC
-    runtime.ipc_expose("my_service", agent);
+    // 5. Expose actors via IPC
+    runtime.ipc_expose("my_service", actor);
 
     // 6. Start IPC listener
     let listener = runtime.start_ipc_listener().await?;
@@ -202,30 +202,30 @@ println!("Registered types: {:?}", types);
 
 ---
 
-## Exposing Agents
+## Exposing Actors
 
 ### Basic Exposure
 
 ```rust
-// Expose a single agent
+// Expose a single actor
 runtime.ipc_expose("calculator", calculator_handle);
 
-// Expose multiple agents
+// Expose multiple actors
 runtime.ipc_expose("kv_store", kv_store_handle);
 runtime.ipc_expose("price_feed", price_feed_handle);
 ```
 
-### Hiding Agents
+### Hiding Actors
 
 ```rust
-// Remove agent from IPC (but keep it running)
+// Remove actor from IPC (but keep it running)
 runtime.ipc_hide("calculator");
 ```
 
 ### Dynamic Exposure
 
 ```rust
-// Expose agents dynamically based on configuration
+// Expose actors dynamically based on configuration
 if config.enable_calculator {
     runtime.ipc_expose("calculator", calc_handle);
 }
@@ -237,7 +237,7 @@ if config.enable_calculator {
 
 ### Pattern 1: Request-Response
 
-Client sends a request, agent sends a single response.
+Client sends a request, actor sends a single response.
 
 **Server Side:**
 
@@ -253,7 +253,7 @@ registry.register::<AddRequest>("AddRequest");
 registry.register::<AddResult>("AddResult");
 
 // Handler
-calculator.mutate_on::<AddRequest>(|_agent, ctx| {
+calculator.mutate_on::<AddRequest>(|_actor, ctx| {
     let a = ctx.message().a;
     let b = ctx.message().b;
     let reply = ctx.reply_envelope();
@@ -284,7 +284,7 @@ RECEIVE: IpcResponse {
 
 ### Pattern 2: Request-Stream
 
-Client sends a request, agent sends multiple response frames.
+Client sends a request, actor sends multiple response frames.
 
 **Server Side:**
 
@@ -296,9 +296,9 @@ struct ListRequest { page_size: usize }
 struct ListItem { id: u64, name: String }
 
 // Handler sends multiple responses
-agent.mutate_on::<ListRequest>(|agent, ctx| {
+actor.mutate_on::<ListRequest>(|actor, ctx| {
     let page_size = ctx.message().page_size;
-    let items = agent.model.items.clone();
+    let items = actor.model.items.clone();
     let reply = ctx.reply_envelope();
 
     Box::pin(async move {
@@ -401,7 +401,7 @@ All messages use length-prefixed framing:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `target` | `string` | Yes | Target agent name |
+| `target` | `string` | Yes | Target actor name |
 | `message_type` | `string` | Yes | Registered type name |
 | `payload` | `object` | Yes | Message data |
 | `request_id` | `string` | No | Correlation ID |
@@ -626,13 +626,13 @@ pub enum IpcError {
     /// Message type not registered
     UnknownMessageType(String),
 
-    /// Target agent not found
-    AgentNotFound(String),
+    /// Target actor not found
+    ActorNotFound(String),
 
     /// JSON/MessagePack serialization error
     SerializationError(String),
 
-    /// Agent inbox full (backpressure)
+    /// Actor inbox full (backpressure)
     TargetBusy(String),
 
     /// Protocol violation
@@ -667,7 +667,7 @@ if not response['success']:
     error = response['error']
     if 'UnknownMessageType' in error:
         print("Server doesn't recognize message type")
-    elif 'AgentNotFound' in error:
+    elif 'ActorNotFound' in error:
         print("Target service not available")
     elif 'RateLimited' in error:
         print("Too many requests, backing off...")
@@ -778,7 +778,7 @@ struct HealthStatus { status: String }
 registry.register::<HealthCheck>("HealthCheck");
 registry.register::<HealthStatus>("HealthStatus");
 
-agent.act_on::<HealthCheck>(|_, ctx| {
+actor.act_on::<HealthCheck>(|_, ctx| {
     let reply = ctx.reply_envelope();
     Box::pin(async move {
         reply.send(HealthStatus { status: "ok".to_string() }).await;

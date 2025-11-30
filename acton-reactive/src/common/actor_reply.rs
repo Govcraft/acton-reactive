@@ -14,22 +14,22 @@
  * limitations under that License.
  */
 
-//! Convenient boxed future replies for agents using old or new style handlers
+//! Convenient boxed future replies for actors using old or new style handlers
 
 use std::future::Future;
 use std::pin::Pin;
 
 /// A utility namespace for creating standard return types for `act_on` message handlers.
 ///
-/// Message handlers registered with [`ManagedAgent::act_on`](crate::actor::ManagedAgent::act_on)
+/// Message handlers registered with [`ManagedActor::act_on`](crate::actor::ManagedActor::act_on)
 /// typically need to return a future that is boxed and pinned, specifically [`FutureBox`].
 /// This struct provides helpers to create common future types that might be needed
 /// as part of that process.
 ///
 /// It acts purely as a namespace and is not intended to be instantiated.
-pub struct AgentReply;
+pub struct ActorReply;
 
-impl AgentReply {
+impl ActorReply {
     /// Creates an immediately resolving, no-operation future, boxed and pinned.
     ///
     /// This is useful for message handlers that perform synchronous work or do not need

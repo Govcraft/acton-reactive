@@ -24,8 +24,8 @@ use crate::traits::ActonMessage;
 
 /// Wraps a message intended for broadcast via the system message broker.
 ///
-/// When an agent wants to publish a message to all interested subscribers, it sends
-/// a `BrokerRequest` containing the message payload to the [`AgentBroker`](crate::common::AgentBroker).
+/// When an actor wants to publish a message to all interested subscribers, it sends
+/// a `BrokerRequest` containing the message payload to the [`Broker`](crate::common::Broker).
 /// This struct includes the message itself (as a type-erased `Arc<dyn ActonMessage>`)
 /// along with its `TypeId` and type name for efficient routing and debugging by the broker.
 ///
@@ -60,7 +60,7 @@ impl BrokerRequest {
     ///
     /// # Returns
     ///
-    /// A new `BrokerRequest` ready to be sent to the `AgentBroker`.
+    /// A new `BrokerRequest` ready to be sent to the `Broker`.
     pub fn new<M: ActonMessage + Send + Sync + 'static>(message: M) -> Self {
         let message_type_name = std::any::type_name_of_val(&message).to_string();
         let message_type_id = message.type_id();

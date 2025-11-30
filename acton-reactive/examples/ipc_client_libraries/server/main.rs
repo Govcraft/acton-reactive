@@ -128,7 +128,7 @@ struct StatusChange {
 }
 
 // ============================================================================
-// Agent States
+// Actor States
 // ============================================================================
 
 /// Calculator service - stateless arithmetic operations.
@@ -160,18 +160,18 @@ struct PricePublisherState {
 struct PublishTick;
 
 // ============================================================================
-// Agent Creation Functions
+// Actor Creation Functions
 // ============================================================================
 
-/// Creates the calculator service agent.
-async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut calculator = runtime.new_agent_with_name::<CalculatorState>("calculator".to_string());
+/// Creates the calculator service actor.
+async fn create_calculator_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut calculator = runtime.new_actor_with_name::<CalculatorState>("calculator".to_string());
 
     // Handle addition requests
-    calculator.mutate_on::<Add>(|agent, envelope| {
+    calculator.mutate_on::<Add>(|actor, envelope| {
         let msg = envelope.message();
         let result = msg.a + msg.b;
-        agent.model.operations_performed += 1;
+        actor.model.operations_performed += 1;
 
         let response = CalcResult {
             result,
@@ -180,7 +180,7 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
 
         println!(
             "  [Calculator] Add: {} + {} = {} (op #{})",
-            msg.a, msg.b, result, agent.model.operations_performed
+            msg.a, msg.b, result, actor.model.operations_performed
         );
 
         let reply_envelope = envelope.reply_envelope();
@@ -190,10 +190,10 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     });
 
     // Handle multiplication requests
-    calculator.mutate_on::<Multiply>(|agent, envelope| {
+    calculator.mutate_on::<Multiply>(|actor, envelope| {
         let msg = envelope.message();
         let result = msg.a * msg.b;
-        agent.model.operations_performed += 1;
+        actor.model.operations_performed += 1;
 
         let response = CalcResult {
             result,
@@ -202,7 +202,7 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
 
         println!(
             "  [Calculator] Multiply: {} × {} = {} (op #{})",
-            msg.a, msg.b, result, agent.model.operations_performed
+            msg.a, msg.b, result, actor.model.operations_performed
         );
 
         let reply_envelope = envelope.reply_envelope();
@@ -214,20 +214,20 @@ async fn create_calculator_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     calculator.start().await
 }
 
-/// Creates the search service agent with streaming results.
-async fn create_search_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut search = runtime.new_agent_with_name::<SearchState>("search".to_string());
+/// Creates the search service actor with streaming results.
+async fn create_search_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut search = runtime.new_actor_with_name::<SearchState>("search".to_string());
 
     // Handle search requests - stream multiple results
-    search.mutate_on::<SearchQuery>(|agent, envelope| {
+    search.mutate_on::<SearchQuery>(|actor, envelope| {
         let msg = envelope.message();
         let query = msg.query.clone();
         let limit = msg.limit.min(10).max(1); // 1-10 results
-        agent.model.searches_performed += 1;
+        actor.model.searches_performed += 1;
 
         println!(
             "  [Search] Query: \"{}\" (limit: {}, search #{})",
-            query, limit, agent.model.searches_performed
+            query, limit, actor.model.searches_performed
         );
 
         let reply_envelope = envelope.reply_envelope();
@@ -237,7 +237,7 @@ async fn create_search_agent(runtime: &mut AgentRuntime) -> AgentHandle {
             let sample_items = vec![
                 "Getting Started Guide",
                 "API Reference",
-                "Tutorial: Building Agents",
+                "Tutorial: Building Actors",
                 "Configuration Options",
                 "Performance Tuning",
                 "Troubleshooting FAQ",
@@ -268,18 +268,20 @@ async fn create_search_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     search.start().await
 }
 
-/// Creates the logger service agent (fire-and-forget).
-async fn create_logger_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut logger = runtime.new_agent_with_name::<LoggerState>("logger".to_string());
+/// Creates the logger service actor (fire-and-forget).
+async fn create_logger_actor(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut logger = runtime.new_actor_with_name::<LoggerState>("logger".to_string());
 
     // Handle log events - no response needed
-    logger.mutate_on::<LogEvent>(|agent, envelope| {
+    logger.mutate_on::<LogEvent>(|actor, envelope| {
         let msg = envelope.message();
-        agent.model.log_count += 1;
+        actor.model.log_count += 1;
 
         println!(
             "  [Logger] #{} [{}] {}",
-            agent.model.log_count, msg.level.to_uppercase(), msg.message
+            actor.model.log_count,
+            msg.level.to_uppercase(),
+            msg.message
         );
 
         Box::pin(async {})
@@ -288,15 +290,15 @@ async fn create_logger_agent(runtime: &mut AgentRuntime) -> AgentHandle {
     logger.start().await
 }
 
-/// Creates the price publisher agent that publishes notifications.
-async fn create_price_publisher(runtime: &mut AgentRuntime) -> AgentHandle {
+/// Creates the price publisher actor that publishes notifications.
+async fn create_price_publisher(runtime: &mut ActorRuntime) -> ActorHandle {
     let mut publisher =
-        runtime.new_agent_with_name::<PricePublisherState>("price_publisher".to_string());
+        runtime.new_actor_with_name::<PricePublisherState>("price_publisher".to_string());
 
     // Handle publish ticks - publish price updates
-    publisher.mutate_on::<PublishTick>(|agent, _envelope| {
-        agent.model.tick_count += 1;
-        let tick = agent.model.tick_count;
+    publisher.mutate_on::<PublishTick>(|actor, _envelope| {
+        actor.model.tick_count += 1;
+        let tick = actor.model.tick_count;
 
         // Simulate price movements
         let symbols = ["AAPL", "GOOGL", "MSFT", "AMZN"];
@@ -322,7 +324,7 @@ async fn create_price_publisher(runtime: &mut AgentRuntime) -> AgentHandle {
             symbol, price, change
         );
 
-        let broker = agent.broker().clone();
+        let broker = actor.broker().clone();
         Box::pin(async move {
             broker.broadcast(update).await;
         })
@@ -332,7 +334,7 @@ async fn create_price_publisher(runtime: &mut AgentRuntime) -> AgentHandle {
 }
 
 /// Spawns a task that periodically triggers price publication.
-fn spawn_price_ticker(publisher: AgentHandle) {
+fn spawn_price_ticker(publisher: ActorHandle) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
 
@@ -382,25 +384,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📝 Registered {} IPC message types", registry.len());
 
-    // Create service agents
-    let calculator = create_calculator_agent(&mut runtime).await;
+    // Create service actors
+    let calculator = create_calculator_actor(&mut runtime).await;
     println!("🧮 Calculator service started");
 
-    let search = create_search_agent(&mut runtime).await;
+    let search = create_search_actor(&mut runtime).await;
     println!("🔍 Search service started");
 
-    let logger = create_logger_agent(&mut runtime).await;
+    let logger = create_logger_actor(&mut runtime).await;
     println!("📋 Logger service started");
 
     let price_publisher = create_price_publisher(&mut runtime).await;
     println!("💰 Price publisher started");
 
-    // Expose agents for IPC access
+    // Expose actors for IPC access
     runtime.ipc_expose("calculator", calculator.clone());
     runtime.ipc_expose("search", search.clone());
     runtime.ipc_expose("logger", logger.clone());
     runtime.ipc_expose("price_publisher", price_publisher.clone());
-    println!("🔗 Exposed agents: calculator, search, logger, price_publisher");
+    println!("🔗 Exposed actors: calculator, search, logger, price_publisher");
 
     // Start price ticker for push notifications
     spawn_price_ticker(price_publisher);

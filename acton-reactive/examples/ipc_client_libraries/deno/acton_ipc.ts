@@ -121,8 +121,8 @@ export interface PushNotification {
   timestamp_ms: number;
 }
 
-/** Agent info from discovery */
-export interface AgentInfo {
+/** Actor info from discovery */
+export interface ActorInfo {
   name: string;
   ern: string;
 }
@@ -137,7 +137,7 @@ export interface ProtocolVersionInfo {
 
 /** Discovery response */
 export interface DiscoveryResponse {
-  agents: AgentInfo[];
+  actors: ActorInfo[];
   message_types: string[];
   protocol_version?: ProtocolVersionInfo;
 }
@@ -618,7 +618,7 @@ export class ActonIpcClient {
   }
 
   /**
-   * Discover available agents and message types.
+   * Discover available actors and message types.
    */
   discover(): Promise<DiscoveryResponse> {
     if (!this.conn) {
@@ -636,15 +636,15 @@ export class ActonIpcClient {
       this.pendingRequests.set(correlationId, {
         resolve: (response) => {
           if (response.success) {
-            // Discovery responses have agents/message_types at top level
+            // Discovery responses have actors/message_types at top level
             // (not wrapped in payload), so cast the response directly
             const discResponse = response as unknown as {
-              agents?: AgentInfo[];
+              actors?: ActorInfo[];
               message_types?: string[];
               protocol_version?: ProtocolVersionInfo;
             };
             resolve({
-              agents: discResponse.agents || [],
+              actors: discResponse.actors || [],
               message_types: discResponse.message_types || [],
               protocol_version: discResponse.protocol_version,
             });
@@ -663,7 +663,7 @@ export class ActonIpcClient {
 
       const frame = encodeFrame(MSG_TYPE_DISCOVER, {
         correlation_id: correlationId,
-        include_agents: true,
+        include_actors: true,
         include_message_types: true,
       });
       this.conn!.write(frame).catch((err) => {

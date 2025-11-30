@@ -17,7 +17,7 @@
 // Import the macro directly from the acton_macro crate
 use acton_macro::acton_actor;
 
-/// Represents a minimal agent state (model) for tests where the agent's
+/// Represents a minimal actor state (model) for tests where the actor's
 /// primary purpose is message handling or interaction, without needing internal state.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]

@@ -21,14 +21,22 @@ use tracing::trace;
 use acton_reactive::prelude::*;
 
 // Import necessary components from other modules within the example.
-use crate::{price_service::PriceService, CartItem, ItemScanned};
 use crate::printer::{Printer, ToggleHelp};
+use crate::{price_service::PriceService, CartItem, ItemScanned};
 
 // --- Constants ---
 // List of possible grocery items for random selection.
 const GROCERY_ITEMS: &[&str] = &[
-    "Apple", "Banana", "Cantaloupe", "Orange", "Grapes", "Mango",
-    "Pineapple", "Strawberry", "Milk", "Bread",
+    "Apple",
+    "Banana",
+    "Cantaloupe",
+    "Orange",
+    "Grapes",
+    "Mango",
+    "Pineapple",
+    "Strawberry",
+    "Milk",
+    "Bread",
 ];
 // Range for random quantity generation.
 const QUANTITY_MIN: i32 = 1;
@@ -37,30 +45,30 @@ const QUANTITY_MAX: i32 = 6;
 const ITEM_SELECTION_ERROR: &str = "Failed to select an item";
 
 /// Represents the main coordinator for the fruit market transaction.
-/// Holds handles to the necessary service agents (`Printer`, `PriceService`).
-/// This struct itself is not an agent state but orchestrates interactions.
+/// Holds handles to the necessary service actors (`Printer`, `PriceService`).
+/// This struct itself is not an actor state but orchestrates interactions.
 #[derive(Clone)]
 pub struct Register {
-    /// Handle to the `PriceService` agent.
-    pub(crate) price_service: AgentHandle,
-    /// Handle to the `Printer` agent.
-    pub(crate) printer: AgentHandle,
+    /// Handle to the `PriceService` actor.
+    pub(crate) price_service: ActorHandle,
+    /// Handle to the `Printer` actor.
+    pub(crate) printer: ActorHandle,
 }
 
 impl Register {
     /// Creates a new transaction context by initializing and starting
-    /// the required `Printer` and `PriceService` agents.
-    /// Returns a `Register` instance holding handles to these agents.
-    pub async fn new_transaction(runtime: &mut AgentRuntime) -> anyhow::Result<Self> {
+    /// the required `Printer` and `PriceService` actors.
+    /// Returns a `Register` instance holding handles to these actors.
+    pub async fn new_transaction(runtime: &mut ActorRuntime) -> anyhow::Result<Self> {
         Ok(Self {
-            // Start the Printer agent.
+            // Start the Printer actor.
             printer: Printer::power_on(runtime).await?,
-            // Start the `PriceService` agent.
+            // Start the `PriceService` actor.
             price_service: PriceService::create(runtime).await?,
         })
     }
 
-    /// Sends a message to the Printer agent to toggle the help display.
+    /// Sends a message to the Printer actor to toggle the help display.
     pub async fn toggle_help(&self) -> anyhow::Result<()> {
         trace!("Register::toggle_help");
         // Use the stored printer handle to send the ToggleHelp message.
@@ -69,22 +77,19 @@ impl Register {
     }
 
     /// Simulates scanning a random item with a random quantity.
-    /// Sends an `ItemScanned` message to the `PriceService` agent.
+    /// Sends an `ItemScanned` message to the `PriceService` actor.
     pub async fn scan(&self) -> anyhow::Result<()> {
         // Use a seeded RNG for potentially reproducible results if needed, otherwise `from_entropy` is fine.
         let mut rng = StdRng::from_os_rng();
 
         // Choose a random item name from the list.
-        let item_name = (*GROCERY_ITEMS
-            .choose(&mut rng)
-            .expect(ITEM_SELECTION_ERROR))
-            .to_string();
+        let item_name = (*GROCERY_ITEMS.choose(&mut rng).expect(ITEM_SELECTION_ERROR)).to_string();
 
         // Generate a random quantity.
         let quantity = rng.random_range(QUANTITY_MIN..=QUANTITY_MAX);
 
         // Create a new CartItem and wrap it in an ItemScanned message.
-        // Send the message to the PriceService agent using its stored handle.
+        // Send the message to the PriceService actor using its stored handle.
         self.price_service
             .send(ItemScanned(CartItem::new(item_name, quantity)))
             .await;

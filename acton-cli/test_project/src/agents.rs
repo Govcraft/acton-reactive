@@ -1,2 +1,2 @@
-mod my_agent;
-pub(crate) use my_agent::MyAgent;
+mod my_actor;
+pub(crate) use my_actor::MyActor;

@@ -15,28 +15,28 @@
  */
 
 use acton_reactive::prelude::*;
-// Import the macro for agent state structs
+// Import the macro for actor state structs
 use acton_macro::acton_actor;
 
-/// Defines the internal state (the "model") for our basic agent.
+/// Defines the internal state (the "model") for our basic actor.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
-struct BasicAgentState {
+struct BasicActorState {
     /// Simple counter state modified by message handlers.
     some_state: usize,
 }
 
-/// A message used to initiate interaction with the agent.
+/// A message used to initiate interaction with the actor.
 // Messages need to be Clone and Debug to satisfy the ActonMessage trait bounds.
 #[derive(Debug, Clone)]
 struct PingMsg;
 
-/// A reply message sent back by the agent after receiving `PingMsg`.
+/// A reply message sent back by the actor after receiving `PingMsg`.
 // Note: We rely on the blanket `impl<T> ActonMessage for T` and derive traits manually.
 #[derive(Debug, Clone)]
 struct PongMsg;
 
-/// A final message sent by the agent before stopping.
+/// A final message sent by the actor before stopping.
 // Note: We rely on the blanket `impl<T> ActonMessage for T` and derive traits manually.
 #[derive(Debug, Clone)]
 struct BuhByeMsg;
@@ -46,25 +46,25 @@ async fn main() {
     // 1. Launch the Acton runtime environment.
     let mut runtime = ActonApp::launch();
 
-    // 2. Create an agent builder.
-    //    `new_agent` takes the *state type* (model) as a generic parameter.
-    //    It returns a builder (`ManagedAgent` in the `Idle` state) which we use to configure the agent.
-    let mut agent_builder = runtime.new_agent::<BasicAgentState>();
+    // 2. Create an actor builder.
+    //    `new_actor` takes the *state type* (model) as a generic parameter.
+    //    It returns a builder (`ManagedActor` in the `Idle` state) which we use to configure the actor.
+    let mut actor_builder = runtime.new_actor::<BasicActorState>();
 
-    // 3. Configure the agent's behavior by defining message handlers using `mutate_on`.
-    agent_builder
+    // 3. Configure the actor's behavior by defining message handlers using `mutate_on`.
+    actor_builder
         // Define a handler for `PingMsg`.
-        // The closure receives the `ManagedAgent` (giving access to `model` and `handle`)
+        // The closure receives the `ManagedActor` (giving access to `model` and `handle`)
         // and the incoming message `envelope`.
-        .mutate_on::<PingMsg>(|agent, envelope| {
+        .mutate_on::<PingMsg>(|actor, envelope| {
             println!("Pinged. You can mutate me!");
-            // Access and modify the agent's internal state (`model`).
-            agent.model.some_state += 1;
+            // Access and modify the actor's internal state (`model`).
+            actor.model.some_state += 1;
 
             // Get an envelope pre-addressed to reply to the sender of the incoming `PingMsg`.
             let reply_envelope = envelope.reply_envelope();
 
-            // Handlers must return a future (specifically `AgentReply`, which wraps a `Pin<Box<dyn Future>>`).
+            // Handlers must return a future (specifically `ActorReply`, which wraps a `Pin<Box<dyn Future>>`).
             // This allows handlers to perform asynchronous operations.
             Box::pin(async move {
                 // Send the `PongMsg` back to the original sender.
@@ -72,45 +72,48 @@ async fn main() {
             })
         })
         // Define a handler for `PongMsg`.
-        .mutate_on::<PongMsg>(|agent, _envelope| {
+        .mutate_on::<PongMsg>(|actor, _envelope| {
             println!("I got ponged!");
-            agent.model.some_state += 1;
+            actor.model.some_state += 1;
 
-            // Get a clone of the agent's own handle to send a message to itself.
+            // Get a clone of the actor's own handle to send a message to itself.
             // Cloning is necessary to move the handle into the async block.
-            let self_handle = agent.handle().clone();
+            let self_handle = actor.handle().clone();
 
-            // `AgentReply::from_async` is a helper to wrap a future in the required type.
-            AgentReply::from_async(async move {
+            // `ActorReply::from_async` is a helper to wrap a future in the required type.
+            ActorReply::from_async(async move {
                 // Send `BuhByeMsg` to self.
                 self_handle.send(BuhByeMsg).await;
             })
         })
         // Define a handler for `BuhByeMsg`.
-        .mutate_on::<BuhByeMsg>(|_agent, _envelope| {
+        .mutate_on::<BuhByeMsg>(|_actor, _envelope| {
             println!("Thanks for all the fish! Buh Bye!");
             // If a handler doesn't need to perform async work or reply,
-            // `AgentReply::immediate()` signifies immediate completion.
-            AgentReply::immediate()
+            // `ActorReply::immediate()` signifies immediate completion.
+            ActorReply::immediate()
         })
-        // Define a callback that runs after the agent stops.
-        .after_stop(|agent| {
-            println!("Agent stopped with state value: {}", agent.model.some_state);
+        // Define a callback that runs after the actor stops.
+        .after_stop(|actor| {
+            println!("Actor stopped with state value: {}", actor.model.some_state);
             // Assert the final state after all messages are processed.
-            debug_assert_eq!(agent.model.some_state, 2);
-            AgentReply::immediate()
+            debug_assert_eq!(actor.model.some_state, 2);
+            ActorReply::immediate()
         });
 
-    // 4. Start the agent.
-    //    This transitions the agent to the `Started` state, spawns its task,
-    //    and returns an `AgentHandle` for interaction.
-    let agent_handle = agent_builder.start().await;
+    // 4. Start the actor.
+    //    This transitions the actor to the `Started` state, spawns its task,
+    //    and returns an `ActorHandle` for interaction.
+    let actor_handle = actor_builder.start().await;
 
-    // 5. Send the initial `PingMsg` to the running agent using its handle.
-    agent_handle.send(PingMsg).await;
+    // 5. Send the initial `PingMsg` to the running actor using its handle.
+    actor_handle.send(PingMsg).await;
 
     // 6. Shut down the runtime.
-    //    This gracefully stops all agents managed by the runtime, allowing them
+    //    This gracefully stops all actors managed by the runtime, allowing them
     //    to finish processing messages and run their `after_stop` handlers.
-    runtime.shutdown_all().await.expect("Failed to shut down system");
+    runtime
+        .shutdown_all()
+        .await
+        .expect("Failed to shut down system");
 }

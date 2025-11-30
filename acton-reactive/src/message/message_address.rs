@@ -14,33 +14,32 @@
  * limitations under that License.
  */
 
-use crate::common::AgentSender;
+use crate::common::ActorSender;
 use acton_ern::prelude::*;
 use derive_new::new; // Keep using derive_new for the constructor
 
-/// Represents the addressable endpoint of an agent, combining its identity and inbox channel.
+/// Represents the addressable endpoint of an actor, combining its identity and inbox channel.
 ///
 /// A `MessageAddress` contains the necessary information to send a message to a specific
-/// agent: its unique identifier (`sender`, an [`Ern`]) and the sender half (`address`)
+/// actor: its unique identifier (`sender`, an [`Ern`]) and the sender half (`address`)
 /// of the MPSC channel connected to its inbox.
 ///
 /// This struct is typically used within message envelopes ([`OutboundEnvelope`]) to specify
 /// the sender and recipient of a message.
 #[derive(new, Clone, Debug)]
 pub struct MessageAddress {
-    /// The sender part of the MPSC channel for the agent's inbox.
-    pub(crate) address: AgentSender,
-    /// The unique identifier (`Ern`) of the agent associated with this address.
+    /// The sender part of the MPSC channel for the actor's inbox.
+    pub(crate) address: ActorSender,
+    /// The unique identifier (`Ern`) of the actor associated with this address.
     pub(crate) sender: Ern,
-    
 }
 
 impl MessageAddress {
-    /// Returns the root name component of the agent's identifier (`Ern`).
+    /// Returns the root name component of the actor's identifier (`Ern`).
     ///
-    /// This provides a simple string representation of the agent's base name.
+    /// This provides a simple string representation of the actor's base name.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn name(&self) -> &str {
         self.sender.root.as_str()
     }

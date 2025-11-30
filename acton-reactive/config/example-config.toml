@@ -3,8 +3,8 @@
 # Copy this file to your XDG config directory: ~/.config/acton/config.toml
 
 [timeouts]
-# Timeout for agent shutdown in milliseconds
-agent_shutdown = 10000
+# Timeout for actor shutdown in milliseconds
+actor_shutdown = 10000
 
 # Timeout for system-wide shutdown in milliseconds
 system_shutdown = 30000
@@ -16,17 +16,17 @@ read_only_handler_flush = 10
 # Maximum concurrent read-only handlers before forced flush
 concurrent_handlers_high_water_mark = 100
 
-# Default MPSC channel size for agent message inbox
-agent_inbox_capacity = 255
+# Default MPSC channel size for actor message inbox
+actor_inbox_capacity = 255
 
-# Dummy channel size for closed/default MessageAddress/AgentHandle
+# Dummy channel size for closed/default MessageAddress/ActorHandle
 dummy_channel_size = 1
 
 [defaults]
-# Default agent name when none provided
-agent_name = "agent"
+# Default actor name when none provided
+actor_name = "actor"
 
-# Default root Ern identifier for agents
+# Default root Ern identifier for actors
 root_ern = "default"
 
 [tracing]
@@ -63,11 +63,11 @@ enable_metrics = false
 #
 # For production systems:
 # [timeouts]
-# agent_shutdown = 5000
+# actor_shutdown = 5000
 # system_shutdown = 15000
 #
 # [limits]
-# agent_inbox_capacity = 512
+# actor_inbox_capacity = 512
 # concurrent_handlers_high_water_mark = 50
 #
 # [tracing]

@@ -1,21 +1,21 @@
 //! Defines core message structures, addressing, envelopes, and system signals.
 //!
-//! This module provides the necessary components for agent communication within the
-//! Acton framework. It includes types for identifying agents, wrapping messages
+//! This module provides the necessary components for actor communication within the
+//! Acton framework. It includes types for identifying actors, wrapping messages
 //! for transmission, interacting with the message broker, and sending system-level
 //! control signals.
 //!
 //! # Key Components
 //!
-//! *   [`MessageAddress`]: Represents the unique, addressable endpoint of an agent,
+//! *   [`MessageAddress`]: Represents the unique, addressable endpoint of an actor,
 //!     combining its ID (`Ern`) and its inbox channel sender.
-//! *   [`OutboundEnvelope`]: A wrapper for messages being sent *from* an agent,
+//! *   [`OutboundEnvelope`]: A wrapper for messages being sent *from* an actor,
 //!     containing routing information like sender and recipient addresses.
 //! *   [`BrokerRequest`]: A message wrapper specifically for requests intended to be
-//!     broadcast via the system [`AgentBroker`](crate::common::AgentBroker).
+//!     broadcast via the system [`Broker`](crate::common::Broker).
 //! *   [`BrokerRequestEnvelope`]: A specialized envelope used internally by the broker
 //!     to distribute broadcast messages efficiently.
-//! *   [`SystemSignal`]: An enum representing control signals used for managing agent
+//! *   [`SystemSignal`]: An enum representing control signals used for managing actor
 //!     lifecycles (e.g., `Terminate`).
 //!
 //! Internal submodules handle implementation details like the internal `Envelope`
@@ -59,14 +59,14 @@ mod broker_request;
 mod broker_request_envelope;
 /// Defines the internal `Envelope` used for channel communication.
 mod envelope;
+/// Defines [`MessageAddress`].
+mod message_address;
 /// Defines [`MessageContext`] passed to message handlers.
 mod message_context;
 /// Defines [`MessageError`].
 mod message_error;
 /// Defines [`OutboundEnvelope`].
 mod outbound_envelope;
-/// Defines [`MessageAddress`].
-mod message_address;
 /// Defines [`SystemSignal`].
 mod signal;
 /// Defines [`SubscribeBroker`] message.

@@ -31,21 +31,21 @@ pub enum IpcError {
     /// with [`IpcTypeRegistry::register`](super::IpcTypeRegistry::register).
     UnknownMessageType(String),
 
-    /// Target agent not found in the agent registry.
+    /// Target actor not found in the actor registry.
     ///
-    /// The target agent must be exposed via
-    /// [`AgentRuntime::ipc_expose`](crate::common::AgentRuntime::ipc_expose)
+    /// The target actor must be exposed via
+    /// [`ActorRuntime::ipc_expose`](crate::common::ActorRuntime::ipc_expose)
     /// before it can receive IPC messages.
-    AgentNotFound(String),
+    ActorNotFound(String),
 
     /// Serialization or deserialization failure.
     ///
     /// Contains the underlying error message from the serialization library.
     SerializationError(String),
 
-    /// Target agent's inbox is full.
+    /// Target actor's inbox is full.
     ///
-    /// The agent's message channel has reached capacity. The sender should
+    /// The actor's message channel has reached capacity. The sender should
     /// implement backoff and retry logic.
     TargetBusy,
 
@@ -93,9 +93,9 @@ impl fmt::Display for IpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownMessageType(t) => write!(f, "Unknown message type: {t}"),
-            Self::AgentNotFound(a) => write!(f, "Agent not found: {a}"),
+            Self::ActorNotFound(a) => write!(f, "Actor not found: {a}"),
             Self::SerializationError(e) => write!(f, "Serialization error: {e}"),
-            Self::TargetBusy => write!(f, "Target agent inbox is full"),
+            Self::TargetBusy => write!(f, "Target actor inbox is full"),
             Self::ConnectionClosed => write!(f, "Connection closed"),
             Self::ProtocolError(e) => write!(f, "Protocol error: {e}"),
             Self::IoError(e) => write!(f, "I/O error: {e}"),
@@ -158,8 +158,8 @@ impl From<std::io::Error> for IpcError {
 /// - `correlation_id`: Unique identifier for request-response correlation.
 ///   Uses MTI format (e.g., `req_<uuid_v7>`) for time-ordered, unique IDs.
 ///
-/// - `target`: The logical name of the target agent (as registered via
-///   [`AgentRuntime::ipc_expose`](crate::common::AgentRuntime::ipc_expose)),
+/// - `target`: The logical name of the target actor (as registered via
+///   [`ActorRuntime::ipc_expose`](crate::common::ActorRuntime::ipc_expose)),
 ///   or a full ERN string for direct addressing.
 ///
 /// - `message_type`: The registered type name used to look up the deserializer
@@ -168,7 +168,7 @@ impl From<std::io::Error> for IpcError {
 /// - `payload`: The serialized message data as a JSON value.
 ///
 /// - `expects_reply` (optional): Whether the client expects a response from the
-///   agent. When `true`, the IPC listener will wait for the agent to send a
+///   actor. When `true`, the IPC listener will wait for the actor to send a
 ///   reply using `reply_envelope.send()` and forward it back to the client.
 ///   Defaults to `false` for fire-and-forget messages.
 ///
@@ -180,7 +180,7 @@ pub struct IpcEnvelope {
     /// Correlation ID for request-response tracking (MTI format recommended).
     pub correlation_id: String,
 
-    /// Target agent (logical name or ERN string).
+    /// Target actor (logical name or ERN string).
     pub target: String,
 
     /// Message type name (for deserialization lookup).
@@ -189,11 +189,11 @@ pub struct IpcEnvelope {
     /// Serialized payload.
     pub payload: serde_json::Value,
 
-    /// Whether the client expects a response from the agent.
+    /// Whether the client expects a response from the actor.
     ///
     /// When `true`, the IPC listener creates a temporary channel to receive
-    /// the agent's response and waits for it (up to `response_timeout_ms`).
-    /// The agent should use `reply_envelope.send(response)` to send the reply.
+    /// the actor's response and waits for it (up to `response_timeout_ms`).
+    /// The actor should use `reply_envelope.send(response)` to send the reply.
     ///
     /// Defaults to `false` for fire-and-forget messages.
     #[serde(default)]
@@ -202,8 +202,8 @@ pub struct IpcEnvelope {
     /// Whether the client expects a streaming response (multiple messages).
     ///
     /// When `true`, the IPC listener creates a channel to receive multiple
-    /// responses from the agent, forwarding each as a stream frame. The stream
-    /// ends when the agent sends a message with `is_final: true` or the
+    /// responses from the actor, forwarding each as a stream frame. The stream
+    /// ends when the actor sends a message with `is_final: true` or the
     /// timeout expires.
     ///
     /// Mutually exclusive with `expects_reply` - if both are set, `expects_stream`
@@ -237,7 +237,7 @@ impl IpcEnvelope {
     ///
     /// # Arguments
     ///
-    /// * `target` - The logical name or ERN of the target agent.
+    /// * `target` - The logical name or ERN of the target actor.
     /// * `message_type` - The registered type name of the message.
     /// * `payload` - The serialized message payload.
     ///
@@ -251,7 +251,11 @@ impl IpcEnvelope {
     /// );
     /// ```
     #[must_use]
-    pub fn new(target: impl Into<String>, message_type: impl Into<String>, payload: serde_json::Value) -> Self {
+    pub fn new(
+        target: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: serde_json::Value,
+    ) -> Self {
         use mti::prelude::*;
         Self {
             correlation_id: "req".create_type_id::<V7>().to_string(),
@@ -268,14 +272,14 @@ impl IpcEnvelope {
     ///
     /// Uses the MTI crate to generate a unique, time-ordered correlation ID
     /// in the format `req_<uuid_v7>`. This creates a request that expects a
-    /// reply from the target agent.
+    /// reply from the target actor.
     ///
-    /// The agent should use `reply_envelope.send(response)` in their handler
+    /// The actor should use `reply_envelope.send(response)` in their handler
     /// to send a reply back to the IPC client.
     ///
     /// # Arguments
     ///
-    /// * `target` - The logical name or ERN of the target agent.
+    /// * `target` - The logical name or ERN of the target actor.
     /// * `message_type` - The registered type name of the message.
     /// * `payload` - The serialized message payload.
     ///
@@ -287,7 +291,7 @@ impl IpcEnvelope {
     ///     "GetPrice",
     ///     serde_json::json!({ "symbol": "AAPL" }),
     /// );
-    /// // The IPC listener will wait for the agent's response
+    /// // The IPC listener will wait for the actor's response
     /// ```
     #[must_use]
     pub fn new_request(
@@ -311,7 +315,7 @@ impl IpcEnvelope {
     ///
     /// # Arguments
     ///
-    /// * `target` - The logical name or ERN of the target agent.
+    /// * `target` - The logical name or ERN of the target actor.
     /// * `message_type` - The registered type name of the message.
     /// * `payload` - The serialized message payload.
     /// * `timeout_ms` - Maximum time in milliseconds to wait for a response.
@@ -347,12 +351,12 @@ impl IpcEnvelope {
 
     /// Creates a new streaming request IPC envelope.
     ///
-    /// The agent can send multiple responses, each forwarded as a stream frame.
-    /// The stream ends when the agent completes or the timeout expires.
+    /// The actor can send multiple responses, each forwarded as a stream frame.
+    /// The stream ends when the actor completes or the timeout expires.
     ///
     /// # Arguments
     ///
-    /// * `target` - The logical name or ERN of the target agent.
+    /// * `target` - The logical name or ERN of the target actor.
     /// * `message_type` - The registered type name of the message.
     /// * `payload` - The serialized message payload.
     ///
@@ -388,7 +392,7 @@ impl IpcEnvelope {
     ///
     /// # Arguments
     ///
-    /// * `target` - The logical name or ERN of the target agent.
+    /// * `target` - The logical name or ERN of the target actor.
     /// * `message_type` - The registered type name of the message.
     /// * `payload` - The serialized message payload.
     /// * `timeout_ms` - Maximum time in milliseconds to wait for stream completion.
@@ -436,7 +440,7 @@ impl IpcEnvelope {
     /// Creates a new request-response IPC envelope with a specified correlation ID.
     ///
     /// Use this when you need to control the correlation ID while also expecting
-    /// a response from the target agent.
+    /// a response from the target actor.
     #[must_use]
     pub fn with_correlation_id_request(
         correlation_id: impl Into<String>,
@@ -456,7 +460,7 @@ impl IpcEnvelope {
         }
     }
 
-    /// Returns `true` if this envelope expects a reply from the target agent.
+    /// Returns `true` if this envelope expects a reply from the target actor.
     #[must_use]
     pub const fn expects_reply(&self) -> bool {
         self.expects_reply
@@ -497,8 +501,8 @@ impl IpcEnvelope {
 /// {
 ///   "correlation_id": "req_01h9xz7n2e5p6q8r3t1u2v3w4x",
 ///   "success": false,
-///   "error": "Agent not found: price_service",
-///   "error_code": "AGENT_NOT_FOUND"
+///   "error": "Actor not found: price_service",
+///   "error_code": "ACTOR_NOT_FOUND"
 /// }
 /// ```
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -594,7 +598,11 @@ pub struct IpcStreamFrame {
 impl IpcStreamFrame {
     /// Creates a new stream frame with data.
     #[must_use]
-    pub fn data(correlation_id: impl Into<String>, sequence: u32, payload: serde_json::Value) -> Self {
+    pub fn data(
+        correlation_id: impl Into<String>,
+        sequence: u32,
+        payload: serde_json::Value,
+    ) -> Self {
         Self {
             correlation_id: correlation_id.into(),
             sequence,
@@ -607,7 +615,11 @@ impl IpcStreamFrame {
 
     /// Creates the final frame in a stream (with optional payload).
     #[must_use]
-    pub fn final_frame(correlation_id: impl Into<String>, sequence: u32, payload: Option<serde_json::Value>) -> Self {
+    pub fn final_frame(
+        correlation_id: impl Into<String>,
+        sequence: u32,
+        payload: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             correlation_id: correlation_id.into(),
             sequence,
@@ -620,7 +632,11 @@ impl IpcStreamFrame {
 
     /// Creates an error frame that terminates the stream.
     #[must_use]
-    pub fn error(correlation_id: impl Into<String>, sequence: u32, error: impl Into<String>) -> Self {
+    pub fn error(
+        correlation_id: impl Into<String>,
+        sequence: u32,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             correlation_id: correlation_id.into(),
             sequence,
@@ -698,7 +714,10 @@ impl IpcSubscribeRequest {
     /// Used by IPC clients to create subscription requests with custom correlation IDs.
     #[must_use]
     #[allow(dead_code)]
-    pub fn with_correlation_id(correlation_id: impl Into<String>, message_types: Vec<String>) -> Self {
+    pub fn with_correlation_id(
+        correlation_id: impl Into<String>,
+        message_types: Vec<String>,
+    ) -> Self {
         Self {
             correlation_id: correlation_id.into(),
             message_types,
@@ -757,7 +776,7 @@ impl IpcUnsubscribeRequest {
 
 /// Push notification sent from server to client for broker subscription forwarding.
 ///
-/// When internal agents broadcast messages via the broker, and an IPC client has
+/// When internal actors broadcast messages via the broker, and an IPC client has
 /// subscribed to that message type, the message is forwarded to the client as
 /// a push notification.
 ///
@@ -767,7 +786,7 @@ impl IpcUnsubscribeRequest {
 /// {
 ///   "notification_id": "push_01h9xz7n2e5p6q8r3t1u2v3w4x",
 ///   "message_type": "PriceUpdate",
-///   "source_agent": "price_service",
+///   "source_actor": "price_service",
 ///   "payload": { "symbol": "AAPL", "price": 150.25 }
 /// }
 /// ```
@@ -779,9 +798,9 @@ pub struct IpcPushNotification {
     /// The message type name.
     pub message_type: String,
 
-    /// The source agent that broadcast the message (if known).
+    /// The source actor that broadcast the message (if known).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_agent: Option<String>,
+    pub source_actor: Option<String>,
 
     /// The serialized message payload.
     pub payload: serde_json::Value,
@@ -795,7 +814,7 @@ impl IpcPushNotification {
     #[must_use]
     pub fn new(
         message_type: impl Into<String>,
-        source_agent: Option<String>,
+        source_actor: Option<String>,
         payload: serde_json::Value,
     ) -> Self {
         use mti::prelude::*;
@@ -808,7 +827,7 @@ impl IpcPushNotification {
         Self {
             notification_id: "push".create_type_id::<V7>().to_string(),
             message_type: message_type.into(),
-            source_agent,
+            source_actor,
             payload,
             timestamp_ms,
         }
@@ -884,7 +903,7 @@ impl IpcResponse {
     pub fn error(correlation_id: impl Into<String>, err: &IpcError) -> Self {
         let (error_code, error_message) = match err {
             IpcError::UnknownMessageType(_) => ("UNKNOWN_MESSAGE_TYPE", err.to_string()),
-            IpcError::AgentNotFound(_) => ("AGENT_NOT_FOUND", err.to_string()),
+            IpcError::ActorNotFound(_) => ("ACTOR_NOT_FOUND", err.to_string()),
             IpcError::SerializationError(_) => ("SERIALIZATION_ERROR", err.to_string()),
             IpcError::TargetBusy => ("TARGET_BUSY", err.to_string()),
             IpcError::ConnectionClosed => ("CONNECTION_CLOSED", err.to_string()),
@@ -928,9 +947,9 @@ impl IpcResponse {
 // Discovery Types
 // ============================================================================
 
-/// Request to discover available agents and message types.
+/// Request to discover available actors and message types.
 ///
-/// Clients can use this to query what agents are exposed for IPC access
+/// Clients can use this to query what actors are exposed for IPC access
 /// and what message types are registered for deserialization.
 ///
 /// # Wire Format
@@ -938,7 +957,7 @@ impl IpcResponse {
 /// ```json
 /// {
 ///   "correlation_id": "disc_01h9xz7n2e5p6q8r3t1u2v3w4x",
-///   "include_agents": true,
+///   "include_actors": true,
 ///   "include_message_types": true
 /// }
 /// ```
@@ -947,9 +966,9 @@ pub struct IpcDiscoverRequest {
     /// Correlation ID for the discovery request.
     pub correlation_id: String,
 
-    /// Whether to include the list of exposed agents in the response.
+    /// Whether to include the list of exposed actors in the response.
     #[serde(default = "default_true")]
-    pub include_agents: bool,
+    pub include_actors: bool,
 
     /// Whether to include the list of registered message types in the response.
     #[serde(default = "default_true")]
@@ -964,24 +983,24 @@ const fn default_true() -> bool {
 impl IpcDiscoverRequest {
     /// Creates a new discovery request with a generated correlation ID.
     ///
-    /// By default, includes both agents and message types in the response.
+    /// By default, includes both actors and message types in the response.
     #[must_use]
     pub fn new() -> Self {
         use mti::prelude::*;
         Self {
             correlation_id: "disc".create_type_id::<V7>().to_string(),
-            include_agents: true,
+            include_actors: true,
             include_message_types: true,
         }
     }
 
-    /// Creates a discovery request for agents only.
+    /// Creates a discovery request for actors only.
     #[must_use]
-    pub fn agents_only() -> Self {
+    pub fn actors_only() -> Self {
         use mti::prelude::*;
         Self {
             correlation_id: "disc".create_type_id::<V7>().to_string(),
-            include_agents: true,
+            include_actors: true,
             include_message_types: false,
         }
     }
@@ -992,7 +1011,7 @@ impl IpcDiscoverRequest {
         use mti::prelude::*;
         Self {
             correlation_id: "disc".create_type_id::<V7>().to_string(),
-            include_agents: false,
+            include_actors: false,
             include_message_types: true,
         }
     }
@@ -1001,12 +1020,12 @@ impl IpcDiscoverRequest {
     #[must_use]
     pub fn with_correlation_id(
         correlation_id: impl Into<String>,
-        include_agents: bool,
+        include_actors: bool,
         include_message_types: bool,
     ) -> Self {
         Self {
             correlation_id: correlation_id.into(),
-            include_agents,
+            include_actors,
             include_message_types,
         }
     }
@@ -1018,13 +1037,13 @@ impl Default for IpcDiscoverRequest {
     }
 }
 
-/// Information about an exposed agent.
+/// Information about an exposed actor.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AgentInfo {
-    /// The logical name used to address this agent via IPC.
+pub struct ActorInfo {
+    /// The logical name used to address this actor via IPC.
     pub name: String,
 
-    /// The agent's full ERN (Entity Resource Name).
+    /// The actor's full ERN (Entity Resource Name).
     pub ern: String,
 }
 
@@ -1182,7 +1201,7 @@ impl<'de> Deserialize<'de> for ProtocolCapabilities {
 
 /// Response to a discovery request.
 ///
-/// Contains information about available agents and/or registered message types
+/// Contains information about available actors and/or registered message types
 /// based on what was requested, along with protocol version information.
 ///
 /// # Wire Format
@@ -1203,7 +1222,7 @@ impl<'de> Deserialize<'de> for ProtocolCapabilities {
 ///       "discovery": true
 ///     }
 ///   },
-///   "agents": [
+///   "actors": [
 ///     { "name": "price_service", "ern": "ern:acton:..." },
 ///     { "name": "order_service", "ern": "ern:acton:..." }
 ///   ],
@@ -1229,9 +1248,9 @@ pub struct IpcDiscoverResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<ProtocolVersionInfo>,
 
-    /// List of exposed agents (if requested and successful).
+    /// List of exposed actors (if requested and successful).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agents: Option<Vec<AgentInfo>>,
+    pub actors: Option<Vec<ActorInfo>>,
 
     /// List of registered message type names (if requested and successful).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1245,7 +1264,7 @@ impl ProtocolVersionInfo {
     #[must_use]
     pub fn current() -> Self {
         use crate::common::ipc::protocol::{
-            MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION, PROTOCOL_VERSION, ProtocolCapability,
+            ProtocolCapability, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION, PROTOCOL_VERSION,
         };
 
         #[cfg(not(feature = "ipc-messagepack"))]
@@ -1278,7 +1297,7 @@ impl IpcDiscoverResponse {
     #[must_use]
     pub fn success(
         correlation_id: impl Into<String>,
-        agents: Option<Vec<AgentInfo>>,
+        actors: Option<Vec<ActorInfo>>,
         message_types: Option<Vec<String>>,
     ) -> Self {
         Self {
@@ -1286,7 +1305,7 @@ impl IpcDiscoverResponse {
             success: true,
             error: None,
             protocol_version: Some(ProtocolVersionInfo::current()),
-            agents,
+            actors,
             message_types,
         }
     }
@@ -1297,7 +1316,7 @@ impl IpcDiscoverResponse {
     #[must_use]
     pub fn success_without_version(
         correlation_id: impl Into<String>,
-        agents: Option<Vec<AgentInfo>>,
+        actors: Option<Vec<ActorInfo>>,
         message_types: Option<Vec<String>>,
     ) -> Self {
         Self {
@@ -1305,7 +1324,7 @@ impl IpcDiscoverResponse {
             success: true,
             error: None,
             protocol_version: None,
-            agents,
+            actors,
             message_types,
         }
     }
@@ -1318,7 +1337,7 @@ impl IpcDiscoverResponse {
             success: false,
             error: Some(error.into()),
             protocol_version: None,
-            agents: None,
+            actors: None,
             message_types: None,
         }
     }
@@ -1369,14 +1388,17 @@ mod tests {
 
         assert!(envelope.expects_reply);
         assert_eq!(envelope.response_timeout_ms, 5000);
-        assert_eq!(envelope.response_timeout(), std::time::Duration::from_millis(5000));
+        assert_eq!(
+            envelope.response_timeout(),
+            std::time::Duration::from_millis(5000)
+        );
     }
 
     #[test]
     fn test_ipc_envelope_serialization() {
         let envelope = IpcEnvelope::with_correlation_id(
             "test_123",
-            "agent",
+            "actor",
             "Ping",
             serde_json::json!({ "value": 42 }),
         );
@@ -1385,7 +1407,7 @@ mod tests {
         let deserialized: IpcEnvelope = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.correlation_id, "test_123");
-        assert_eq!(deserialized.target, "agent");
+        assert_eq!(deserialized.target, "actor");
         assert_eq!(deserialized.message_type, "Ping");
         assert!(!deserialized.expects_reply);
     }
@@ -1395,7 +1417,7 @@ mod tests {
         // Test that expects_reply defaults to false when not present in JSON
         let json = r#"{
             "correlation_id": "test_123",
-            "target": "agent",
+            "target": "actor",
             "message_type": "Ping",
             "payload": {}
         }"#;
@@ -1409,7 +1431,7 @@ mod tests {
     fn test_ipc_envelope_deserialization_with_expects_reply() {
         let json = r#"{
             "correlation_id": "test_123",
-            "target": "agent",
+            "target": "actor",
             "message_type": "Query",
             "payload": {"q": "test"},
             "expects_reply": true,
@@ -1432,11 +1454,11 @@ mod tests {
 
     #[test]
     fn test_ipc_response_error() {
-        let err = IpcError::AgentNotFound("test_agent".to_string());
+        let err = IpcError::ActorNotFound("test_actor".to_string());
         let response = IpcResponse::error("test_123", &err);
 
         assert!(!response.success);
-        assert_eq!(response.error_code, Some("AGENT_NOT_FOUND".to_string()));
+        assert_eq!(response.error_code, Some("ACTOR_NOT_FOUND".to_string()));
         assert!(response.error.is_some());
         assert!(response.payload.is_none());
     }
@@ -1447,17 +1469,15 @@ mod tests {
         assert_eq!(err.to_string(), "Unknown message type: MyMessage");
 
         let err = IpcError::TargetBusy;
-        assert_eq!(err.to_string(), "Target agent inbox is full");
+        assert_eq!(err.to_string(), "Target actor inbox is full");
     }
 
     // --- Subscription types tests ---
 
     #[test]
     fn test_ipc_subscribe_request_new() {
-        let request = IpcSubscribeRequest::new(vec![
-            "PriceUpdate".to_string(),
-            "OrderStatus".to_string(),
-        ]);
+        let request =
+            IpcSubscribeRequest::new(vec!["PriceUpdate".to_string(), "OrderStatus".to_string()]);
 
         assert!(request.correlation_id.starts_with("sub_"));
         assert_eq!(request.message_types.len(), 2);
@@ -1467,10 +1487,8 @@ mod tests {
 
     #[test]
     fn test_ipc_subscribe_request_with_correlation_id() {
-        let request = IpcSubscribeRequest::with_correlation_id(
-            "custom_123",
-            vec!["MyMessage".to_string()],
-        );
+        let request =
+            IpcSubscribeRequest::with_correlation_id("custom_123", vec!["MyMessage".to_string()]);
 
         assert_eq!(request.correlation_id, "custom_123");
         assert_eq!(request.message_types.len(), 1);
@@ -1526,7 +1544,7 @@ mod tests {
 
         assert!(notification.notification_id.starts_with("push_"));
         assert_eq!(notification.message_type, "PriceUpdate");
-        assert_eq!(notification.source_agent, Some("price_service".to_string()));
+        assert_eq!(notification.source_actor, Some("price_service".to_string()));
         assert!(notification.timestamp_ms > 0);
     }
 
@@ -1539,14 +1557,14 @@ mod tests {
         );
 
         assert_eq!(notification.message_type, "SystemEvent");
-        assert!(notification.source_agent.is_none());
+        assert!(notification.source_actor.is_none());
     }
 
     #[test]
     fn test_ipc_push_notification_serialization() {
         let notification = IpcPushNotification::new(
             "TestMessage",
-            Some("test_agent".to_string()),
+            Some("test_actor".to_string()),
             serde_json::json!({ "data": 123 }),
         );
 
@@ -1554,7 +1572,7 @@ mod tests {
         let deserialized: IpcPushNotification = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.message_type, "TestMessage");
-        assert_eq!(deserialized.source_agent, Some("test_agent".to_string()));
+        assert_eq!(deserialized.source_actor, Some("test_actor".to_string()));
         assert_eq!(deserialized.payload["data"], 123);
     }
 
@@ -1573,29 +1591,30 @@ mod tests {
 
     #[test]
     fn test_ipc_subscription_response_error() {
-        let response = IpcSubscriptionResponse::error(
-            "sub_456",
-            "Connection not registered",
-        );
+        let response = IpcSubscriptionResponse::error("sub_456", "Connection not registered");
 
         assert!(!response.success);
         assert_eq!(response.correlation_id, "sub_456");
-        assert_eq!(response.error, Some("Connection not registered".to_string()));
+        assert_eq!(
+            response.error,
+            Some("Connection not registered".to_string())
+        );
         assert!(response.subscribed_types.is_empty());
     }
 
     #[test]
     fn test_ipc_subscription_response_serialization() {
-        let response = IpcSubscriptionResponse::success(
-            "test_corr",
-            vec!["PriceUpdate".to_string()],
-        );
+        let response =
+            IpcSubscriptionResponse::success("test_corr", vec!["PriceUpdate".to_string()]);
 
         let json = serde_json::to_string(&response).unwrap();
         let deserialized: IpcSubscriptionResponse = serde_json::from_str(&json).unwrap();
 
         assert!(deserialized.success);
         assert_eq!(deserialized.correlation_id, "test_corr");
-        assert_eq!(deserialized.subscribed_types, vec!["PriceUpdate".to_string()]);
+        assert_eq!(
+            deserialized.subscribed_types,
+            vec!["PriceUpdate".to_string()]
+        );
     }
 }

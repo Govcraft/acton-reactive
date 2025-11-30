@@ -2,18 +2,18 @@
 //!
 //! This module serves as an aggregation point for fundamental building blocks shared across
 //! the crate and exposed to users via the prelude. It includes components related to system
-//! initialization, runtime management, agent interaction, message brokering, and internal
+//! initialization, runtime management, actor interaction, message brokering, and internal
 //! type definitions.
 //!
 //! # Key Re-exported Components:
 //!
 //! *   [`ActonApp`]: The entry point for initializing the Acton system.
-//! *   [`AgentRuntime`]: Represents the active Acton runtime environment, used for managing
-//!     top-level agents and system shutdown.
-//! *   [`AgentHandle`]: The primary interface for interacting with individual agents (sending
+//! *   [`ActorRuntime`]: Represents the active Acton runtime environment, used for managing
+//!     top-level actors and system shutdown.
+//! *   [`ActorHandle`]: The primary interface for interacting with individual actors (sending
 //!     messages, stopping, supervising).
-//! *   [`AgentBroker`]: The central publish-subscribe message broker implementation.
-//! *   [`AgentReply`]: A utility struct for creating standard return types for message handlers.
+//! *   [`Broker`]: The central publish-subscribe message broker implementation.
+//! *   [`ActorReply`]: A utility struct for creating standard return types for message handlers.
 //!
 //! Internal types and submodules handle the implementation details for these components.
 
@@ -35,10 +35,10 @@
 
 // --- Public Re-exports ---
 pub use acton::ActonApp;
-pub use agent_broker::AgentBroker;
-pub use agent_handle::AgentHandle;
-pub use agent_reply::AgentReply;
-pub use agent_runtime::AgentRuntime;
+pub use broker::Broker;
+pub use actor_handle::ActorHandle;
+pub use actor_reply::ActorReply;
+pub use actor_runtime::ActorRuntime;
 pub use config::ActonConfig;
 
 // --- Crate-Internal Re-exports ---
@@ -54,14 +54,14 @@ mod types;
 mod acton;
 /// Defines the internal state (`ActonInner`) of the runtime.
 mod acton_inner;
-/// Defines the `AgentHandle` for agent interaction.
-mod agent_handle;
-/// Defines the `AgentBroker` implementation.
-mod agent_broker;
-/// Defines the `AgentRuntime` for managing the system.
-mod agent_runtime;
-/// Defines the `AgentReply` utility.
-mod agent_reply;
+/// Defines the `ActorHandle` for actor interaction.
+mod actor_handle;
+/// Defines the `Broker` implementation.
+mod broker;
+/// Defines the `ActorRuntime` for managing the system.
+mod actor_runtime;
+/// Defines the `ActorReply` utility.
+mod actor_reply;
 /// Defines the configuration system for the Acton framework.
 pub mod config;
 

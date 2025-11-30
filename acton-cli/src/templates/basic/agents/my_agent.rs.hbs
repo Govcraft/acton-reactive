@@ -2,20 +2,20 @@ use acton::prelude::*;
 use crate::messages::InitProject;
 use tracing::*;
 
-#[acton_agent]
-struct MyAgent;
+#[acton_actor]
+struct MyActor;
 
-impl MyAgent {
-pub async fn new(runtime: &mut AgentRuntime) -> AgentHandle {
-let mut agent = runtime.new_agent::
-<MyAgent>().await;
-    agent.act_on::
-    <MyMessage>(|agent, context| {
-        info!("MyMessage received by MyAgent.");
+impl MyActor {
+pub async fn new(runtime: &mut ActorRuntime) -> ActorHandle {
+let mut actor = runtime.new_actor::
+<MyActor>().await;
+    actor.act_on::
+    <MyMessage>(|actor, context| {
+        info!("MyMessage received by MyActor.");
 
-        AgentReply::immediate()
+        ActorReply::immediate()
         });
 
-        agent.start().await
+        actor.start().await
         }
         }

@@ -35,53 +35,53 @@ impl Display for MenuItem {
 }
 
 impl HomeScreen {
-    pub async fn create(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<Self>();
+    pub async fn create(runtime: &mut ActorRuntime) -> anyhow::Result<ActorHandle> {
+        let mut actor = runtime.new_actor::<Self>();
 
-        agent.before_start(|_agent| {
+        actor.before_start(|_actor| {
             let mut stdout = stdout();
             queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP)).unwrap();
             let _ = stdout.write(TITLE.as_ref());
             queue!(stdout, cursor::MoveTo(PADLEFT, PADTOP + 1)).unwrap();
             let _ = stdout.write(TAGLINE.as_ref());
             let _ = stdout.flush();
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
-            .mutate_on::<MenuMoveDown>(|agent, _context| {
+            .mutate_on::<MenuMoveDown>(|actor, _context| {
                 trace!(" MenuMoveDown");
-                let len = agent.model.menu.len();
-                if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
-                    agent.model.menu[current_index].selected = false;
+                let len = actor.model.menu.len();
+                if let Some(current_index) = actor.model.menu.iter().position(|item| item.selected) {
+                    actor.model.menu[current_index].selected = false;
                     let next_index = (current_index + 1) % len;
-                    agent.model.menu[next_index].selected = true;
+                    actor.model.menu[next_index].selected = true;
                 }
-                agent.model.paint();
-                AgentReply::immediate()
+                actor.model.paint();
+                ActorReply::immediate()
             })
-            .mutate_on::<MenuMoveUp>(|agent, _context| {
+            .mutate_on::<MenuMoveUp>(|actor, _context| {
                 trace!(" MenuMoveUp");
-                let len = agent.model.menu.len();
-                if let Some(current_index) = agent.model.menu.iter().position(|item| item.selected) {
-                    agent.model.menu[current_index].selected = false;
+                let len = actor.model.menu.len();
+                if let Some(current_index) = actor.model.menu.iter().position(|item| item.selected) {
+                    actor.model.menu[current_index].selected = false;
                     let prev_index = if current_index == 0 { len - 1 } else { current_index - 1 };
-                    agent.model.menu.iter_mut().rev().nth(len - prev_index - 1).unwrap().selected = true;
+                    actor.model.menu.iter_mut().rev().nth(len - prev_index - 1).unwrap().selected = true;
                 }
-                agent.model.paint();
-                AgentReply::immediate()
+                actor.model.paint();
+                ActorReply::immediate()
             })
-            .mutate_on::<MenuSelect>(|agent, _context| {
+            .mutate_on::<MenuSelect>(|actor, _context| {
                 //use debug to print the selected menu item label
-                debug!(" MenuSelect: {:?}", agent.model.menu.iter().find(|item| item.selected).unwrap().label);
-                AgentReply::immediate()
+                debug!(" MenuSelect: {:?}", actor.model.menu.iter().find(|item| item.selected).unwrap().label);
+                ActorReply::immediate()
             })
-            .after_start(|agent| {
-                agent.model.paint();
-                AgentReply::immediate()
+            .after_start(|actor| {
+                actor.model.paint();
+                ActorReply::immediate()
             });
-        agent.model.menu.push(MenuItem { label: "Create a new project".to_string(), selected: true });
-        agent.model.menu.push(MenuItem { label: "Update an existing project".to_string(), selected: false });
+        actor.model.menu.push(MenuItem { label: "Create a new project".to_string(), selected: true });
+        actor.model.menu.push(MenuItem { label: "Update an existing project".to_string(), selected: false });
 
-        Ok(agent.start().await)
+        Ok(actor.start().await)
     }
 
     fn paint(&self) {

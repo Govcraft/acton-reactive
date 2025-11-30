@@ -28,8 +28,8 @@ use crate::traits::ActonMessage;
 
 /// Represents a message prepared for sending, including sender and optional recipient addresses.
 ///
-/// An `OutboundEnvelope` is typically created by an agent (using methods like
-/// [`AgentHandle::create_envelope`](crate::common::AgentHandle::create_envelope))
+/// An `OutboundEnvelope` is typically created by an actor (using methods like
+/// [`ActorHandle::create_envelope`](crate::common::ActorHandle::create_envelope))
 /// before sending a message. It holds the [`MessageAddress`] of the sender (`return_address`)
 /// and optionally the [`MessageAddress`] of the recipient (`recipient_address`).
 ///
@@ -39,12 +39,12 @@ use crate::traits::ActonMessage;
 /// Equality and hashing are based solely on the `return_address`.
 #[derive(Clone, Debug)]
 pub struct OutboundEnvelope {
-    /// The address of the agent sending the message.
+    /// The address of the actor sending the message.
     pub(crate) return_address: MessageAddress,
-    /// The address of the intended recipient agent, if specified directly.
+    /// The address of the intended recipient actor, if specified directly.
     /// If `None`, the recipient might be implied (e.g., sending back to `return_address`).
     pub(crate) recipient_address: Option<MessageAddress>,
-    /// The cancellation token for the sending agent.
+    /// The cancellation token for the sending actor.
     pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
 }
 
@@ -84,7 +84,7 @@ impl OutboundEnvelope {
     ///
     /// # Arguments
     ///
-    /// * `return_address`: The [`MessageAddress`] of the agent creating this envelope (the sender).
+    /// * `return_address`: The [`MessageAddress`] of the actor creating this envelope (the sender).
     ///
     /// # Returns
     ///
@@ -104,14 +104,14 @@ impl OutboundEnvelope {
 
     /// Returns a clone of the sender's [`MessageAddress`].
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn reply_to(&self) -> MessageAddress {
         self.return_address.clone()
     }
 
     /// Returns a reference to the optional recipient's [`MessageAddress`].
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn recipient(&self) -> &Option<MessageAddress> {
         &self.recipient_address
     }
@@ -297,7 +297,7 @@ impl OutboundEnvelope {
         let permit = match channel_sender.try_reserve() {
             Ok(permit) => permit,
             Err(TrySendError::Full(())) => {
-                tracing::warn!(sender = %self.return_address.sender, recipient = %target_id, "Target agent inbox is full");
+                tracing::warn!(sender = %self.return_address.sender, recipient = %target_id, "Target actor inbox is full");
                 return Err(IpcError::TargetBusy);
             }
             Err(TrySendError::Closed(())) => {
@@ -306,11 +306,8 @@ impl OutboundEnvelope {
             }
         };
 
-        let internal_envelope = Envelope::new(
-            message,
-            self.return_address.clone(),
-            target_address.clone(),
-        );
+        let internal_envelope =
+            Envelope::new(message, self.return_address.clone(), target_address.clone());
         trace!(sender = %self.return_address.sender, recipient = %target_id, "Sending message via try_reserve permit");
         permit.send(internal_envelope);
         Ok(())

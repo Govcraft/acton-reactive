@@ -21,20 +21,20 @@ use async_trait::async_trait;
 
 use crate::message::BrokerRequest;
 use crate::prelude::ActonMessage;
-use crate::traits::AgentHandleInterface; // Needed for broadcast_sync default impl
+use crate::traits::ActorHandleInterface; // Needed for broadcast_sync default impl
 
 /// Defines the capability to broadcast messages to subscribers via the system broker.
 ///
 /// This trait is typically implemented by types that have access to the central
-/// [`AgentBroker`](crate::common::AgentBroker), such as [`AgentHandle`](crate::common::AgentHandle).
+/// [`Broker`](crate::common::Broker), such as [`ActorHandle`](crate::common::ActorHandle).
 /// It provides methods for sending messages to the broker for distribution to all
-/// agents subscribed to that message type.
+/// actors subscribed to that message type.
 #[async_trait]
-pub trait Broker: Clone + Debug + Default + Send + Sync + 'static { // Added Send + Sync + 'static
+pub trait Broadcaster: Clone + Debug + Default + Send + Sync + 'static {
     /// Asynchronously sends a message to the broker for broadcasting.
     ///
     /// The implementor should wrap the `message` in a [`BrokerRequest`] and send it
-    /// to the central `AgentBroker`.
+    /// to the central `Broker`.
     ///
     /// # Arguments
     ///
@@ -55,7 +55,7 @@ pub trait Broker: Clone + Debug + Default + Send + Sync + 'static { // Added Sen
     /// the asynchronous [`Broker::broadcast`] method where possible.
     ///
     /// This method requires the implementing type (`Self`) to also implement
-    /// [`AgentHandleInterface`] to use its `create_envelope` method.
+    /// [`ActorHandleInterface`] to use its `create_envelope` method.
     ///
     /// # Arguments
     ///
@@ -68,7 +68,7 @@ pub trait Broker: Clone + Debug + Default + Send + Sync + 'static { // Added Sen
     /// propagate all underlying errors from the actual send operation.
     fn broadcast_sync(&self, message: impl ActonMessage) -> anyhow::Result<()>
     where
-        Self: AgentHandleInterface + Sized, // Require AgentHandleInterface for default impl
+        Self: ActorHandleInterface + Sized, // Require ActorHandleInterface for default impl
     {
         // Create an envelope targeting the broker (using self's address, assuming self *is* the broker handle or has access)
         // The recipient here is implicitly the broker itself when using reply on an envelope created from the broker handle.

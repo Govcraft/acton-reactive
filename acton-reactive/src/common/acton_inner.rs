@@ -18,28 +18,28 @@ use acton_ern::Ern;
 use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::{AgentHandle, BrokerRef, ActonConfig};
+use crate::common::{ActonConfig, ActorHandle, BrokerRef};
 
 #[cfg(feature = "ipc")]
-use std::sync::Arc;
+use crate::common::ipc::{IpcTypeRegistry, SubscriptionManager};
 #[cfg(feature = "ipc")]
 use parking_lot::RwLock;
 #[cfg(feature = "ipc")]
-use crate::common::ipc::{IpcTypeRegistry, SubscriptionManager};
+use std::sync::Arc;
 
 /// Internal state structure for the Acton runtime.
 ///
-/// This struct holds all the core components needed to manage the agent system,
-/// including the message broker, agent registry, and configuration.
+/// This struct holds all the core components needed to manage the actor system,
+/// including the message broker, actor registry, and configuration.
 #[derive(Debug, Clone)]
 pub struct ActonInner {
-    /// Handle to the central message broker agent.
+    /// Handle to the central message broker actor.
     pub(crate) broker: BrokerRef,
 
-    /// Registry of top-level (root) agents, keyed by their ERN.
-    pub(crate) roots: DashMap<Ern, AgentHandle>,
+    /// Registry of top-level (root) actors, keyed by their ERN.
+    pub(crate) roots: DashMap<Ern, ActorHandle>,
 
-    /// Token for coordinating graceful shutdown across all agents.
+    /// Token for coordinating graceful shutdown across all actors.
     pub(crate) cancellation_token: CancellationToken,
 
     /// Runtime configuration loaded from XDG-compliant locations.
@@ -51,14 +51,14 @@ pub struct ActonInner {
     #[cfg(feature = "ipc")]
     pub(crate) ipc_type_registry: Arc<IpcTypeRegistry>,
 
-    /// Registry mapping logical names to agent handles for IPC routing.
+    /// Registry mapping logical names to actor handles for IPC routing.
     ///
-    /// External processes reference agents by logical names (e.g., `price_service`)
+    /// External processes reference actors by logical names (e.g., `price_service`)
     /// rather than full ERNs. This registry maintains that mapping.
     ///
     /// Only available when the `ipc` feature is enabled.
     #[cfg(feature = "ipc")]
-    pub(crate) ipc_agent_registry: Arc<DashMap<String, AgentHandle>>,
+    pub(crate) ipc_actor_registry: Arc<DashMap<String, ActorHandle>>,
 
     /// Subscription manager for IPC push notifications.
     ///
@@ -74,14 +74,14 @@ pub struct ActonInner {
 impl Default for ActonInner {
     fn default() -> Self {
         Self {
-            broker: AgentHandle::default(),
+            broker: ActorHandle::default(),
             roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),
             config: ActonConfig::default(),
             #[cfg(feature = "ipc")]
             ipc_type_registry: Arc::new(IpcTypeRegistry::new()),
             #[cfg(feature = "ipc")]
-            ipc_agent_registry: Arc::new(DashMap::new()),
+            ipc_actor_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "ipc")]
             ipc_subscription_manager: Arc::new(RwLock::new(None)),
         }

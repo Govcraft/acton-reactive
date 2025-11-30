@@ -22,10 +22,10 @@ use crossterm::{
 };
 
 use acton_reactive::prelude::*;
-// Import the macro for agent state structs
+// Import the macro for actor state structs
 use acton_macro::acton_actor;
 
-/// State for the `DataCollector` agent.
+/// State for the `DataCollector` actor.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 struct DataCollector {
@@ -33,7 +33,7 @@ struct DataCollector {
     data_points: Vec<i32>,
 }
 
-/// State for the Aggregator agent.
+/// State for the Aggregator actor.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 struct Aggregator {
@@ -41,7 +41,7 @@ struct Aggregator {
     sum: i32,
 }
 
-/// State for the Printer agent.
+/// State for the Printer actor.
 // Note: Manual Default impl needed because `Stdout` doesn't impl Default.
 // Cannot use `#[acton_actor]` because it attempts to derive Default and Clone,
 // which `Stdout` does not implement. We derive Debug manually.
@@ -54,9 +54,7 @@ struct Printer {
 // Manual Default implementation for Printer state.
 impl Default for Printer {
     fn default() -> Self {
-        Self {
-            out: stdout()
-        }
+        Self { out: stdout() }
     }
 }
 
@@ -70,7 +68,7 @@ struct NewData(i32);
 type From = String;
 type Status = String;
 
-/// Message broadcast to report agent status or results.
+/// Message broadcast to report actor status or results.
 #[derive(Clone, Debug)]
 enum StatusUpdate {
     Ready(From, Status),
@@ -87,69 +85,87 @@ async fn main() {
     // Get a handle to the central message broker provided by the runtime.
     let broker_handle = runtime.broker();
 
-    // 2. Create agent builders.
-    //    These agents will communicate indirectly via the broker.
-    let mut data_collector_builder = runtime.new_agent::<DataCollector>();
-    let mut aggregator_builder = runtime.new_agent::<Aggregator>();
-    let mut printer_builder = runtime.new_agent::<Printer>();
+    // 2. Create actor builders.
+    //    These actors will communicate indirectly via the broker.
+    let mut data_collector_builder = runtime.new_actor::<DataCollector>();
+    let mut aggregator_builder = runtime.new_actor::<Aggregator>();
+    let mut printer_builder = runtime.new_actor::<Printer>();
 
-    // 3. Configure the DataCollector agent.
+    // 3. Configure the DataCollector actor.
     data_collector_builder
         // Handler for `NewData` messages.
-        .mutate_on::<NewData>(|agent, envelope| {
+        .mutate_on::<NewData>(|actor, envelope| {
             // Add the received data point to internal state.
-            agent.model.data_points.push(envelope.message().0);
+            actor.model.data_points.push(envelope.message().0);
 
             // Broadcast a status update via the broker.
-            let broker_handle = agent.broker().clone();
+            let broker_handle = actor.broker().clone();
             let message = envelope.message().0;
-            Box::pin(async move { broker_handle.broadcast(StatusUpdate::Updated("DataCollector".to_string(), message)).await })
+            Box::pin(async move {
+                broker_handle
+                    .broadcast(StatusUpdate::Updated("DataCollector".to_string(), message))
+                    .await
+            })
         })
         // After starting, broadcast its readiness.
-        .after_start(|agent| {
-            let broker_handle = agent.broker().clone();
+        .after_start(|actor| {
+            let broker_handle = actor.broker().clone();
             Box::pin(async move {
-                broker_handle.broadcast(StatusUpdate::Ready("DataCollector".to_string(), "ready to collect data".to_string())).await;
+                broker_handle
+                    .broadcast(StatusUpdate::Ready(
+                        "DataCollector".to_string(),
+                        "ready to collect data".to_string(),
+                    ))
+                    .await;
             })
         });
 
-    // 4. Configure the Aggregator agent.
+    // 4. Configure the Aggregator actor.
     aggregator_builder
         // Handler for `NewData` messages.
-        .mutate_on::<NewData>(|agent, envelope| {
+        .mutate_on::<NewData>(|actor, envelope| {
             // Add the received data to the running sum.
-            agent.model.sum += envelope.message().0;
+            actor.model.sum += envelope.message().0;
 
             // Broadcast an update with the current sum.
-            let broker_handle = agent.broker().clone();
-            let sum = agent.model.sum;
-            Box::pin(async move { broker_handle.broadcast(StatusUpdate::Updated("Aggregator".to_string(), sum)).await })
+            let broker_handle = actor.broker().clone();
+            let sum = actor.model.sum;
+            Box::pin(async move {
+                broker_handle
+                    .broadcast(StatusUpdate::Updated("Aggregator".to_string(), sum))
+                    .await
+            })
         })
         // After starting, broadcast its readiness.
-        .after_start(|agent| {
-            let broker_handle = agent.broker().clone();
+        .after_start(|actor| {
+            let broker_handle = actor.broker().clone();
             Box::pin(async move {
-                broker_handle.broadcast(StatusUpdate::Ready("Aggregator".to_string(), "ready to sum data".to_string())).await;
+                broker_handle
+                    .broadcast(StatusUpdate::Ready(
+                        "Aggregator".to_string(),
+                        "ready to sum data".to_string(),
+                    ))
+                    .await;
             })
         })
         // Before stopping, broadcast the final sum.
-        .before_stop(|agent| {
-            let broker_handle = agent.broker().clone();
-            let sum = agent.model.sum;
+        .before_stop(|actor| {
+            let broker_handle = actor.broker().clone();
+            let sum = actor.model.sum;
             Box::pin(async move {
                 broker_handle.broadcast(StatusUpdate::Done(sum)).await;
             })
         });
 
-    // 5. Configure the Printer agent.
+    // 5. Configure the Printer actor.
     printer_builder
-        // Handler for `StatusUpdate` messages (broadcast by other agents).
-        .mutate_on::<StatusUpdate>(|agent, envelope| {
+        // Handler for `StatusUpdate` messages (broadcast by other actors).
+        .mutate_on::<StatusUpdate>(|actor, envelope| {
             // Use crossterm to print formatted/colored output based on the message variant.
             match &envelope.message() {
                 StatusUpdate::Ready(who, what) => {
                     let _ = execute!(
-                        &mut agent.model.out, // Use the Stdout handle from agent state (needs mut ref).
+                        &mut actor.model.out, // Use the Stdout handle from actor state (needs mut ref).
                         SetForegroundColor(Color::DarkYellow),
                         Print("\u{2713}  "),
                         SetForegroundColor(Color::Yellow),
@@ -161,7 +177,7 @@ async fn main() {
                 }
                 StatusUpdate::Updated(who, data_value) => {
                     let _ = execute!(
-                        &mut agent.model.out,
+                        &mut actor.model.out,
                         SetForegroundColor(Color::DarkCyan),
                         Print("\u{2139}  "),
                         SetForegroundColor(Color::Cyan),
@@ -173,7 +189,7 @@ async fn main() {
                 }
                 StatusUpdate::Done(sum) => {
                     let _ = execute!(
-                        &mut agent.model.out,
+                        &mut actor.model.out,
                         SetForegroundColor(Color::DarkMagenta),
                         Print("\u{1F680} "),
                         SetForegroundColor(Color::Red),
@@ -183,24 +199,31 @@ async fn main() {
                 }
             }
 
-            AgentReply::immediate()
+            ActorReply::immediate()
         })
         // After starting, broadcast its readiness.
-        .after_start(|agent| {
+        .after_start(|actor| {
             // Note: We broadcast a message here instead of printing directly because
-            // the `agent` reference in lifecycle hooks is immutable, and `execute!`
-            // requires a mutable reference to `agent.model.out`.
-            let broker_handle = agent.broker().clone();
-            Box::pin(async move { broker_handle.broadcast(StatusUpdate::Ready("Printer".to_string(), "ready to display messages".to_string())).await })
+            // the `actor` reference in lifecycle hooks is immutable, and `execute!`
+            // requires a mutable reference to `actor.model.out`.
+            let broker_handle = actor.broker().clone();
+            Box::pin(async move {
+                broker_handle
+                    .broadcast(StatusUpdate::Ready(
+                        "Printer".to_string(),
+                        "ready to display messages".to_string(),
+                    ))
+                    .await
+            })
         });
 
-    // 6. Subscribe agents to the message types they care about *before* starting them.
-    //    Agents only receive broadcast messages they are subscribed to.
+    // 6. Subscribe actors to the message types they care about *before* starting them.
+    //    Actors only receive broadcast messages they are subscribed to.
     data_collector_builder.handle().subscribe::<NewData>().await;
     aggregator_builder.handle().subscribe::<NewData>().await;
     printer_builder.handle().subscribe::<StatusUpdate>().await;
 
-    // 7. Start the agents.
+    // 7. Start the actors.
     let _data_collector_handle = data_collector_builder.start().await;
     let _aggregator_handle = aggregator_builder.start().await;
     let _printer_handle = printer_builder.start().await;
@@ -213,5 +236,8 @@ async fn main() {
     // 9. Shut down the runtime.
     //    This triggers the Aggregator's `before_stop` handler, which broadcasts
     //    the final `StatusUpdate::Done` message, received by the Printer.
-    runtime.shutdown_all().await.expect("Failed to shutdown system");
+    runtime
+        .shutdown_all()
+        .await
+        .expect("Failed to shutdown system");
 }

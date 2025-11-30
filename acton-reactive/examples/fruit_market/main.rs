@@ -18,14 +18,15 @@ use std::sync::Once;
 
 use anyhow::Result;
 use crossterm::{
-    cursor, execute, queue,
+    cursor,
     event::{self, Event, KeyCode, KeyModifiers},
+    execute, queue,
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use futures::StreamExt; // Required for reader.next().await
 use tokio::sync::oneshot;
 use tracing::{error, info, Level};
-use tracing_appender::rolling::{Rotation, RollingFileAppender};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, FmtSubscriber};
 
 // Import necessary components from other modules within the example and the framework.
@@ -49,12 +50,11 @@ const LOG_DIRECTORY: &str = "logs"; // Directory for log files.
 const LOG_FILENAME: &str = "fruit_market.log"; // Base name for log files.
 
 // --- Messages ---
-// Messages are the primary way agents communicate. They must be Clone + Debug.
+// Messages are the primary way actors communicate. They must be Clone + Debug.
 
 /// Message sent when an item is successfully scanned (likely includes price info).
 #[derive(Clone, Debug)]
 struct ItemScanned(CartItem);
-
 
 /// Message sent to request the price of a specific item.
 #[derive(Clone, Debug)]
@@ -66,7 +66,7 @@ struct PriceResponse {
     item: CartItem,
 }
 
-/// Message specific to controlling the Printer agent.
+/// Message specific to controlling the Printer actor.
 #[derive(Clone, Debug)]
 enum PrinterMessage {
     /// Instructs the printer to repaint the display.
@@ -107,8 +107,8 @@ async fn main() -> Result<()> {
     // 1. Launch the Acton runtime environment.
     let mut runtime = ActonApp::launch();
 
-    // 2. Create the main 'Register' agent.
-    //    The `Register::new_transaction` function likely sets up the Register agent
+    // 2. Create the main 'Register' actor.
+    //    The `Register::new_transaction` function likely sets up the Register actor
     //    and potentially spawns its dependencies (like PriceService, Printer).
     let register_handle = Register::new_transaction(&mut runtime).await?;
 
@@ -138,16 +138,16 @@ async fn main() -> Result<()> {
                         let _ = shutdown_tx.send(());
                         break;
                     }
-                    // 's' to trigger scanning an item (sends message to Register agent).
+                    // 's' to trigger scanning an item (sends message to Register actor).
                     KeyCode::Char('s') => {
-                        // Use the captured register handle to interact with the agent.
+                        // Use the captured register handle to interact with the actor.
                         if let Err(e) = register_handle.scan().await {
                             error!("Failed to trigger scan: {}", e);
                         }
                     }
-                    // '?' to toggle help display (sends message to Register agent).
+                    // '?' to toggle help display (sends message to Register actor).
                     KeyCode::Char('?') => {
-                         if let Err(e) = register_handle.toggle_help().await {
+                        if let Err(e) = register_handle.toggle_help().await {
                             error!("Failed to toggle help: {}", e);
                         }
                     }
@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
     stdout.flush()?;
     queue!(stdout, cursor::MoveTo(0, 1))?; // Move cursor down one line
 
-    // 7. Gracefully shut down all agents managed by the runtime.
+    // 7. Gracefully shut down all actors managed by the runtime.
     runtime.shutdown_all().await?;
     info!("Shutdown complete.");
 
@@ -201,11 +201,23 @@ pub fn initialize_tracing() {
             .add_directive("fruit_market=debug".parse().unwrap()) // Log debug for this example
             .add_directive("fruit_market::printer=debug".parse().unwrap())
             // Silence potentially noisy core components unless needed for debugging.
-            .add_directive("acton_reactive::common::agent_handle=off".parse().unwrap())
-            .add_directive("acton_reactive::common::agent_broker=off".parse().unwrap())
-            .add_directive("acton_reactive::actor::managed_agent::idle[start]=off".parse().unwrap())
-            .add_directive("acton_reactive::actor::managed_agent::started[wake]=off".parse().unwrap())
-            .add_directive("acton_reactive::traits::actor[send_message]=off".parse().unwrap())
+            .add_directive("acton_reactive::common::actor_handle=off".parse().unwrap())
+            .add_directive("acton_reactive::common::actor_broker=off".parse().unwrap())
+            .add_directive(
+                "acton_reactive::actor::managed_actor::idle[start]=off"
+                    .parse()
+                    .unwrap(),
+            )
+            .add_directive(
+                "acton_reactive::actor::managed_actor::started[wake]=off"
+                    .parse()
+                    .unwrap(),
+            )
+            .add_directive(
+                "acton_reactive::traits::actor[send_message]=off"
+                    .parse()
+                    .unwrap(),
+            )
             // Silence test modules if running the example directly.
             .add_directive("supervisor_tests=off".parse().unwrap())
             .add_directive("broker_tests=off".parse().unwrap())

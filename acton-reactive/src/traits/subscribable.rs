@@ -21,20 +21,21 @@ use async_trait::async_trait;
 use tracing::{error, instrument, trace, warn};
 
 use crate::message::{SubscribeBroker, UnsubscribeBroker};
-use crate::traits::{ActonMessage, AgentHandleInterface};
 use crate::traits::subscriber::Subscriber;
+use crate::traits::{ActonMessage, ActorHandleInterface};
 
-/// Enables an entity (typically an agent handle) to manage its subscriptions to message types via the system broker.
+/// Enables an entity (typically an actor handle) to manage its subscriptions to message types via the system broker.
 ///
 /// This trait provides methods to asynchronously subscribe and unsubscribe from specific
-/// message types ([`ActonMessage`]). Implementors, usually [`AgentHandle`](crate::common::AgentHandle),
-/// interact with the central [`AgentBroker`](crate::common::AgentBroker) to register or
+/// message types ([`ActonMessage`]). Implementors, usually [`ActorHandle`](crate::common::ActorHandle),
+/// interact with the central [`Broker`](crate::common::Broker) to register or
 /// deregister interest in receiving broadcast messages.
 #[async_trait]
-pub trait Subscribable: Send + Sync + 'static { // Added Send + Sync + 'static bounds
-    /// Asynchronously subscribes the agent associated with this handle to messages of type `M`.
+pub trait Subscribable: Send + Sync + 'static {
+    // Added Send + Sync + 'static bounds
+    /// Asynchronously subscribes the actor associated with this handle to messages of type `M`.
     ///
-    /// After subscribing, the agent will receive copies of messages of type `M` that are
+    /// After subscribing, the actor will receive copies of messages of type `M` that are
     /// broadcast via the [`Broker`](super::Broker) trait.
     ///
     /// # Type Parameters
@@ -49,17 +50,17 @@ pub trait Subscribable: Send + Sync + 'static { // Added Send + Sync + 'static b
     ///
     /// # Requirements
     ///
-    /// The implementing type `Self` must also implement [`AgentHandleInterface`] and [`Subscriber`].
+    /// The implementing type `Self` must also implement [`ActorHandleInterface`] and [`Subscriber`].
     fn subscribe<M: ActonMessage + Send + Sync + 'static>(
         &self,
     ) -> impl Future<Output = ()> + Send + Sync + '_
     where
         // These bounds are requirements for *calling* the method, enforced by the blanket impl.
-        Self: AgentHandleInterface + Subscriber;
+        Self: ActorHandleInterface + Subscriber;
 
-    /// Sends a request to unsubscribe the agent associated with this handle from messages of type `M`.
+    /// Sends a request to unsubscribe the actor associated with this handle from messages of type `M`.
     ///
-    /// After unsubscribing, the agent will no longer receive broadcast messages of type `M`.
+    /// After unsubscribing, the actor will no longer receive broadcast messages of type `M`.
     ///
     /// Note: The default blanket implementation currently spawns a Tokio task to send the
     /// unsubscribe request asynchronously. The `UnsubscribeBroker` message itself might be incomplete
@@ -71,36 +72,36 @@ pub trait Subscribable: Send + Sync + 'static { // Added Send + Sync + 'static b
     ///
     /// # Requirements
     ///
-    /// The implementing type `Self` must also implement [`AgentHandleInterface`] and [`Subscriber`].
+    /// The implementing type `Self` must also implement [`ActorHandleInterface`] and [`Subscriber`].
     fn unsubscribe<M: ActonMessage>(&self)
     where
         // These bounds are requirements for *calling* the method, enforced by the blanket impl.
-        Self: AgentHandleInterface + Subscriber;
+        Self: ActorHandleInterface + Subscriber;
 }
 
 /// Blanket implementation of `Subscribable` for types implementing necessary traits.
 ///
 /// This implementation provides the `subscribe` and `unsubscribe` methods for any type `T`
-/// that implements [`AgentHandleInterface`] and [`Subscriber`]. It works by sending the
+/// that implements [`ActorHandleInterface`] and [`Subscriber`]. It works by sending the
 /// appropriate internal messages ([`SubscribeBroker`] or [`UnsubscribeBroker`]) to the
 /// broker obtained via the [`Subscriber::get_broker`] method.
 #[async_trait]
 impl<T> Subscribable for T
 where
     // Corrected bounds based on usage within the methods.
-    T: AgentHandleInterface + Subscriber + Send + Sync + 'static,
+    T: ActorHandleInterface + Subscriber + Send + Sync + 'static,
 {
     /// Sends a [`SubscribeBroker`] message to the broker.
     #[instrument(skip(self), fields(message_type = std::any::type_name::<M>(), subscriber = %self.id()))]
     fn subscribe<M: ActonMessage + Send + Sync + 'static>(
         &self,
     ) -> impl Future<Output = ()> + Send + Sync + '_
-    // No need for where clause here as it's enforced by the impl block's bounds
+// No need for where clause here as it's enforced by the impl block's bounds
     {
         let subscriber_id = self.id();
         let message_type_id = TypeId::of::<M>();
         let message_type_name = std::any::type_name::<M>().to_string();
-        // Create the subscription message with the agent's handle as context.
+        // Create the subscription message with the actor's handle as context.
         let subscription = SubscribeBroker {
             subscriber_id: subscriber_id.clone(), // Clone Ern for the message
             message_type_id,

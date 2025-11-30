@@ -27,17 +27,17 @@ import {
   ServerError,
   TimeoutError,
   ConnectionError,
-} from './index';
+} from "./index";
 
 async function demoBasicRequest(client: ActonIpcClient): Promise<void> {
-  console.log('\n=== Basic Request-Response ===');
+  console.log("\n=== Basic Request-Response ===");
 
   try {
     const response = await client.request(
-      'calculator',
-      'Add',
+      "calculator",
+      "Add",
       { a: 42, b: 8 },
-      5000
+      5000,
     );
 
     if (response.success) {
@@ -57,27 +57,27 @@ async function demoBasicRequest(client: ActonIpcClient): Promise<void> {
 }
 
 async function demoFireAndForget(client: ActonIpcClient): Promise<void> {
-  console.log('\n=== Fire and Forget ===');
+  console.log("\n=== Fire and Forget ===");
 
-  await client.fireAndForget('logger', 'LogEvent', {
-    level: 'info',
-    message: 'Hello from Node.js client!',
+  await client.fireAndForget("logger", "LogEvent", {
+    level: "info",
+    message: "Hello from Node.js client!",
   });
 
-  console.log('  Message sent (no response expected)');
+  console.log("  Message sent (no response expected)");
 }
 
 async function demoStreaming(client: ActonIpcClient): Promise<void> {
-  console.log('\n=== Streaming Response ===');
+  console.log("\n=== Streaming Response ===");
 
   try {
     let frameCount = 0;
 
     for await (const frame of client.stream(
-      'search',
-      'SearchQuery',
-      { query: 'test', limit: 5 },
-      10000
+      "search",
+      "SearchQuery",
+      { query: "test", limit: 5 },
+      10000,
     )) {
       frameCount++;
 
@@ -86,7 +86,9 @@ async function demoStreaming(client: ActonIpcClient): Promise<void> {
         break;
       }
 
-      console.log(`  Frame ${frame.sequence}: ${JSON.stringify(frame.payload)}`);
+      console.log(
+        `  Frame ${frame.sequence}: ${JSON.stringify(frame.payload)}`,
+      );
 
       if (frame.is_final) {
         console.log(`  Stream complete (${frameCount} frames)`);
@@ -103,63 +105,71 @@ async function demoStreaming(client: ActonIpcClient): Promise<void> {
 }
 
 async function demoDiscovery(client: ActonIpcClient): Promise<void> {
-  console.log('\n=== Service Discovery ===');
+  console.log("\n=== Service Discovery ===");
 
   try {
     const discovery = await client.discover();
 
-    console.log(`  Protocol: v${discovery.protocol_version?.current ?? '?'}`);
-    console.log(`  Capabilities: ${JSON.stringify(discovery.protocol_version?.capabilities ?? {})}`);
-    console.log(`  Agents: ${discovery.agents?.map(a => a.name).join(', ') || 'none'}`);
-    console.log(`  Message Types: ${discovery.message_types?.join(', ') || 'none'}`);
+    console.log(`  Protocol: v${discovery.protocol_version?.current ?? "?"}`);
+    console.log(
+      `  Capabilities: ${JSON.stringify(discovery.protocol_version?.capabilities ?? {})}`,
+    );
+    console.log(
+      `  Actors: ${discovery.actors?.map((a) => a.name).join(", ") || "none"}`,
+    );
+    console.log(
+      `  Message Types: ${discovery.message_types?.join(", ") || "none"}`,
+    );
   } catch (err) {
     console.log(`  Discovery failed: ${err}`);
   }
 }
 
 async function demoSubscriptions(client: ActonIpcClient): Promise<void> {
-  console.log('\n=== Subscriptions ===');
+  console.log("\n=== Subscriptions ===");
 
   const receivedNotifications: PushNotification[] = [];
 
   client.onPush((notification) => {
     receivedNotifications.push(notification);
-    console.log(`  [PUSH] ${notification.message_type}: ${JSON.stringify(notification.payload)}`);
+    console.log(
+      `  [PUSH] ${notification.message_type}: ${JSON.stringify(notification.payload)}`,
+    );
   });
 
   // Subscribe to message types
-  const success = await client.subscribe(['PriceUpdate', 'StatusChange']);
-  console.log(`  Subscription result: ${success ? 'success' : 'failed'}`);
+  const success = await client.subscribe(["PriceUpdate", "StatusChange"]);
+  console.log(`  Subscription result: ${success ? "success" : "failed"}`);
 
   // Wait for notifications
-  console.log('  Waiting for notifications (3 seconds)...');
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  console.log("  Waiting for notifications (3 seconds)...");
+  await new Promise((resolve) => setTimeout(resolve, 3000));
 
   console.log(`  Received ${receivedNotifications.length} notifications`);
 
   // Unsubscribe
-  await client.unsubscribe(['PriceUpdate', 'StatusChange']);
-  console.log('  Unsubscribed');
+  await client.unsubscribe(["PriceUpdate", "StatusChange"]);
+  console.log("  Unsubscribed");
 }
 
 async function main(): Promise<void> {
   // Determine socket path
-  let socketPath = getDefaultSocketPath('ipc_client_example');
+  let socketPath = getDefaultSocketPath("ipc_client_example");
 
   // Allow override via command line
   if (process.argv[2]) {
     socketPath = process.argv[2];
   }
 
-  console.log('Acton IPC Node.js Client Example');
-  console.log('=================================');
+  console.log("Acton IPC Node.js Client Example");
+  console.log("=================================");
   console.log(`Socket path: ${socketPath}`);
 
   // Check if socket exists
   if (!socketExists(socketPath)) {
     console.log(`\nError: Socket not found at ${socketPath}`);
-    console.log('\nMake sure the example server is running:');
-    console.log('  cargo run --example ipc_client_libraries_server');
+    console.log("\nMake sure the example server is running:");
+    console.log("  cargo run --example ipc_client_libraries_server");
     process.exit(1);
   }
 
@@ -168,7 +178,7 @@ async function main(): Promise<void> {
 
   try {
     await client.connect();
-    console.log('\nConnected to server!');
+    console.log("\nConnected to server!");
 
     await demoDiscovery(client);
     await demoBasicRequest(client);
@@ -176,7 +186,7 @@ async function main(): Promise<void> {
     await demoStreaming(client);
     await demoSubscriptions(client);
 
-    console.log('\n=== All demos complete ===');
+    console.log("\n=== All demos complete ===");
   } catch (err) {
     if (err instanceof ConnectionError) {
       console.log(`\nConnection error: ${err.message}`);

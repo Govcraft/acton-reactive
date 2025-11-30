@@ -25,148 +25,148 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, trace}; // Added error import
 
-use crate::actor::{AgentConfig, Idle, ManagedAgent};
+use crate::actor::{ActorConfig, Idle, ManagedActor};
 use crate::common::acton_inner::ActonInner;
-use crate::common::{ActonApp, AgentBroker, AgentHandle, BrokerRef, ActonConfig};
-use crate::traits::AgentHandleInterface;
+use crate::common::{ActonApp, ActonConfig, ActorHandle, Broker, BrokerRef};
+use crate::traits::ActorHandleInterface;
 
-/// Represents the initialized and active Acton agent system runtime.
+/// Represents the initialized and active Acton actor system runtime.
 ///
 /// This struct is obtained after successfully launching the system via [`ActonApp::launch()`].
 /// It holds the internal state of the running system, including a reference to the
-/// central message broker and a registry of top-level agents.
+/// central message broker and a registry of top-level actors.
 ///
-/// `AgentRuntime` provides the primary methods for interacting with the system as a whole,
-/// such as creating new top-level agents (`new_agent`, `spawn_agent`, etc.) and initiating
-/// a graceful shutdown of all agents (`shutdown_all`).
+/// `ActorRuntime` provides the primary methods for interacting with the system as a whole,
+/// such as creating new top-level actors (`new_actor`, `spawn_actor`, etc.) and initiating
+/// a graceful shutdown of all actors (`shutdown_all`).
 ///
 /// It is cloneable, allowing different parts of an application to hold references
 /// to the runtime environment.
 #[derive(Debug, Clone, Default)]
-pub struct AgentRuntime(pub(crate) ActonInner); // Keep inner field crate-public
+pub struct ActorRuntime(pub(crate) ActonInner); // Keep inner field crate-public
 
-impl AgentRuntime {
-    /// Creates a new top-level agent builder (`ManagedAgent<Idle, State>`) with a specified root name.
+impl ActorRuntime {
+    /// Creates a new top-level actor builder (`ManagedActor<Idle, State>`) with a specified root name.
     ///
-    /// This method initializes a [`ManagedAgent`] in the [`Idle`] state, configured with a
+    /// This method initializes a [`ManagedActor`] in the [`Idle`] state, configured with a
     /// root [`Ern`] derived from the provided `name` and linked to the system's broker.
-    /// The agent is registered as a top-level agent within the runtime.
+    /// The actor is registered as a top-level actor within the runtime.
     ///
-    /// The returned agent is ready for further configuration (e.g., adding message handlers
+    /// The returned actor is ready for further configuration (e.g., adding message handlers
     /// via `act_on`) before being started by calling `.start()` on it.
     ///
     /// # Type Parameters
     ///
-    /// * `State`: The user-defined state type for the agent. Must implement `Default`, `Send`, `Debug`, and be `'static`.
+    /// * `State`: The user-defined state type for the actor. Must implement `Default`, `Send`, `Debug`, and be `'static`.
     ///
     /// # Arguments
     ///
-    /// * `name`: A string that will form the root name of the agent's [`Ern`].
+    /// * `name`: A string that will form the root name of the actor's [`Ern`].
     ///
     /// # Returns
     ///
-    /// A [`ManagedAgent<Idle, State>`] instance, ready for configuration and starting.
+    /// A [`ManagedActor<Idle, State>`] instance, ready for configuration and starting.
     ///
     /// # Panics
     ///
-    /// Panics if creating the root `Ern` from the provided `name` fails or if creating the internal `AgentConfig` fails.
-    pub fn new_agent_with_name<State>(&mut self, name: String) -> ManagedAgent<Idle, State>
+    /// Panics if creating the root `Ern` from the provided `name` fails or if creating the internal `ActorConfig` fails.
+    pub fn new_actor_with_name<State>(&mut self, name: String) -> ManagedActor<Idle, State>
     where
         State: Default + Send + Debug + 'static,
     {
-        let actor_config = AgentConfig::new(
-            Ern::with_root(name).expect("Failed to create root Ern for new agent"), // Use expect for clarity
-            None,                        // No parent for top-level agent
+        let actor_config = ActorConfig::new(
+            Ern::with_root(name).expect("Failed to create root Ern for new actor"), // Use expect for clarity
+            None,                        // No parent for top-level actor
             Some(self.0.broker.clone()), // Use system broker
         )
         .expect("Failed to create actor config");
 
         let runtime = self.clone();
-        let new_actor = ManagedAgent::new(Some(&runtime), Some(&actor_config));
-        trace!("Registering new top-level agent: {}", new_actor.id());
+        let new_actor = ManagedActor::new(Some(&runtime), Some(&actor_config));
+        trace!("Registering new top-level actor: {}", new_actor.id());
         self.0
             .roots
             .insert(new_actor.id.clone(), new_actor.handle.clone());
         new_actor
     }
 
-    /// Creates a new top-level agent builder (`ManagedAgent<Idle, State>`) with a default name ("agent").
+    /// Creates a new top-level actor builder (`ManagedActor<Idle, State>`) with a default name ("actor").
     ///
-    /// Similar to [`AgentRuntime::new_agent_with_name`], but uses a default root name "agent"
-    /// for the agent's [`Ern`]. The agent is registered as a top-level agent within the runtime.
+    /// Similar to [`ActorRuntime::new_actor_with_name`], but uses a default root name "actor"
+    /// for the actor's [`Ern`]. The actor is registered as a top-level actor within the runtime.
     ///
-    /// The returned agent is ready for further configuration before being started via `.start()`.
+    /// The returned actor is ready for further configuration before being started via `.start()`.
     ///
     /// # Type Parameters
     ///
-    /// * `State`: The user-defined state type for the agent. Must implement `Default`, `Send`, `Debug`, and be `'static`.
+    /// * `State`: The user-defined state type for the actor. Must implement `Default`, `Send`, `Debug`, and be `'static`.
     ///
     /// # Returns
     ///
-    /// A [`ManagedAgent<Idle, State>`] instance, ready for configuration and starting.
+    /// A [`ManagedActor<Idle, State>`] instance, ready for configuration and starting.
     ///
     /// # Panics
     ///
-    /// Panics if creating the internal `AgentConfig` fails.
-    pub fn new_agent<State>(&mut self) -> ManagedAgent<Idle, State>
+    /// Panics if creating the internal `ActorConfig` fails.
+    pub fn new_actor<State>(&mut self) -> ManagedActor<Idle, State>
     where
         State: Default + Send + Debug + 'static,
     {
         // Use a default name if none is provided.
-        self.new_agent_with_name("agent".to_string()) // Reuse the named version
+        self.new_actor_with_name("actor".to_string()) // Reuse the named version
     }
 
-    /// Returns the number of top-level agents currently registered in the runtime.
+    /// Returns the number of top-level actors currently registered in the runtime.
     ///
-    /// This count only includes agents directly created via the `AgentRuntime` and
-    /// does not include child agents supervised by other agents.
+    /// This count only includes actors directly created via the `ActorRuntime` and
+    /// does not include child actors supervised by other actors.
     #[inline]
-    #[must_use] 
-    pub fn agent_count(&self) -> usize {
+    #[must_use]
+    pub fn actor_count(&self) -> usize {
         self.0.roots.len()
     }
 
-    /// Creates a new top-level agent builder (`ManagedAgent<Idle, State>`) using a provided configuration.
+    /// Creates a new top-level actor builder (`ManagedActor<Idle, State>`) using a provided configuration.
     ///
-    /// This method initializes a [`ManagedAgent`] in the [`Idle`] state using the specified
-    /// [`AgentConfig`]. It ensures the agent is configured with the system's broker if not
-    /// already set in the config. The agent is registered as a top-level agent within the runtime.
+    /// This method initializes a [`ManagedActor`] in the [`Idle`] state using the specified
+    /// [`ActorConfig`]. It ensures the actor is configured with the system's broker if not
+    /// already set in the config. The actor is registered as a top-level actor within the runtime.
     ///
-    /// The returned agent is ready for further configuration before being started via `.start()`.
+    /// The returned actor is ready for further configuration before being started via `.start()`.
     ///
     /// # Type Parameters
     ///
-    /// * `State`: The user-defined state type for the agent. Must implement `Default`, `Send`, `Debug`, and be `'static`.
+    /// * `State`: The user-defined state type for the actor. Must implement `Default`, `Send`, `Debug`, and be `'static`.
     ///
     /// # Arguments
     ///
-    /// * `config`: The [`AgentConfig`] to use for the new agent. The broker field will be
+    /// * `config`: The [`ActorConfig`] to use for the new actor. The broker field will be
     ///   overridden with the system broker if it's `None`.
     ///
     /// # Returns
     ///
-    /// A [`ManagedAgent<Idle, State>`] instance, ready for configuration and starting.
-    pub fn new_agent_with_config<State>(
+    /// A [`ManagedActor<Idle, State>`] instance, ready for configuration and starting.
+    pub fn new_actor_with_config<State>(
         &mut self,
-        mut config: AgentConfig,
-    ) -> ManagedAgent<Idle, State>
+        mut config: ActorConfig,
+    ) -> ManagedActor<Idle, State>
     where
         State: Default + Send + Debug + 'static,
     {
         let acton_ready = self.clone();
-        // Ensure the agent uses the system broker if none is specified.
+        // Ensure the actor uses the system broker if none is specified.
         if config.broker.is_none() {
             config.broker = Some(self.0.broker.clone());
         }
-        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(&config));
+        let new_actor = ManagedActor::new(Some(&acton_ready), Some(&config));
         trace!(
-            "Created new agent builder with config, id: {}",
-            new_agent.id()
+            "Created new actor builder with config, id: {}",
+            new_actor.id()
         );
         self.0
             .roots
-            .insert(new_agent.id.clone(), new_agent.handle.clone());
-        new_agent
+            .insert(new_actor.id.clone(), new_actor.handle.clone());
+        new_actor
     }
 
     /// Returns a clone of the handle ([`BrokerRef`]) to the system's central message broker.
@@ -208,40 +208,40 @@ impl AgentRuntime {
         self.0.ipc_type_registry.clone()
     }
 
-    /// Exposes an agent for IPC access with a logical name.
+    /// Exposes an actor for IPC access with a logical name.
     ///
-    /// External processes reference agents by logical names (e.g., `price_service`)
+    /// External processes reference actors by logical names (e.g., `price_service`)
     /// rather than full ERNs. This method registers the mapping between a
-    /// human-readable name and the agent's handle.
+    /// human-readable name and the actor's handle.
     ///
     /// Only available when the `ipc` feature is enabled.
     ///
     /// # Arguments
     ///
-    /// * `name`: The logical name to expose the agent as. External IPC clients
-    ///   will use this name to target the agent.
-    /// * `handle`: The [`AgentHandle`] of the agent to expose.
+    /// * `name`: The logical name to expose the actor as. External IPC clients
+    ///   will use this name to target the actor.
+    /// * `handle`: The [`ActorHandle`] of the actor to expose.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let mut runtime = ActonApp::launch();
-    /// let agent = runtime.new_agent_with_name::<PriceServiceState>("price_service".to_string());
-    /// let handle = agent.start().await;
+    /// let actor = runtime.new_actor_with_name::<PriceServiceState>("price_service".to_string());
+    /// let handle = actor.start().await;
     ///
-    /// // Expose the agent for IPC access
+    /// // Expose the actor for IPC access
     /// runtime.ipc_expose("price_service", handle.clone());
     /// ```
     #[cfg(feature = "ipc")]
-    pub fn ipc_expose(&self, name: &str, handle: AgentHandle) {
-        trace!("Exposing agent {} for IPC as '{}'", handle.id(), name);
-        self.0.ipc_agent_registry.insert(name.to_string(), handle);
+    pub fn ipc_expose(&self, name: &str, handle: ActorHandle) {
+        trace!("Exposing actor {} for IPC as '{}'", handle.id(), name);
+        self.0.ipc_actor_registry.insert(name.to_string(), handle);
     }
 
-    /// Removes an agent from IPC exposure.
+    /// Removes an actor from IPC exposure.
     ///
     /// After calling this method, external processes will no longer be able
-    /// to send messages to the agent using the specified name.
+    /// to send messages to the actor using the specified name.
     ///
     /// Only available when the `ipc` feature is enabled.
     ///
@@ -251,18 +251,18 @@ impl AgentRuntime {
     ///
     /// # Returns
     ///
-    /// The removed [`AgentHandle`] if the name was registered, or `None` if
-    /// no agent was registered with that name.
+    /// The removed [`ActorHandle`] if the name was registered, or `None` if
+    /// no actor was registered with that name.
     #[cfg(feature = "ipc")]
-    pub fn ipc_hide(&self, name: &str) -> Option<AgentHandle> {
-        trace!("Hiding agent '{}' from IPC", name);
-        self.0.ipc_agent_registry.remove(name).map(|(_, h)| h)
+    pub fn ipc_hide(&self, name: &str) -> Option<ActorHandle> {
+        trace!("Hiding actor '{}' from IPC", name);
+        self.0.ipc_actor_registry.remove(name).map(|(_, h)| h)
     }
 
-    /// Looks up an agent handle by its IPC logical name.
+    /// Looks up an actor handle by its IPC logical name.
     ///
     /// This is used internally by the IPC listener to route messages to
-    /// the correct agent.
+    /// the correct actor.
     ///
     /// Only available when the `ipc` feature is enabled.
     ///
@@ -272,29 +272,29 @@ impl AgentRuntime {
     ///
     /// # Returns
     ///
-    /// A clone of the [`AgentHandle`] if found, or `None` if no agent
+    /// A clone of the [`ActorHandle`] if found, or `None` if no actor
     /// is registered with that name.
     #[cfg(feature = "ipc")]
     #[must_use]
-    pub fn ipc_lookup(&self, name: &str) -> Option<AgentHandle> {
-        self.0.ipc_agent_registry.get(name).map(|r| r.clone())
+    pub fn ipc_lookup(&self, name: &str) -> Option<ActorHandle> {
+        self.0.ipc_actor_registry.get(name).map(|r| r.clone())
     }
 
-    /// Returns the number of agents currently exposed for IPC.
+    /// Returns the number of actors currently exposed for IPC.
     ///
     /// Only available when the `ipc` feature is enabled.
     #[cfg(feature = "ipc")]
     #[inline]
     #[must_use]
-    pub fn ipc_agent_count(&self) -> usize {
-        self.0.ipc_agent_registry.len()
+    pub fn ipc_actor_count(&self) -> usize {
+        self.0.ipc_actor_registry.len()
     }
 
     /// Starts the IPC listener with the default configuration.
     ///
     /// This method loads IPC configuration from XDG-compliant locations and
     /// starts a Unix Domain Socket listener that accepts connections from
-    /// external processes and routes messages to registered agents.
+    /// external processes and routes messages to registered actors.
     ///
     /// The listener runs in a background task and will be automatically stopped
     /// when the runtime's cancellation token is triggered (e.g., during shutdown).
@@ -318,9 +318,9 @@ impl AgentRuntime {
     /// ```rust,ignore
     /// let mut runtime = ActonApp::launch();
     ///
-    /// // Register message types and expose agents first
+    /// // Register message types and expose actors first
     /// runtime.ipc_registry().register::<MyMessage>("MyMessage");
-    /// runtime.ipc_expose("my_agent", agent_handle);
+    /// runtime.ipc_expose("my_actor", actor_handle);
     ///
     /// // Start the IPC listener
     /// let listener = runtime.start_ipc_listener().await?;
@@ -364,7 +364,7 @@ impl AgentRuntime {
         let handle = crate::common::ipc::start_listener(
             config,
             self.0.ipc_type_registry.clone(),
-            self.0.ipc_agent_registry.clone(),
+            self.0.ipc_actor_registry.clone(),
             self.0.cancellation_token.clone(),
         )
         .await?;
@@ -378,37 +378,37 @@ impl AgentRuntime {
         Ok(handle)
     }
 
-    /// Creates, configures, and starts a top-level agent using a provided configuration and setup function.
+    /// Creates, configures, and starts a top-level actor using a provided configuration and setup function.
     ///
-    /// This method combines agent creation (using `config`), custom asynchronous setup (`setup_fn`),
-    /// and starting the agent. The `setup_fn` receives the agent in the `Idle` state, performs
+    /// This method combines actor creation (using `config`), custom asynchronous setup (`setup_fn`),
+    /// and starting the actor. The `setup_fn` receives the actor in the `Idle` state, performs
     /// necessary configurations (like adding message handlers), and must call `.start()` to
-    /// transition the agent to the `Started` state, returning its `AgentHandle`.
+    /// transition the actor to the `Started` state, returning its `ActorHandle`.
     ///
-    /// The agent is registered as a top-level agent within the runtime.
+    /// The actor is registered as a top-level actor within the runtime.
     ///
     /// # Type Parameters
     ///
-    /// * `State`: The state type of the agent. Must implement `Default`, `Send`, `Debug`, and be `'static`.
+    /// * `State`: The state type of the actor. Must implement `Default`, `Send`, `Debug`, and be `'static`.
     ///
     /// # Arguments
     ///
-    /// * `config`: The [`AgentConfig`] to use for creating the agent. The broker field will be
+    /// * `config`: The [`ActorConfig`] to use for creating the actor. The broker field will be
     ///   overridden with the system broker if it's `None`.
-    /// * `setup_fn`: An asynchronous closure that takes the `ManagedAgent<Idle, State>`, configures it,
-    ///   calls `.start()`, and returns the resulting `AgentHandle`. The closure must be `Send + 'static`.
+    /// * `setup_fn`: An asynchronous closure that takes the `ManagedActor<Idle, State>`, configures it,
+    ///   calls `.start()`, and returns the resulting `ActorHandle`. The closure must be `Send + 'static`.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `AgentHandle` of the successfully spawned agent, or an error if
-    /// agent creation or the `setup_fn` fails.
-    pub async fn spawn_agent_with_setup_fn<State>(
+    /// A `Result` containing the `ActorHandle` of the successfully spawned actor, or an error if
+    /// actor creation or the `setup_fn` fails.
+    pub async fn spawn_actor_with_setup_fn<State>(
         &mut self,
-        mut config: AgentConfig,
+        mut config: ActorConfig,
         setup_fn: impl FnOnce(
-            ManagedAgent<Idle, State>,
-        ) -> Pin<Box<dyn Future<Output = AgentHandle> + Send + 'static>>,
-    ) -> anyhow::Result<AgentHandle>
+            ManagedActor<Idle, State>,
+        ) -> Pin<Box<dyn Future<Output = ActorHandle> + Send + 'static>>,
+    ) -> anyhow::Result<ActorHandle>
     where
         State: Default + Send + Debug + 'static,
     {
@@ -417,32 +417,32 @@ impl AgentRuntime {
             config.broker = Some(self.0.broker.clone());
         }
 
-        let new_agent = ManagedAgent::new(Some(&acton_ready), Some(&config));
-        let agent_id = new_agent.id().clone(); // Get ID before moving
-        trace!("Running setup function for agent: {}", agent_id);
-        let handle = setup_fn(new_agent).await; // Setup function consumes the agent and returns handle
-        trace!("Agent {} setup complete, registering handle.", agent_id);
+        let new_actor = ManagedActor::new(Some(&acton_ready), Some(&config));
+        let actor_id = new_actor.id().clone(); // Get ID before moving
+        trace!("Running setup function for actor: {}", actor_id);
+        let handle = setup_fn(new_actor).await; // Setup function consumes the actor and returns handle
+        trace!("Actor {} setup complete, registering handle.", actor_id);
         self.0.roots.insert(handle.id.clone(), handle.clone()); // Register the returned handle
         Ok(handle)
     }
 
     /// Initiates a graceful shutdown of the entire Acton system.
     ///
-    /// This method attempts to stop all registered top-level agents (and consequently their
+    /// This method attempts to stop all registered top-level actors (and consequently their
     /// descendant children through the `stop` propagation mechanism) by sending them a
-    /// [`SystemSignal::Terminate`]. It waits for all top-level agent tasks to complete.
-    /// Finally, it stops the central message broker agent.
+    /// [`SystemSignal::Terminate`]. It waits for all top-level actor tasks to complete.
+    /// Finally, it stops the central message broker actor.
     ///
     /// # Returns
     ///
     /// An `anyhow::Result<()>` indicating whether the shutdown process completed successfully.
-    /// Errors during the stopping of individual agents or the broker will be propagated.
+    /// Errors during the stopping of individual actors or the broker will be propagated.
     pub async fn shutdown_all(&mut self) -> anyhow::Result<()> {
         use std::time::Duration;
         use tokio::time::timeout as tokio_timeout;
 
-        // Phase 1: Concurrently signal all root agents to terminate gracefully.
-        trace!("Sending Terminate signal to all root agents.");
+        // Phase 1: Concurrently signal all root actors to terminate gracefully.
+        trace!("Sending Terminate signal to all root actors.");
         let stop_futures: Vec<_> = self
             .0
             .roots
@@ -451,7 +451,7 @@ impl AgentRuntime {
                 let handle = item.value().clone();
                 async move {
                     if let Err(e) = handle.stop().await {
-                        error!("Error stopping agent {}: {:?}", handle.id(), e);
+                        error!("Error stopping actor {}: {:?}", handle.id(), e);
                     }
                 }
             })
@@ -465,7 +465,7 @@ impl AgentRuntime {
             .try_into()
             .unwrap_or(u64::MAX);
 
-        trace!("Waiting for all agents to finish gracefully...");
+        trace!("Waiting for all actors to finish gracefully...");
         if tokio_timeout(Duration::from_millis(timeout_ms), join_all(stop_futures))
             .await
             .is_err()
@@ -473,12 +473,16 @@ impl AgentRuntime {
             error!("System-wide shutdown timeout expired after {} ms. Forcefully cancelling remaining tasks.", timeout_ms);
             self.0.cancellation_token.cancel(); // Forceful cancellation
         } else {
-            trace!("All agents completed gracefully.");
+            trace!("All actors completed gracefully.");
         }
 
         trace!("Stopping the system broker...");
-        // Stop the broker agent, using same system shutdown timeout.
-        if let Ok(res) = tokio_timeout(Duration::from_millis(timeout_ms), self.0.broker.stop()).await { res? } else {
+        // Stop the broker actor, using same system shutdown timeout.
+        if let Ok(res) =
+            tokio_timeout(Duration::from_millis(timeout_ms), self.0.broker.stop()).await
+        {
+            res?
+        } else {
             error!(
                 "Timeout waiting for broker to shut down after {} ms",
                 timeout_ms
@@ -491,101 +495,101 @@ impl AgentRuntime {
         Ok(())
     }
 
-    /// Creates, configures, and starts a top-level agent using a default configuration and a setup function.
+    /// Creates, configures, and starts a top-level actor using a default configuration and a setup function.
     ///
-    /// This is a convenience method similar to [`AgentRuntime::spawn_agent_with_setup_fn`], but it
-    /// automatically creates a default `AgentConfig` (with a default name and the system broker).
-    /// The provided `setup_fn` configures and starts the agent.
+    /// This is a convenience method similar to [`ActorRuntime::spawn_actor_with_setup_fn`], but it
+    /// automatically creates a default `ActorConfig` (with a default name and the system broker).
+    /// The provided `setup_fn` configures and starts the actor.
     ///
-    /// The agent is registered as a top-level agent within the runtime.
+    /// The actor is registered as a top-level actor within the runtime.
     ///
     /// # Type Parameters
     ///
-    /// * `State`: The state type of the agent. Must implement `Default`, `Send`, `Debug`, and be `'static`.
+    /// * `State`: The state type of the actor. Must implement `Default`, `Send`, `Debug`, and be `'static`.
     ///
     /// # Arguments
     ///
-    /// * `setup_fn`: An asynchronous closure that takes the `ManagedAgent<Idle, State>`, configures it,
-    ///   calls `.start()`, and returns the resulting `AgentHandle`. The closure must be `Send + 'static`.
+    /// * `setup_fn`: An asynchronous closure that takes the `ManagedActor<Idle, State>`, configures it,
+    ///   calls `.start()`, and returns the resulting `ActorHandle`. The closure must be `Send + 'static`.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `AgentHandle` of the successfully spawned agent, or an error if
-    /// agent creation or the `setup_fn` fails.
+    /// A `Result` containing the `ActorHandle` of the successfully spawned actor, or an error if
+    /// actor creation or the `setup_fn` fails.
     ///
     /// # Errors
     ///
-    /// Returns an error if the default `AgentConfig` cannot be created.
-    pub async fn spawn_agent<State>(
+    /// Returns an error if the default `ActorConfig` cannot be created.
+    pub async fn spawn_actor<State>(
         &mut self,
         setup_fn: impl FnOnce(
-            ManagedAgent<Idle, State>,
-        ) -> Pin<Box<dyn Future<Output = AgentHandle> + Send + 'static>>,
-    ) -> anyhow::Result<AgentHandle>
+            ManagedActor<Idle, State>,
+        ) -> Pin<Box<dyn Future<Output = ActorHandle> + Send + 'static>>,
+    ) -> anyhow::Result<ActorHandle>
     where
         State: Default + Send + Debug + 'static,
     {
         // Create a default config, ensuring the system broker is included.
-        let config = AgentConfig::new(Ern::default(), None, Some(self.broker()))?;
+        let config = ActorConfig::new(Ern::default(), None, Some(self.broker()))?;
         // Reuse the more general spawn function.
-        self.spawn_agent_with_setup_fn(config, setup_fn).await
+        self.spawn_actor_with_setup_fn(config, setup_fn).await
     }
 }
 
-/// Converts an [`ActonApp`] marker into an initialized `AgentRuntime`.
+/// Converts an [`ActonApp`] marker into an initialized `ActorRuntime`.
 ///
 /// This implementation defines the system bootstrap process triggered by [`ActonApp::launch()`].
 /// It performs the following steps:
 /// 1. Loads configuration from XDG-compliant locations using [`ActonConfig::load()`].
-/// 2. Spawns a background Tokio task dedicated to initializing the [`AgentBroker`].
-/// 3. Uses a `oneshot` channel to receive the `AgentHandle` of the initialized broker
+/// 2. Spawns a background Tokio task dedicated to initializing the [`Broker`].
+/// 3. Uses a `oneshot` channel to receive the `ActorHandle` of the initialized broker
 ///    back from the background task.
 /// 4. **Blocks the current thread** using `tokio::task::block_in_place` while waiting
 ///    for the broker initialization to complete. This ensures that `ActonApp::launch()`
 ///    does not return until the core system components (like the broker) are ready.
-/// 5. Constructs the `AgentRuntime` using the received broker handle and loaded configuration.
+/// 5. Constructs the `ActorRuntime` using the received broker handle and loaded configuration.
 ///
 /// **Warning**: The use of `block_in_place` means this conversion should typically
 /// only happen once at the very start of the application within the main thread
 /// or a dedicated initialization thread, before the main asynchronous workload begins.
 /// Calling this from within an existing Tokio runtime task could lead to deadlocks
 /// or performance issues.
-impl From<ActonApp> for AgentRuntime {
+impl From<ActonApp> for ActorRuntime {
     fn from(_acton: ActonApp) -> Self {
         trace!("Starting Acton system initialization (From<ActonApp>)");
-        
+
         // Load configuration from XDG-compliant locations
         let config = ActonConfig::load();
         trace!("Configuration loaded: {:?}", config);
-        
+
         let (sender, receiver) = oneshot::channel();
-        
+
         // Create runtime with loaded configuration
         let mut runtime = Self(ActonInner {
-            broker: AgentHandle::default(),
+            broker: ActorHandle::default(),
             roots: DashMap::default(),
             cancellation_token: CancellationToken::new(),
             config,
             #[cfg(feature = "ipc")]
             ipc_type_registry: std::sync::Arc::new(crate::common::ipc::IpcTypeRegistry::new()),
             #[cfg(feature = "ipc")]
-            ipc_agent_registry: std::sync::Arc::new(DashMap::new()),
+            ipc_actor_registry: std::sync::Arc::new(DashMap::new()),
             #[cfg(feature = "ipc")]
             ipc_subscription_manager: std::sync::Arc::new(parking_lot::RwLock::new(None)),
         });
-        
+
         // Spawn broker initialization in a separate task
         let runtime_clone = runtime.clone();
-        
+
         // Assert that the cancellation_token is present in the clone before broker initialization
         assert!(
             !runtime_clone.0.cancellation_token.is_cancelled(),
             "ActonInner cancellation_token must be present and active before Broker initialization"
         );
-        
+
         tokio::spawn(async move {
             trace!("Broker initialization task started.");
-            let broker = AgentBroker::initialize(runtime_clone).await;
+            let broker = Broker::initialize(runtime_clone).await;
             trace!("Broker initialization task finished, sending handle.");
             let _ = sender.send(broker); // Send broker handle back
         });
@@ -596,7 +600,7 @@ impl From<ActonApp> for AgentRuntime {
             tokio::runtime::Handle::current()
                 .block_on(async { receiver.await.expect("Broker initialization failed") })
         });
-        trace!("Broker handle received, constructing AgentRuntime.");
+        trace!("Broker handle received, constructing ActorRuntime.");
         runtime.0.broker = broker;
 
         // Create the runtime with the initialized broker and configuration

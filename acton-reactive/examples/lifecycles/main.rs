@@ -13,13 +13,13 @@
  * See the applicable License for the specific language governing permissions and
  * limitations under that License.
  */
-use tokio::time::{sleep, Duration};
 use acton_reactive::prelude::*;
+use tokio::time::{sleep, Duration};
 
-// Import the macro for agent state structs
+// Import the macro for actor state structs
 use acton_macro::acton_actor;
 
-/// Represents the state (model) for an agent that tracks a list of items.
+/// Represents the state (model) for an actor that tracks a list of items.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 struct ItemTracker {
@@ -40,60 +40,60 @@ async fn main() {
     // 1. Launch the Acton runtime.
     let mut runtime = ActonApp::launch();
 
-    // 2. Create the agent builder for ItemTracker state.
-    let mut tracker_agent_builder = runtime.new_agent::<ItemTracker>();
+    // 2. Create the actor builder for ItemTracker state.
+    let mut tracker_actor_builder = runtime.new_actor::<ItemTracker>();
 
     // 3. Configure lifecycle hooks and message handlers.
-    tracker_agent_builder
-        // Hook executed *before* the agent's main task loop starts.
+    tracker_actor_builder
+        // Hook executed *before* the actor's main task loop starts.
         .before_start(|_| {
-            println!("Agent is preparing to track items... Here we go!");
-            AgentReply::immediate()
+            println!("Actor is preparing to track items... Here we go!");
+            ActorReply::immediate()
         })
-        // Hook executed *after* the agent's main task loop has started.
+        // Hook executed *after* the actor's main task loop has started.
         .after_start(|_| {
-            println!("Agent is now tracking items!");
-            AgentReply::immediate()
+            println!("Actor is now tracking items!");
+            ActorReply::immediate()
         })
         // Handler for `AddItem` messages.
-        .mutate_on::<AddItem>(|agent, envelope| {
+        .mutate_on::<AddItem>(|actor, envelope| {
             let item = &envelope.message().0;
             println!("Adding item: {item}");
-            // Mutate the agent's internal state.
-            agent.model.items.push(item.clone());
-            AgentReply::immediate()
+            // Mutate the actor's internal state.
+            actor.model.items.push(item.clone());
+            ActorReply::immediate()
         })
         // Handler for `GetItems` messages.
-        .mutate_on::<GetItems>(|agent, _| {
+        .mutate_on::<GetItems>(|actor, _| {
             println!("Fetching items... please wait!");
             // Clone the items list to move it into the async block.
-            let items = agent.model.items.clone();
+            let items = actor.model.items.clone();
             // Use `from_async` to perform work asynchronously.
-            AgentReply::from_async(async move {
+            ActorReply::from_async(async move {
                 // Simulate a delay (e.g., fetching from a database).
                 sleep(Duration::from_secs(2)).await;
                 println!("Current items: {items:?}");
             })
         })
-        // Hook executed *before* the agent starts its shutdown process
+        // Hook executed *before* the actor starts its shutdown process
         // (after receiving a stop signal but before stopping children).
         .before_stop(|_| {
-            println!("Agent is stopping... finishing up!");
-            AgentReply::immediate()
+            println!("Actor is stopping... finishing up!");
+            ActorReply::immediate()
         })
-        // Hook executed *after* the agent's task has fully stopped
+        // Hook executed *after* the actor's task has fully stopped
         // and all children (if any) have stopped.
-        .after_stop(|agent| {
-            println!("Agent stopped! Final items: {:?}", agent.model.items);
+        .after_stop(|actor| {
+            println!("Actor stopped! Final items: {:?}", actor.model.items);
             // Assert the final state.
-            debug_assert_eq!(agent.model.items, vec!["Apple", "Banana", "Cherry"]);
-            AgentReply::immediate()
+            debug_assert_eq!(actor.model.items, vec!["Apple", "Banana", "Cherry"]);
+            ActorReply::immediate()
         });
 
-    // 4. Start the agent. Lifecycle: before_start -> after_start.
-    let tracker_handle = tracker_agent_builder.start().await;
+    // 4. Start the actor. Lifecycle: before_start -> after_start.
+    let tracker_handle = tracker_actor_builder.start().await;
 
-    // 5. Send messages to the agent.
+    // 5. Send messages to the actor.
     tracker_handle.send(AddItem("Apple".to_string())).await;
     tracker_handle.send(AddItem("Banana".to_string())).await;
     tracker_handle.send(AddItem("Cherry".to_string())).await;
@@ -105,5 +105,8 @@ async fn main() {
     sleep(Duration::from_secs(3)).await;
 
     // 6. Shut down the runtime. Lifecycle: before_stop -> after_stop.
-    runtime.shutdown_all().await.expect("Failed to shut down system");
+    runtime
+        .shutdown_all()
+        .await
+        .expect("Failed to shut down system");
 }

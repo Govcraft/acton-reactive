@@ -43,7 +43,7 @@ type SerializerFn = Arc<
 /// Registry mapping message type names to deserializers.
 ///
 /// The `IpcTypeRegistry` is the central component for IPC message deserialization.
-/// Before external messages can be routed to agents, their types must be registered
+/// Before external messages can be routed to actors, their types must be registered
 /// here so the runtime knows how to convert serialized bytes back into typed messages.
 ///
 /// # Thread Safety

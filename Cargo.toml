@@ -85,5 +85,5 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-# Allow cognitive complexity for proc macros and complex agent logic
+# Allow cognitive complexity for proc macros and complex actor logic
 cognitive_complexity = "allow"

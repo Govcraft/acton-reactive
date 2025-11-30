@@ -12,25 +12,25 @@ This guide provides detailed walkthroughs of all example applications in the `ac
 
 ## Basic Examples
 
-### Basic Agent
+### Basic Actor
 
 **Location:** `examples/basic/main.rs`
 
-**Purpose:** Demonstrates fundamental agent concepts including state management, message handling, and request-reply patterns.
+**Purpose:** Demonstrates fundamental actor concepts including state management, message handling, and request-reply patterns.
 
 **Key Concepts:**
-- Creating an agent with custom state
+- Creating an actor with custom state
 - Defining message types
 - Registering message handlers with `mutate_on`
 - Sending replies to message senders
-- Using `AgentReply` helpers
+- Using `ActorReply` helpers
 
 **Code Walkthrough:**
 
 ```rust
-// 1. Define agent state using the acton_actor macro
+// 1. Define actor state using the acton_actor macro
 #[acton_actor]
-struct BasicAgentState {
+struct BasicActorState {
     some_state: usize,
 }
 
@@ -45,32 +45,32 @@ struct PongMsg;
 struct BuhByeMsg;
 
 // 3. Configure handlers
-agent_builder
+actor_builder
     // Handle Ping: increment state, reply with Pong
-    .mutate_on::<PingMsg>(|agent, envelope| {
-        agent.model.some_state += 1;
+    .mutate_on::<PingMsg>(|actor, envelope| {
+        actor.model.some_state += 1;
         let reply_envelope = envelope.reply_envelope();
         Box::pin(async move {
             reply_envelope.send(PongMsg).await;
         })
     })
     // Handle Pong: increment state, send BuhBye to self
-    .mutate_on::<PongMsg>(|agent, _envelope| {
-        agent.model.some_state += 1;
-        let self_handle = agent.handle().clone();
-        AgentReply::from_async(async move {
+    .mutate_on::<PongMsg>(|actor, _envelope| {
+        actor.model.some_state += 1;
+        let self_handle = actor.handle().clone();
+        ActorReply::from_async(async move {
             self_handle.send(BuhByeMsg).await;
         })
     })
     // Handle BuhBye: just log
-    .mutate_on::<BuhByeMsg>(|_agent, _envelope| {
+    .mutate_on::<BuhByeMsg>(|_actor, _envelope| {
         println!("Thanks for all the fish! Buh Bye!");
-        AgentReply::immediate()
+        ActorReply::immediate()
     })
     // Verify final state
-    .after_stop(|agent| {
-        assert_eq!(agent.model.some_state, 2);
-        AgentReply::immediate()
+    .after_stop(|actor| {
+        assert_eq!(actor.model.some_state, 2);
+        ActorReply::immediate()
     });
 ```
 
@@ -91,7 +91,7 @@ cargo run --example basic
 - `before_start` - Runs before message loop
 - `after_start` - Runs after message loop starts
 - `before_stop` - Runs when stop is requested
-- `after_stop` - Runs after agent fully stops
+- `after_stop` - Runs after actor fully stops
 - Async operations in handlers
 
 **Hook Execution Order:**
@@ -116,34 +116,34 @@ cargo run --example basic
 **Code Walkthrough:**
 
 ```rust
-tracker_agent_builder
+tracker_actor_builder
     .before_start(|_| {
-        println!("Agent is preparing to track items... Here we go!");
-        AgentReply::immediate()
+        println!("Actor is preparing to track items... Here we go!");
+        ActorReply::immediate()
     })
     .after_start(|_| {
-        println!("Agent is now tracking items!");
-        AgentReply::immediate()
+        println!("Actor is now tracking items!");
+        ActorReply::immediate()
     })
-    .mutate_on::<AddItem>(|agent, envelope| {
-        agent.model.items.push(envelope.message().0.clone());
-        AgentReply::immediate()
+    .mutate_on::<AddItem>(|actor, envelope| {
+        actor.model.items.push(envelope.message().0.clone());
+        ActorReply::immediate()
     })
-    .mutate_on::<GetItems>(|agent, _| {
-        let items = agent.model.items.clone();
+    .mutate_on::<GetItems>(|actor, _| {
+        let items = actor.model.items.clone();
         // Demonstrate async work in handler
-        AgentReply::from_async(async move {
+        ActorReply::from_async(async move {
             sleep(Duration::from_secs(2)).await;
             println!("Current items: {items:?}");
         })
     })
     .before_stop(|_| {
-        println!("Agent is stopping... finishing up!");
-        AgentReply::immediate()
+        println!("Actor is stopping... finishing up!");
+        ActorReply::immediate()
     })
-    .after_stop(|agent| {
-        println!("Agent stopped! Final items: {:?}", agent.model.items);
-        AgentReply::immediate()
+    .after_stop(|actor| {
+        println!("Actor stopped! Final items: {:?}", actor.model.items);
+        ActorReply::immediate()
     });
 ```
 
@@ -161,16 +161,16 @@ cargo run --example lifecycles
 **Purpose:** Demonstrates pub/sub messaging using the broker.
 
 **Key Concepts:**
-- Using `AgentBroker` for message broadcasting
-- Subscribing agents to message types
-- Multiple agents receiving the same broadcast
+- Using `ActorBroker` for message broadcasting
+- Subscribing actors to message types
+- Multiple actors receiving the same broadcast
 - Coordination via shared messages
 
 **Architecture:**
 
 ```text
 ┌──────────────────┐    broadcast    ┌─────────────────┐
-│ Main Application │ ──────────────→ │  AgentBroker    │
+│ Main Application │ ──────────────→ │  ActorBroker    │
 └──────────────────┘                 └────────┬────────┘
                                               │
                     ┌─────────────────────────┼─────────────────────────┐
@@ -189,28 +189,28 @@ cargo run --example lifecycles
 // Get the broker
 let broker_handle = runtime.broker();
 
-// Configure agents to broadcast status updates
+// Configure actors to broadcast status updates
 data_collector_builder
-    .mutate_on::<NewData>(|agent, envelope| {
-        agent.model.data_points.push(envelope.message().0);
-        let broker = agent.broker().clone();
+    .mutate_on::<NewData>(|actor, envelope| {
+        actor.model.data_points.push(envelope.message().0);
+        let broker = actor.broker().clone();
         let value = envelope.message().0;
         Box::pin(async move {
             broker.broadcast(StatusUpdate::Updated("DataCollector".into(), value)).await
         })
     });
 
-// Subscribe agents BEFORE starting
+// Subscribe actors BEFORE starting
 data_collector_builder.handle().subscribe::<NewData>().await;
 aggregator_builder.handle().subscribe::<NewData>().await;
 printer_builder.handle().subscribe::<StatusUpdate>().await;
 
-// Start agents
+// Start actors
 let _data_collector = data_collector_builder.start().await;
 let _aggregator = aggregator_builder.start().await;
 let _printer = printer_builder.start().await;
 
-// Broadcast messages - all subscribed agents receive them
+// Broadcast messages - all subscribed actors receive them
 broker_handle.broadcast(NewData(5)).await;
 broker_handle.broadcast(NewData(10)).await;
 ```
@@ -231,7 +231,7 @@ cargo run --example broadcast
 **Key Concepts:**
 - XDG-compliant configuration locations
 - Accessing the global `CONFIG` static
-- Custom configuration for agents
+- Custom configuration for actors
 
 **Running:**
 ```bash
@@ -244,17 +244,17 @@ cargo run --example configuration
 
 **Location:** `examples/fruit_market/`
 
-**Purpose:** A complex multi-agent application demonstrating real-world patterns.
+**Purpose:** A complex multi-actor application demonstrating real-world patterns.
 
 **Components:**
-- **Cart Agent**: Manages shopping cart items
-- **Register Agent**: Handles checkout process
+- **Cart Actor**: Manages shopping cart items
+- **Register Actor**: Handles checkout process
 - **Price Service**: Provides price lookups
-- **Printer Agent**: Displays receipts
+- **Printer Actor**: Displays receipts
 
 **Key Concepts:**
-- Multi-agent coordination
-- Agent-to-agent messaging
+- Multi-actor coordination
+- Actor-to-actor messaging
 - Complex state management
 - Request-reply patterns
 
@@ -275,7 +275,7 @@ cargo run --example fruit_market
 
 **Key Concepts:**
 - IPC type registry setup
-- Agent exposure via IPC
+- Actor exposure via IPC
 - Socket utilities
 - In-process IPC simulation
 
@@ -291,14 +291,14 @@ registry.register::<PriceUpdate>("PriceUpdate");
 registry.register::<GetPrice>("GetPrice");
 registry.register::<PriceResponse>("PriceResponse");
 
-// 3. Create and configure agent
-let mut price_agent = runtime.new_agent::<PriceState>();
-price_agent.mutate_on::<GetPrice>(|agent, ctx| {
+// 3. Create and configure actor
+let mut price_actor = runtime.new_actor::<PriceState>();
+price_actor.mutate_on::<GetPrice>(|actor, ctx| {
     // Handle price lookups
 });
-let price_handle = price_agent.start().await;
+let price_handle = price_actor.start().await;
 
-// 4. Expose agent via IPC
+// 4. Expose actor via IPC
 runtime.ipc_expose("prices", price_handle.clone());
 
 // 5. Start IPC listener
@@ -414,7 +414,7 @@ cargo run --example ipc_bidirectional_demo --bin client
 │              │                             ▼
 │              │                      ┌──────────────┐
 │              │                      │  Countdown   │
-│              │                      │    Agent     │
+│              │                      │    Actor     │
 │              │                      └──────┬───────┘
 │              │                             │
 │              │   IpcStreamFrame (5)        │
@@ -445,7 +445,7 @@ pub struct IpcStreamFrame {
 **Handler Pattern:**
 
 ```rust
-agent.mutate_on::<CountdownRequest>(|_agent, ctx| {
+actor.mutate_on::<CountdownRequest>(|_actor, ctx| {
     let start = ctx.message().from;
     let delay = ctx.message().delay_ms;
     let reply = ctx.reply_envelope();
@@ -482,12 +482,12 @@ cargo run --example ipc_streaming --bin client
 ```text
                                       ┌──────────────┐
                                       │  Price Feed  │
-                                      │    Agent     │
+                                      │    Actor     │
                                       └──────┬───────┘
                                              │ broadcast
                                              ▼
 ┌──────────────┐                      ┌──────────────┐
-│  Client A    │←────────────────────│  AgentBroker │
+│  Client A    │←────────────────────│  ActorBroker │
 │ subscribed   │   IpcPushNotification└──────┬───────┘
 │ to: Price    │                             │
 └──────────────┘                             │
@@ -667,10 +667,10 @@ node client.js
 |---------|---------|--------------|
 | Basic | Direct messaging | State mutation, replies, self-messaging |
 | Lifecycles | Lifecycle management | Hooks, async handlers |
-| Broadcast | Pub/Sub | Broker, subscriptions, multi-agent |
-| Fruit Market | Complex system | Multi-agent coordination |
-| IPC Basic | IPC setup | Type registry, agent exposure |
-| IPC Bidirectional | Request-Response | Multiple services, stateful agents |
+| Broadcast | Pub/Sub | Broker, subscriptions, multi-actor |
+| Fruit Market | Complex system | Multi-actor coordination |
+| IPC Basic | IPC setup | Type registry, actor exposure |
+| IPC Bidirectional | Request-Response | Multiple services, stateful actors |
 | IPC Streaming | Multi-frame response | Pagination, countdowns |
 | IPC Subscriptions | Push notifications | Broker-based subscriptions |
 | IPC Client Libraries | Polyglot clients | Python, Node.js integration |

@@ -7,46 +7,46 @@ use crate::screens::{HomeScreen, NewScreen};
 
 #[acton_actor]
 pub struct ViewManager {
-    screens: HashMap<Ern, AgentHandle>,
-    active: AgentHandle,
+    screens: HashMap<Ern, ActorHandle>,
+    active: ActorHandle,
 }
 
 impl ViewManager {
-    pub async fn create(app_runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        let mut agent = app_runtime.new_agent::<Self>();
-        let mut runtime = agent.runtime().clone();
-        agent
-            .mutate_on::<MenuMoveUp>(|agent, context| {
-                let view = agent.model.active.clone();
+    pub async fn create(app_runtime: &mut ActorRuntime) -> anyhow::Result<ActorHandle> {
+        let mut actor = app_runtime.new_actor::<Self>();
+        let mut runtime = actor.runtime().clone();
+        actor
+            .mutate_on::<MenuMoveUp>(|actor, context| {
+                let view = actor.model.active.clone();
                 let msg = context.message().clone();
-                AgentReply::from_async(async move {
+                ActorReply::from_async(async move {
                     view.send(msg).await;
                 })
             })
-            .mutate_on::<MenuMoveDown>(|agent, context| {
-                let view = agent.model.active.clone();
+            .mutate_on::<MenuMoveDown>(|actor, context| {
+                let view = actor.model.active.clone();
                 let msg = context.message().clone();
-                AgentReply::from_async(async move {
+                ActorReply::from_async(async move {
                     view.send(msg).await;
                 })
             })
-            .mutate_on::<MenuSelect>(|agent, context| {
-                let view = agent.model.active.clone();
+            .mutate_on::<MenuSelect>(|actor, context| {
+                let view = actor.model.active.clone();
                 let msg = context.message().clone();
-                AgentReply::from_async(async move {
+                ActorReply::from_async(async move {
                     view.send(msg).await;
                 })
             });
         let home_screen = HomeScreen::create(&mut runtime).await?;
-        agent.model.screens.insert(home_screen.id(), home_screen);
+        actor.model.screens.insert(home_screen.id(), home_screen);
 
         let new_screen = NewScreen::create(&mut runtime).await?;
-        agent.model.screens.insert(new_screen.id(), new_screen);
+        actor.model.screens.insert(new_screen.id(), new_screen);
 
-        // agent.model.active = agent.model.screens[0].clone();
+        // actor.model.active = actor.model.screens[0].clone();
 
-        agent.broker().subscribe::<MenuMoveUp>().await;
-        agent.broker().subscribe::<MenuMoveDown>().await;
-        Ok(agent.start().await)
+        actor.broker().subscribe::<MenuMoveUp>().await;
+        actor.broker().subscribe::<MenuMoveDown>().await;
+        Ok(actor.start().await)
     }
 }

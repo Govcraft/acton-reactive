@@ -22,7 +22,7 @@ use tracing::trace;
 use crate::message::BrokerRequest;
 use crate::traits::ActonMessage;
 
-/// A specialized envelope used by the [`AgentBroker`](crate::common::AgentBroker) to distribute broadcast messages.
+/// A specialized envelope used by the [`Broker`](crate::common::Broker) to distribute broadcast messages.
 ///
 /// When the broker receives a [`BrokerRequest`], it extracts the message payload
 /// (`Arc<dyn ActonMessage>`) and wraps it in this `BrokerRequestEnvelope` before

@@ -24,7 +24,7 @@ The `acton-reactive` IPC protocol uses Unix domain sockets with length-prefixed 
 
 | Type | Byte | Direction | Purpose |
 |------|------|-----------|---------|
-| REQUEST | 0x01 | Client → Server | Send message to agent |
+| REQUEST | 0x01 | Client → Server | Send message to actor |
 | RESPONSE | 0x02 | Server → Client | Successful response |
 | ERROR | 0x03 | Server → Client | Error response |
 | HEARTBEAT | 0x04 | Both | Keep-alive/ping |
@@ -240,19 +240,19 @@ The example server exposes these services:
 
 ## Service Discovery
 
-All clients support service discovery to query available agents and message types:
+All clients support service discovery to query available actors and message types:
 
 **Python:**
 ```python
 discovery = await client.discover()
-print(f"Agents: {discovery.agents}")
+print(f"Actors: {discovery.actors}")
 print(f"Message Types: {discovery.message_types}")
 ```
 
 **Node.js/Deno:**
 ```typescript
 const discovery = await client.discover();
-console.log(`Agents: ${discovery.agents.map(a => a.name)}`);
+console.log(`Actors: ${discovery.actors.map(a => a.name)}`);
 console.log(`Message Types: ${discovery.message_types}`);
 ```
 
@@ -282,9 +282,9 @@ All clients handle these error types:
 
 Error codes from server:
 - `UNKNOWN_MESSAGE_TYPE` - Message type not registered
-- `AGENT_NOT_FOUND` - Target agent not exposed
+- `ACTOR_NOT_FOUND` - Target actor not exposed
 - `SERIALIZATION_ERROR` - JSON/MessagePack parsing failed
-- `TARGET_BUSY` - Agent inbox full (backpressure)
+- `TARGET_BUSY` - Actor inbox full (backpressure)
 - `TIMEOUT` - Server-side timeout
 - `RATE_LIMITED` - Rate limit exceeded
 

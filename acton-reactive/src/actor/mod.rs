@@ -1,25 +1,24 @@
-//! Defines the core components for creating, configuring, and managing agents.
+//! Defines the core components for creating, configuring, and managing actors.
 //!
-//! This module provides the fundamental building blocks for actors (referred to as agents
-//! within the Acton framework). It encapsulates the agent's lifecycle, state management,
-//! and configuration.
+//! This module provides the fundamental building blocks for actors within the Acton
+//! framework. It encapsulates the actor's lifecycle, state management, and configuration.
 //!
 //! # Key Components
 //!
-//! *   [`ManagedAgent`]: The central struct representing an agent's runtime state machine.
-//!     It manages the agent's lifecycle (e.g., `Idle`, `Started`), message handling,
+//! *   [`ManagedActor`]: The central struct representing an actor's runtime state machine.
+//!     It manages the actor's lifecycle (e.g., `Idle`, `Started`), message handling,
 //!     and interaction with the Acton system.
-//! *   [`AgentConfig`]: A structure holding the necessary configuration parameters
-//!     to initialize a new agent, such as its unique identifier (`Ern`) and optional
+//! *   [`ActorConfig`]: A structure holding the necessary configuration parameters
+//!     to initialize a new actor, such as its unique identifier (`Ern`) and optional
 //!     references to its parent supervisor and the system message broker.
-//! *   [`Idle`]: A type-state marker indicating that a `ManagedAgent` has been configured
+//! *   [`Idle`]: A type-state marker indicating that a `ManagedActor` has been configured
 //!     but has not yet started its main processing loop.
-//! *   [`Started`]: A type-state marker indicating that a `ManagedAgent` is actively
+//! *   [`Started`]: A type-state marker indicating that a `ManagedActor` is actively
 //!     running and processing messages.
 //!
-//! The primary interaction point for creating and managing agents often involves
-//! using [`AgentConfig`] to set up initial parameters and then transitioning a
-//! [`ManagedAgent`] from the [`Idle`] state to the [`Started`] state.
+//! The primary interaction point for creating and managing actors often involves
+//! using [`ActorConfig`] to set up initial parameters and then transitioning a
+//! [`ManagedActor`] from the [`Idle`] state to the [`Started`] state.
 
 /*
  * Copyright (c) 2024. Govcraft
@@ -38,13 +37,13 @@
  */
 
 // Re-export key types for easier access within the crate and potentially the prelude.
-pub use agent_config::AgentConfig;
-pub use managed_agent::Idle;
-pub use managed_agent::ManagedAgent;
-pub use managed_agent::started::Started; // Note: `Started` is defined within a submodule
+pub use actor_config::ActorConfig;
+pub use managed_actor::Idle;
+pub use managed_actor::ManagedActor;
+pub use managed_actor::started::Started; // Note: `Started` is defined within a submodule
 
-/// Contains the `ManagedAgent` struct and its state-specific implementations (`Idle`, `Started`).
-mod managed_agent;
+/// Contains the `ManagedActor` struct and its state-specific implementations (`Idle`, `Started`).
+mod managed_actor;
 
-/// Contains the `AgentConfig` struct for agent initialization.
-mod agent_config;
+/// Contains the `ActorConfig` struct for actor initialization.
+mod actor_config;

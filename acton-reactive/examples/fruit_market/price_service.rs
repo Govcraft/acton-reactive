@@ -21,61 +21,60 @@ use tracing::{instrument, trace};
 
 use acton_reactive::prelude::*;
 
-// Import message types used by this agent.
-use crate::{CartItem, ItemScanned};
+// Import message types used by this actor.
 use crate::PriceResponse;
+use crate::{CartItem, ItemScanned};
 
-// Import the macro for agent state structs
+// Import the macro for actor state structs
 use acton_macro::acton_actor;
 
 // Constants for configuration and simulation.
-const PRICE_SERVICE_ROOT: &str = "price_service"; // Base name for the agent's ERN.
+const PRICE_SERVICE_ROOT: &str = "price_service"; // Base name for the actor's ERN.
 const MOCK_DELAY_MS: u64 = 100; // Simulated delay for price lookup.
 const PRICE_MIN: i32 = 100; // Minimum random price in cents.
 const PRICE_MAX: i32 = 250; // Maximum random price in cents.
 
-/// Represents the state (model) for the `PriceService` agent.
-/// This agent is responsible for looking up (or simulating) the price of items.
+/// Represents the state (model) for the `PriceService` actor.
+/// This actor is responsible for looking up (or simulating) the price of items.
 // The `#[acton_actor]` macro derives `Default`, `Clone`, and implements `Debug`.
 #[acton_actor]
 pub struct PriceService;
 
 impl PriceService {
-    /// Creates, configures, and starts a new `PriceService` agent.
-    /// Returns a handle to the started agent.
+    /// Creates, configures, and starts a new `PriceService` actor.
+    /// Returns a handle to the started actor.
     #[instrument(skip(runtime))] // Instrument for tracing, skip the runtime param.
-    pub(crate) async fn create(runtime: &mut AgentRuntime) -> anyhow::Result<AgentHandle> {
-        // Configure the agent's identity (ERN).
-        let config =
-            AgentConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
-        // Create the agent builder using the runtime and configuration.
-        let mut price_service_builder = runtime.new_agent_with_config::<Self>(config);
+    pub(crate) async fn create(runtime: &mut ActorRuntime) -> anyhow::Result<ActorHandle> {
+        // Configure the actor's identity (ERN).
+        let config = ActorConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
+        // Create the actor builder using the runtime and configuration.
+        let mut price_service_builder = runtime.new_actor_with_config::<Self>(config);
 
-        // Configure the agent's message handler for `ItemScanned` messages.
-        price_service_builder.mutate_on::<ItemScanned>(|agent, envelope| {
+        // Configure the actor's message handler for `ItemScanned` messages.
+        price_service_builder.mutate_on::<ItemScanned>(|actor, envelope| {
             // Clone the item from the incoming message envelope.
             let item = envelope.message().0.clone();
-            // Clone the agent's state (PriceService is a unit struct, but this pattern is common).
+            // Clone the actor's state (PriceService is a unit struct, but this pattern is common).
             // Cloning the model allows moving it into the async block if needed, though not strictly necessary here.
-            let model = agent.model.clone();
+            let model = actor.model.clone();
             // Get a handle to the message broker for broadcasting the response.
-            let broker_handle = agent.broker().clone();
+            let broker_handle = actor.broker().clone();
 
-            // Use AgentReply::from_async to handle the asynchronous price lookup and broadcast.
-            AgentReply::from_async(async move {
+            // Use ActorReply::from_async to handle the asynchronous price lookup and broadcast.
+            ActorReply::from_async(async move {
                 let mut item = item;
                 // Simulate getting the price (includes an artificial delay).
                 // Calls the `get_price` method on the cloned model state.
                 item.set_cost(model.get_price(item.clone()).await);
                 // Create the response message containing the updated item (now with cost).
                 let response_message = PriceResponse { item };
-                // Broadcast the response message via the broker. Any agent subscribed
-                // to `PriceResponse` will receive it (e.g., the Register agent).
+                // Broadcast the response message via the broker. Any actor subscribed
+                // to `PriceResponse` will receive it (e.g., the Register actor).
                 broker_handle.broadcast(response_message).await;
             })
         });
 
-        // Start the agent and return its handle.
+        // Start the actor and return its handle.
         Ok(price_service_builder.start().await)
     }
 
