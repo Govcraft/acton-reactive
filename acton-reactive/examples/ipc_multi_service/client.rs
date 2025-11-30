@@ -147,7 +147,7 @@ const DEFAULT_SERVER: &str = "ipc_multi_service_server";
 /// Supports:
 /// - `--server <name>` to connect to a named server
 /// - A direct path to a socket file
-/// - Defaults to `ipc_multi_agent` server if no arguments
+/// - Defaults to `ipc_multi_service_server` if no arguments
 fn resolve_socket_path() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
 
@@ -167,7 +167,7 @@ fn resolve_socket_path() -> PathBuf {
         }
     }
 
-    // Default: connect to ipc_multi_agent server
+    // Default: connect to ipc_multi_service_server
     let mut config = IpcConfig::load();
     config.socket.app_name = Some(DEFAULT_SERVER.to_string());
     config.socket_path()
@@ -177,7 +177,7 @@ fn resolve_socket_path() -> PathBuf {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== IPC Client Example ===\n");
 
-    // Get socket path from command line or default to ipc_multi_agent
+    // Get socket path from command line or default to ipc_multi_service_server
     let socket_path = resolve_socket_path();
 
     // Display connection status
@@ -186,7 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check if socket is available
     if !socket_exists(&socket_path) {
         eprintln!("\nError: Socket does not exist at {}", socket_path.display());
-        eprintln!("Make sure an IPC server is running (e.g., ipc_multi_agent example).");
+        eprintln!("Make sure an IPC server is running (e.g., ipc_multi_service_server example).");
         std::process::exit(1);
     }
 
@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test heartbeat
     send_heartbeat(&mut reader, &mut writer).await?;
 
-    // Send messages to different services (assuming ipc_multi_agent is running)
+    // Send messages to different services (assuming ipc_multi_service_server is running)
     println!("\n=== Sending Messages to Services ===");
 
     // Counter increment

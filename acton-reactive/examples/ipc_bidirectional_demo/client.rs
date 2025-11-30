@@ -306,7 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !socket_exists(&socket_path) {
         eprintln!("\n❌ Error: Socket does not exist at {}", socket_path.display());
         eprintln!("   Make sure the ipc_bidirectional server is running:");
-        eprintln!("   cargo run --example ipc_bidirectional --features ipc");
+        eprintln!("   cargo run --example ipc_bidirectional_server --features ipc");
         std::process::exit(1);
     }
 

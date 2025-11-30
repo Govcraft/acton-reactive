@@ -59,3 +59,35 @@ optional = true
 
 [lints]
 workspace = true
+
+# ============================================================================
+# Examples
+# ============================================================================
+
+# IPC Bidirectional Demo (request-response pattern)
+[[example]]
+name = "ipc_bidirectional_server"
+path = "examples/ipc_bidirectional_demo/server.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "ipc_bidirectional_client"
+path = "examples/ipc_bidirectional_demo/client.rs"
+required-features = ["ipc"]
+
+# IPC Multi-Service Demo (multiple agents with dashboard)
+[[example]]
+name = "ipc_multi_service_server"
+path = "examples/ipc_multi_service/server.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "ipc_multi_service_client"
+path = "examples/ipc_multi_service/client.rs"
+required-features = ["ipc"]
+
+# IPC Basic (standalone self-contained IPC demo)
+[[example]]
+name = "ipc_basic"
+path = "examples/ipc_basic/main.rs"
+required-features = ["ipc"]
