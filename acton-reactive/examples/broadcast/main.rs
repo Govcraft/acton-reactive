@@ -40,10 +40,10 @@ struct Aggregator {
 }
 
 /// State for the Printer actor.
-// Note: Manual Default impl needed because `Stdout` doesn't impl Default.
-// Cannot use `#[acton_actor]` because it attempts to derive Default and Clone,
-// which `Stdout` does not implement. We derive Debug manually.
-#[derive(Debug)]
+// Note: `Stdout` doesn't implement `Default`.
+// Use `#[acton_actor(no_default)]` to skip that derive while still
+// getting Debug and compile-time Send + 'static checks.
+#[acton_actor(no_default)]
 struct Printer {
     /// Handle to standard output for printing.
     out: Stdout,

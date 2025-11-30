@@ -138,13 +138,13 @@ struct MyState {
 }
 
 // Without macros (equivalent)
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug)]
 struct MyState {
     value: u32,
 }
 ```
 
-The macro just saves boilerplate - there's no magic.
+The macro also adds a compile-time check that your type is `Send + 'static`. Without the macro, you'll get an error later if your type doesn't satisfy those bounds.
 
 ---
 

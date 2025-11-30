@@ -39,7 +39,7 @@ use acton_reactive::prelude::*;
 
 | Macro | Description |
 |-------|-------------|
-| `#[acton_actor]` | Derives `Default`, `Clone`, `Debug` for actor state structs |
+| `#[acton_actor]` | Derives `Default`, `Debug` for actor state structs (use `no_default` to skip Default) |
 | `#[acton_message]` | Derives `Clone`, `Debug` for message types (add `ipc` for IPC support) |
 
 ### Included Traits
@@ -90,7 +90,7 @@ impl ActorRuntime {
     /// Create a new actor with default name
     pub fn new_actor<Model>(&mut self) -> ManagedActor<Idle, Model>
     where
-        Model: Default + Clone + Send + Sync + 'static;
+        Model: Default + Send + Debug + 'static;
 
     /// Create a new actor with custom name
     pub fn new_actor_with_name<Model>(
@@ -98,7 +98,7 @@ impl ActorRuntime {
         name: String,
     ) -> ManagedActor<Idle, Model>
     where
-        Model: Default + Clone + Send + Sync + 'static;
+        Model: Default + Send + Debug + 'static;
 
     /// Gracefully shutdown all actors
     pub async fn shutdown_all(&mut self) -> anyhow::Result<()>;
@@ -125,7 +125,7 @@ Core actor wrapper using the type-state pattern to enforce valid operations at c
 #### Type Parameters
 
 - `ActorState`: Either `Idle` or `Started`
-- `Model`: User-defined state type (must implement `Default + Clone + Send + Sync + 'static`)
+- `Model`: User-defined state type (must implement `Default + Send + Debug + 'static`)
 
 #### Methods (Idle State)
 
@@ -237,7 +237,7 @@ impl<Model> ManagedActor<Started, Model> {
         child: ManagedActor<Idle, ChildModel>,
     ) -> anyhow::Result<ActorHandle>
     where
-        ChildModel: Default + Clone + Send + Sync + 'static;
+        ChildModel: Default + Send + Debug + 'static;
 
     /// Find a child by Ern
     pub fn find_child(&self, id: &Ern) -> Option<ActorHandle>;

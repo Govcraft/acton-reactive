@@ -111,6 +111,31 @@ impl MessageConfig {
     }
 }
 
+/// Configuration options parsed from `#[acton_actor(...)]` attributes.
+#[derive(Default)]
+struct ActorConfig {
+    /// Skip deriving Default (user will implement it manually).
+    no_default: bool,
+}
+
+impl ActorConfig {
+    /// Parse configuration from attribute tokens.
+    fn parse(attr: &TokenStream) -> Self {
+        let mut config = Self::default();
+
+        // Parse the attribute stream to look for known options
+        let attr_string = attr.to_string();
+        for part in attr_string.split(',') {
+            let trimmed = part.trim();
+            if trimmed == "no_default" {
+                config.no_default = true;
+            }
+        }
+
+        config
+    }
+}
+
 /// A procedural macro to derive the necessary traits for an Acton message.
 ///
 /// This macro automatically implements the traits required for a type to be used
@@ -241,15 +266,41 @@ pub fn acton_message(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 ///
 /// This expands to:
-/// - `#[derive(Default, Clone, Debug)]` (only traits not already present)
+/// - `#[derive(Default, Debug)]` (only traits not already present)
 /// - A compile-time assertion that the type is `Send + 'static`
+///
+/// # Options
+///
+/// ## `no_default`
+///
+/// Skip deriving `Default` when you need to implement it manually (e.g., when
+/// a field's type doesn't implement `Default`):
+///
+/// ```ignore
+/// use std::io::{stdout, Stdout};
+///
+/// #[acton_actor(no_default)]
+/// struct Printer {
+///     out: Stdout,
+/// }
+///
+/// impl Default for Printer {
+///     fn default() -> Self {
+///         Self { out: stdout() }
+///     }
+/// }
+/// ```
 ///
 /// # Note
 ///
 /// Actor state types must implement `Default` because actors are initialized
-/// with their default state before handlers are registered.
+/// with their default state before handlers are registered. When using
+/// `no_default`, you must provide your own `Default` implementation.
 #[proc_macro_attribute]
-pub fn acton_actor(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn acton_actor(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse configuration from attributes
+    let config = ActorConfig::parse(&attr);
+
     // Parse the input tokens into a syntax tree.
     let input = parse_macro_input!(item as DeriveInput);
 
@@ -259,8 +310,7 @@ pub fn acton_actor(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Determine which traits need to be derived
-    let need_default = !has_derive(&input, "Default");
-    let need_clone = !has_derive(&input, "Clone");
+    let need_default = !config.no_default && !has_derive(&input, "Default");
     let need_debug = !has_derive(&input, "Debug");
 
     // Build the list of traits to derive
@@ -268,9 +318,6 @@ pub fn acton_actor(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let mut traits = Vec::new();
         if need_default {
             traits.push(quote!(Default));
-        }
-        if need_clone {
-            traits.push(quote!(Clone));
         }
         if need_debug {
             traits.push(quote!(Debug));

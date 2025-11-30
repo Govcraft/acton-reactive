@@ -34,16 +34,31 @@ Then run `cargo build` to fetch it.
 **Fix:** Add `#[acton_actor]` macro or derive `Default` manually:
 
 ```rust
-// Option 1: Use the macro
+// Option 1: Use the macro (recommended)
 #[acton_actor]
 struct MyState {
     count: u32,
 }
 
 // Option 2: Derive manually
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug)]
 struct MyState {
     count: u32,
+}
+```
+
+If your type has a field that doesn't implement `Default`, use `no_default` and implement it yourself:
+
+```rust
+#[acton_actor(no_default)]
+struct MyState {
+    connection: Connection,
+}
+
+impl Default for MyState {
+    fn default() -> Self {
+        Self { connection: Connection::new() }
+    }
 }
 ```
 

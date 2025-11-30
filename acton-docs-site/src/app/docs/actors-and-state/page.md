@@ -45,23 +45,27 @@ struct ShoppingCart {
 }
 ```
 
-The macro derives `Default` and `Debug` for you. If you need custom initialization:
+The macro derives `Default` and `Debug` for you. If you need custom initialization, use `no_default` and implement `Default` yourself:
 
 ```rust
-#[acton_actor]
-struct DatabaseConnection {
-    pool: Option<Pool>,
-    retry_count: u32,
+use std::io::{stdout, Stdout};
+
+#[acton_actor(no_default)]
+struct Printer {
+    out: Stdout,
 }
 
-// The Default implementation starts with no pool
-// Use before_start hook to initialize it
+impl Default for Printer {
+    fn default() -> Self {
+        Self { out: stdout() }
+    }
+}
 ```
 
 ### State Requirements
 
 Your actor state must be:
-- `Default` - Actors start with default state (customize via lifecycle hooks)
+- `Default` - Actors start with default state (use `#[acton_actor(no_default)]` and implement manually if needed)
 - `Debug` - For logging and debugging
 - `Send + 'static` - Required for async runtime
 
@@ -91,34 +95,23 @@ let cart_handle = cart.start().await;
 
 Actors exist in two states, enforced at compile time:
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    ManagedActor<Idle>                        │
-│                                                              │
-│  Available methods:                                          │
-│  • mutate_on / act_on / try_mutate_on / try_act_on          │
-│  • before_start / after_start / before_stop / after_stop    │
-│  • handle() - get handle before starting                     │
-│                                                              │
-│  Cannot:                                                     │
-│  • Access model directly                                     │
-│  • Send messages (actor not running yet)                     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           │ start().await
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   ManagedActor<Started>                      │
-│                                                              │
-│  Available methods:                                          │
-│  • send() - send messages                                    │
-│  • stop() - request shutdown                                 │
-│  • supervise() - create child actors                         │
-│                                                              │
-│  Cannot:                                                     │
-│  • Register new handlers                                     │
-│  • Modify configuration                                      │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    direction TB
+    state "ManagedActor&lt;Idle&gt;" as Idle {
+        note left of Idle
+            Available: mutate_on, act_on,
+            try_mutate_on, try_act_on,
+            lifecycle hooks, handle()
+        end note
+    }
+    state "ManagedActor&lt;Started&gt;" as Started {
+        note left of Started
+            Available: send(), stop(),
+            supervise()
+        end note
+    }
+    Idle --> Started : start().await
 ```
 
 **Why this matters:** If you try to register a handler after starting, or send a message before starting, the compiler stops you. No runtime surprises.
@@ -291,7 +284,26 @@ let actor1 = runtime.new_actor::<SomeState>();
 let actor2 = runtime.new_actor::<OtherState>();
 ```
 
-### Initialize Complex State in Hooks
+### Initialize Complex State in Default
+
+When a field type doesn't implement `Default`, use `no_default` and provide your own:
+
+```rust
+use std::io::{stdout, Stdout};
+
+#[acton_actor(no_default)]
+struct Printer {
+    out: Stdout,
+}
+
+impl Default for Printer {
+    fn default() -> Self {
+        Self { out: stdout() }
+    }
+}
+```
+
+For async initialization (like database connections), keep the field as `Option<T>` and initialize in `after_start` when the message loop is active:
 
 ```rust
 #[acton_actor]
@@ -299,11 +311,11 @@ struct DatabaseActor {
     connection: Option<Connection>,
 }
 
-actor.before_start(|actor| {
-    // Initialize after actor starts but before processing messages
+actor.after_start(|actor| {
+    let self_handle = actor.handle().clone();
     Reply::pending(async move {
         let conn = Database::connect("...").await.unwrap();
-        // Note: Can't directly set here - use a self-message pattern
+        self_handle.send(SetConnection(conn)).await;
     })
 });
 ```

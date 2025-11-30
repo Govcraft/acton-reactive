@@ -92,57 +92,56 @@ The message loop isn't active during `before_start`. If you need to send initial
 
 ## before_start
 
-Runs before the actor starts processing messages:
+Runs before the actor starts processing messages. The message loop is **not active yet**, so you cannot send or receive messages.
 
 ```rust
 actor.before_start(|actor| {
     println!("Actor {} is starting", actor.id());
 
-    // Async initialization
-    Reply::pending(async move {
-        // Load configuration
-        let config = load_config().await;
+    // Synchronous validation or logging
+    if actor.model.some_field.is_empty() {
+        tracing::warn!("Actor starting with empty field");
+    }
 
-        // Can't modify actor.model here (moved into async)
-        // Use a self-message pattern instead
-    })
+    Reply::ready()
 });
 ```
 
 **Common uses:**
 - Logging startup
-- Validating configuration
-- Opening database connections
-- Starting background tasks
+- Synchronous validation
+- Reading environment variables
 
-### Initialization Pattern
+{% callout type="warning" title="Don't use before_start for async initialization" %}
+Messages sent during `before_start` won't be processed until the loop starts. For async initialization that requires messaging, use `after_start` instead.
+{% /callout %}
 
-Since you can't modify state in an async block, use self-messaging:
+### Custom Default for Complex State
+
+If you need to initialize state that doesn't implement `Default`, use `#[acton_actor(no_default)]` and provide your own `Default` implementation:
 
 ```rust
-#[acton_message]
-struct Initialize { config: Config }
+use std::io::{stdout, Stdout};
 
-actor
-    .before_start(|actor| {
-        let self_handle = actor.handle().clone();
+#[acton_actor(no_default)]
+struct Printer {
+    out: Stdout,
+}
 
-        Reply::pending(async move {
-            let config = load_config().await;
-            self_handle.send(Initialize { config }).await;
-        })
-    })
-    .mutate_on::<Initialize>(|actor, ctx| {
-        actor.model.config = Some(ctx.message().config.clone());
-        Reply::ready()
-    });
+impl Default for Printer {
+    fn default() -> Self {
+        Self { out: stdout() }
+    }
+}
 ```
+
+This is cleaner than trying to initialize in lifecycle hooks.
 
 ---
 
 ## after_start
 
-Runs after the message loop has started:
+Runs after the message loop has started. This is where you can safely send messages, including to yourself.
 
 ```rust
 actor.after_start(|actor| {
@@ -162,8 +161,31 @@ actor.after_start(|actor| {
 
 **Common uses:**
 - Starting periodic tasks
+- Async initialization that requires messaging
 - Sending initial messages
 - Notifying other actors of startup
+
+### Async Initialization Pattern
+
+For resources that require async setup (like database connections), initialize in `after_start`:
+
+```rust
+#[acton_message]
+struct SetConnection(Connection);
+
+actor
+    .after_start(|actor| {
+        let self_handle = actor.handle().clone();
+        Reply::pending(async move {
+            let conn = Database::connect("...").await.unwrap();
+            self_handle.send(SetConnection(conn)).await;
+        })
+    })
+    .mutate_on::<SetConnection>(|actor, ctx| {
+        actor.model.connection = Some(ctx.message().0.clone());
+        Reply::ready()
+    });
+```
 
 ---
 
