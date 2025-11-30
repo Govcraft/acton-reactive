@@ -238,9 +238,9 @@ mod render {
 
         for service in services {
             let (status_color, status_char) = if service.running {
-                (Color::Green, "●")
+                (Color::Rgb { r: 0, g: 255, b: 0 }, "●")
             } else {
-                (Color::Red, "○")
+                (Color::Rgb { r: 255, g: 0, b: 0 }, "○")
             };
             execute!(
                 stdout,
