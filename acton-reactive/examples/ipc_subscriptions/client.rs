@@ -42,12 +42,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use acton_reactive::ipc::protocol::{
-    read_frame, write_frame, MAX_FRAME_SIZE, MSG_TYPE_PUSH, MSG_TYPE_RESPONSE,
+    read_frame, write_frame, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_PUSH, MSG_TYPE_RESPONSE,
     MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
 };
 use acton_reactive::ipc::{
-    socket_exists, socket_is_alive, IpcConfig, IpcPushNotification, IpcSubscribeRequest,
-    IpcSubscriptionResponse, IpcUnsubscribeRequest,
+    socket_exists, socket_is_alive, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse,
+    IpcPushNotification, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
@@ -145,6 +145,32 @@ async fn send_unsubscribe(
     Ok(correlation_id)
 }
 
+/// Sends a discovery request for both agents and message types.
+async fn send_discover_all(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let request = IpcDiscoverRequest::new();
+    let correlation_id = request.correlation_id.clone();
+
+    let payload = serde_json::to_vec(&request)?;
+    write_frame(writer, MSG_TYPE_DISCOVER, &payload).await?;
+
+    Ok(correlation_id)
+}
+
+/// Sends a discovery request for agents only.
+async fn send_discover_agents(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let request = IpcDiscoverRequest::agents_only();
+    let correlation_id = request.correlation_id.clone();
+
+    let payload = serde_json::to_vec(&request)?;
+    write_frame(writer, MSG_TYPE_DISCOVER, &payload).await?;
+
+    Ok(correlation_id)
+}
+
 /// Displays a push notification.
 fn display_push_notification(notification: &IpcPushNotification) {
     match notification.message_type.as_str() {
@@ -202,6 +228,72 @@ fn handle_subscription_response(response: &IpcSubscriptionResponse) {
 // ============================================================================
 // Demo Scenarios
 // ============================================================================
+
+/// Demo 0: Discover available agents and message types before subscribing.
+async fn demo_discovery(
+    reader: &mut tokio::net::unix::OwnedReadHalf,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
+    println!("====================================================================");
+    println!("  Demo 0: Discover Available Agents and Message Types");
+    println!("====================================================================");
+
+    // Discover both agents and message types
+    println!("\nSending discovery request (agents + message types)...");
+    let _corr_id = send_discover_all(writer).await?;
+
+    // Wait for discovery response
+    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+        .await??;
+
+    if msg_type == MSG_TYPE_RESPONSE {
+        let response: IpcDiscoverResponse = serde_json::from_slice(&payload)?;
+        if response.success {
+            println!("\n  \x1b[32mDiscovery successful!\x1b[0m");
+
+            if let Some(agents) = &response.agents {
+                println!("\n  Available agents ({}):", agents.len());
+                for agent in agents {
+                    println!("    - {} (ERN: {})", agent.name, agent.ern);
+                }
+            }
+
+            if let Some(types) = &response.message_types {
+                println!("\n  Registered message types ({}):", types.len());
+                for msg_type in types {
+                    println!("    - {msg_type}");
+                }
+            }
+        } else {
+            println!(
+                "\n  \x1b[31mDiscovery failed: {}\x1b[0m",
+                response.error.as_deref().unwrap_or("Unknown error")
+            );
+        }
+    }
+
+    // Also demonstrate agents-only discovery
+    println!("\n\nSending discovery request (agents only)...");
+    let _corr_id = send_discover_agents(writer).await?;
+
+    let (msg_type, payload) = timeout(Duration::from_secs(5), read_frame(reader, MAX_FRAME_SIZE))
+        .await??;
+
+    if msg_type == MSG_TYPE_RESPONSE {
+        let response: IpcDiscoverResponse = serde_json::from_slice(&payload)?;
+        if response.success {
+            if let Some(agents) = &response.agents {
+                println!("  Found {} agent(s)", agents.len());
+            }
+            if response.message_types.is_none() {
+                println!("  (message types not requested - as expected)");
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Demo 1: Subscribe to all message types and receive notifications.
 async fn demo_subscribe_all(
@@ -418,6 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut reader, mut writer) = stream.into_split();
 
     // Run demonstrations
+    demo_discovery(&mut reader, &mut writer).await?;
     demo_subscribe_all(&mut reader, &mut writer).await?;
     demo_prices_only(&mut reader, &mut writer).await?;
     demo_trades_only(&mut reader, &mut writer).await?;

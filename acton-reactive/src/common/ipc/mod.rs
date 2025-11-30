@@ -94,8 +94,9 @@ pub use subscription_manager::{
 // IPC types - used by external clients for message serialization
 #[allow(unused_imports)]
 pub use types::{
-    IpcEnvelope, IpcError, IpcPushNotification, IpcResponse, IpcSubscribeRequest,
-    IpcSubscriptionResponse, IpcUnsubscribeRequest,
+    AgentInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
+    IpcPushNotification, IpcResponse, IpcSubscribeRequest, IpcSubscriptionResponse,
+    IpcUnsubscribeRequest,
 };
 
 // Re-export config types for users who want to customize defaults

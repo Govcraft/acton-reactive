@@ -33,15 +33,15 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::config::IpcConfig;
 use super::protocol::{
-    is_heartbeat, is_subscribe, is_unsubscribe, read_frame, write_heartbeat, write_push,
-    write_response, write_subscription_response, MSG_TYPE_REQUEST,
+    is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame, write_discovery_response,
+    write_heartbeat, write_push, write_response, write_subscription_response, MSG_TYPE_REQUEST,
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
 use super::subscription_manager::{create_push_channel, PushReceiver, SubscriptionManager};
 use super::types::{
-    IpcEnvelope, IpcError, IpcResponse, IpcSubscribeRequest, IpcSubscriptionResponse,
-    IpcUnsubscribeRequest,
+    AgentInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcResponse,
+    IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
 };
 use crate::common::{AgentHandle, Envelope};
 use crate::message::MessageAddress;
@@ -692,6 +692,12 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
                             continue;
                         }
 
+                        // Handle discovery requests
+                        if is_discover(msg_type) {
+                            handle_discover_frame(conn_id, &payload, &ctx, &mut *writer.lock().await).await;
+                            continue;
+                        }
+
                         if msg_type != MSG_TYPE_REQUEST {
                             warn!(conn_id, msg_type, "Unexpected message type");
                             continue;
@@ -864,6 +870,67 @@ async fn handle_unsubscribe_frame(
     if let Err(e) = write_subscription_response(writer, &response).await {
         error!(conn_id, error = %e, "Failed to send unsubscribe response");
     }
+}
+
+/// Handle a discovery request frame.
+async fn handle_discover_frame(
+    conn_id: usize,
+    payload: &[u8],
+    ctx: &ConnectionContext,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) {
+    let request: IpcDiscoverRequest = match serde_json::from_slice(payload) {
+        Ok(req) => req,
+        Err(e) => {
+            error!(conn_id, error = %e, "Failed to parse discover request");
+            let response = IpcDiscoverResponse::error("unknown", format!("Parse error: {e}"));
+            let _ = write_discovery_response(writer, &response).await;
+            ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    trace!(
+        conn_id,
+        correlation_id = %request.correlation_id,
+        include_agents = request.include_agents,
+        include_message_types = request.include_message_types,
+        "Received discover request"
+    );
+
+    // Gather agent information if requested
+    let agents = if request.include_agents {
+        let agent_list: Vec<AgentInfo> = ctx
+            .agent_registry
+            .iter()
+            .map(|entry| AgentInfo {
+                name: entry.key().clone(),
+                ern: entry.value().id().to_string(),
+            })
+            .collect();
+        Some(agent_list)
+    } else {
+        None
+    };
+
+    // Gather message type information if requested
+    let message_types = if request.include_message_types {
+        Some(ctx.type_registry.type_names().collect())
+    } else {
+        None
+    };
+
+    let response = IpcDiscoverResponse::success(&request.correlation_id, agents, message_types);
+
+    if let Err(e) = write_discovery_response(writer, &response).await {
+        error!(conn_id, error = %e, "Failed to send discover response");
+    }
+
+    debug!(
+        conn_id,
+        correlation_id = %request.correlation_id,
+        "Sent discover response"
+    );
 }
 
 /// Channel capacity for the IPC response proxy channel.

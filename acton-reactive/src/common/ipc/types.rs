@@ -676,6 +676,179 @@ impl IpcResponse {
     }
 }
 
+// ============================================================================
+// Discovery Types
+// ============================================================================
+
+/// Request to discover available agents and message types.
+///
+/// Clients can use this to query what agents are exposed for IPC access
+/// and what message types are registered for deserialization.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "correlation_id": "disc_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "include_agents": true,
+///   "include_message_types": true
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcDiscoverRequest {
+    /// Correlation ID for the discovery request.
+    pub correlation_id: String,
+
+    /// Whether to include the list of exposed agents in the response.
+    #[serde(default = "default_true")]
+    pub include_agents: bool,
+
+    /// Whether to include the list of registered message types in the response.
+    #[serde(default = "default_true")]
+    pub include_message_types: bool,
+}
+
+/// Returns `true` for serde default.
+const fn default_true() -> bool {
+    true
+}
+
+impl IpcDiscoverRequest {
+    /// Creates a new discovery request with a generated correlation ID.
+    ///
+    /// By default, includes both agents and message types in the response.
+    #[must_use]
+    pub fn new() -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "disc".create_type_id::<V7>().to_string(),
+            include_agents: true,
+            include_message_types: true,
+        }
+    }
+
+    /// Creates a discovery request for agents only.
+    #[must_use]
+    pub fn agents_only() -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "disc".create_type_id::<V7>().to_string(),
+            include_agents: true,
+            include_message_types: false,
+        }
+    }
+
+    /// Creates a discovery request for message types only.
+    #[must_use]
+    pub fn message_types_only() -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "disc".create_type_id::<V7>().to_string(),
+            include_agents: false,
+            include_message_types: true,
+        }
+    }
+
+    /// Creates a discovery request with a specified correlation ID.
+    #[must_use]
+    pub fn with_correlation_id(
+        correlation_id: impl Into<String>,
+        include_agents: bool,
+        include_message_types: bool,
+    ) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            include_agents,
+            include_message_types,
+        }
+    }
+}
+
+impl Default for IpcDiscoverRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Information about an exposed agent.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AgentInfo {
+    /// The logical name used to address this agent via IPC.
+    pub name: String,
+
+    /// The agent's full ERN (Entity Resource Name).
+    pub ern: String,
+}
+
+/// Response to a discovery request.
+///
+/// Contains information about available agents and/or registered message types
+/// based on what was requested.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "correlation_id": "disc_01h9xz7n2e5p6q8r3t1u2v3w4x",
+///   "success": true,
+///   "agents": [
+///     { "name": "price_service", "ern": "ern:acton:..." },
+///     { "name": "order_service", "ern": "ern:acton:..." }
+///   ],
+///   "message_types": ["PriceUpdate", "OrderCommand", "TradeExecuted"]
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcDiscoverResponse {
+    /// Correlation ID matching the request.
+    pub correlation_id: String,
+
+    /// Whether the discovery request succeeded.
+    pub success: bool,
+
+    /// Error message if `success` is `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+
+    /// List of exposed agents (if requested and successful).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<AgentInfo>>,
+
+    /// List of registered message type names (if requested and successful).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_types: Option<Vec<String>>,
+}
+
+impl IpcDiscoverResponse {
+    /// Creates a successful discovery response.
+    #[must_use]
+    pub fn success(
+        correlation_id: impl Into<String>,
+        agents: Option<Vec<AgentInfo>>,
+        message_types: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: true,
+            error: None,
+            agents,
+            message_types,
+        }
+    }
+
+    /// Creates an error discovery response.
+    #[must_use]
+    pub fn error(correlation_id: impl Into<String>, error: impl Into<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: false,
+            error: Some(error.into()),
+            agents: None,
+            message_types: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

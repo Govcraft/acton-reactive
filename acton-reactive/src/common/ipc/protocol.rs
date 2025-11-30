@@ -65,6 +65,9 @@ pub const MSG_TYPE_SUBSCRIBE: u8 = 0x06;
 /// Message type: Unsubscribe request (client → server, for broker subscriptions).
 pub const MSG_TYPE_UNSUBSCRIBE: u8 = 0x07;
 
+/// Message type: Discovery request (client → server, for agent/type discovery).
+pub const MSG_TYPE_DISCOVER: u8 = 0x08;
+
 /// Frame header size: 4 bytes length + 1 byte version + 1 byte type.
 pub const HEADER_SIZE: usize = 6;
 
@@ -108,6 +111,7 @@ where
             | MSG_TYPE_PUSH
             | MSG_TYPE_SUBSCRIBE
             | MSG_TYPE_UNSUBSCRIBE
+            | MSG_TYPE_DISCOVER
     ) {
         return Err(IpcError::ProtocolError(format!(
             "Unknown message type: {msg_type:#04x}"
@@ -373,6 +377,48 @@ where
 pub async fn write_subscription_response<W>(
     writer: &mut W,
     response: &super::types::IpcSubscriptionResponse,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let msg_type = if response.success {
+        MSG_TYPE_RESPONSE
+    } else {
+        MSG_TYPE_ERROR
+    };
+    let payload = serde_json::to_vec(response)?;
+    write_frame(writer, msg_type, &payload).await
+}
+
+/// Check if a message type is a discovery request.
+#[must_use]
+pub const fn is_discover(msg_type: u8) -> bool {
+    msg_type == MSG_TYPE_DISCOVER
+}
+
+/// Write a discovery request to the stream.
+///
+/// This is used by IPC clients to discover available agents and message types.
+#[allow(dead_code)]
+pub async fn write_discover<W>(
+    writer: &mut W,
+    request: &super::types::IpcDiscoverRequest,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_vec(request)?;
+    write_frame(writer, MSG_TYPE_DISCOVER, &payload).await
+}
+
+/// Write a discovery response to the stream.
+///
+/// Discovery responses are sent in reply to discovery requests.
+/// They use the standard `MSG_TYPE_RESPONSE` message type since they are
+/// responses to client-initiated requests.
+pub async fn write_discovery_response<W>(
+    writer: &mut W,
+    response: &super::types::IpcDiscoverResponse,
 ) -> Result<(), IpcError>
 where
     W: AsyncWrite + Unpin,

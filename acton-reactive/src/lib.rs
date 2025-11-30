@@ -78,10 +78,10 @@ pub(crate) mod traits;
 #[cfg(feature = "ipc")]
 pub mod ipc {
     pub use crate::common::ipc::{
-        socket_exists, socket_is_alive, start_listener, IpcConfig, IpcEnvelope, IpcError,
-        IpcListenerHandle, IpcListenerStats, IpcPushNotification, IpcResponse,
-        IpcSubscribeRequest, IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest,
-        ShutdownResult,
+        socket_exists, socket_is_alive, start_listener, AgentInfo, IpcConfig,
+        IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcListenerHandle,
+        IpcListenerStats, IpcPushNotification, IpcResponse, IpcSubscribeRequest,
+        IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest, ShutdownResult,
     };
 
     /// Wire protocol for IPC message framing.
@@ -90,11 +90,12 @@ pub mod ipc {
     /// using the length-prefixed binary wire protocol.
     pub mod protocol {
         pub use crate::common::ipc::protocol::{
-            is_heartbeat, is_subscribe, is_unsubscribe, read_envelope, read_frame, read_response,
-            write_envelope, write_frame, write_heartbeat, write_response,
-            write_subscription_response, HEADER_SIZE, MAX_FRAME_SIZE, MSG_TYPE_ERROR,
-            MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE,
-            MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE, PROTOCOL_VERSION,
+            is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_envelope, read_frame,
+            read_response, write_discover, write_discovery_response, write_envelope, write_frame,
+            write_heartbeat, write_response, write_subscription_response, HEADER_SIZE,
+            MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_ERROR, MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH,
+            MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
+            PROTOCOL_VERSION,
         };
     }
 }
