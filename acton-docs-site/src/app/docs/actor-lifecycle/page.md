@@ -79,10 +79,14 @@ sequenceDiagram
 
 | Hook | Runs | Use For |
 |------|------|---------|
-| `before_start` | Before message loop | Load config, open connections, validate state |
-| `after_start` | After loop starts | Send initial messages, notify others |
+| `before_start` | Before message loop | Logging, sync validation (cannot send messages yet) |
+| `after_start` | After loop starts | Async init, send messages, notify others, start timers |
 | `before_stop` | When stop requested | Cleanup, save state, flush buffers |
 | `after_stop` | After fully stopped | Final logging, assertions in tests |
+
+{% callout type="warning" title="before_start cannot send messages" %}
+The message loop isn't active during `before_start`. If you need to send initialization messages (including to yourself), use `after_start` instead.
+{% /callout %}
 
 ---
 
@@ -221,15 +225,14 @@ When you call `start().await`:
 sequenceDiagram
     participant U as User
     participant B as ActorBuilder
-    participant R as Tokio Runtime
     participant A as Actor
     participant C as Channel
     U->>B: start().await
     B->>C: Create MPSC channel
-    B->>R: Spawn actor task
-    R->>A: before_start()
+    B->>A: Spawn actor task
+    A->>A: before_start()
     A->>A: Enter message loop
-    R->>A: after_start()
+    A->>A: after_start()
     A-->>U: ActorHandle
     Note over A: Ready to receive messages
 ```
