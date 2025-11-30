@@ -218,7 +218,7 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Yellow),
-            Print("┌─ Services ────────────────────────────────────────────────┐\r\n"),
+            Print("┌─ Services ─────────────────────────────────────────────────┐\r\n"),
             ResetColor
         )?;
 
@@ -236,7 +236,7 @@ mod render {
                 ResetColor,
                 Print(format!("{:<10}", service.name)),
                 SetForegroundColor(Color::White),
-                Print(format!("{:<45}", service.details)),
+                Print(format!("{:<46}", service.details)),
                 ResetColor,
                 Print("│\r\n")
             )?;
@@ -245,7 +245,7 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Yellow),
-            Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
+            Print("└─────────────────────────────────────────────────────────────┘\r\n\r\n"),
             ResetColor
         )
     }
@@ -262,12 +262,12 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Blue),
-            Print("┌─ IPC Statistics ──────────────────────────────────────────┐\r\n"),
+            Print("┌─ IPC Statistics ───────────────────────────────────────────┐\r\n"),
             ResetColor,
-            Print(format!("│{row1:<60}│\r\n")),
-            Print(format!("│{row2:<60}│\r\n")),
+            Print(format!("│{row1:<61}│\r\n")),
+            Print(format!("│{row2:<61}│\r\n")),
             SetForegroundColor(Color::Blue),
-            Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
+            Print("└─────────────────────────────────────────────────────────────┘\r\n\r\n"),
             ResetColor
         )
     }
@@ -276,14 +276,14 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Magenta),
-            Print("┌─ Activity Log ────────────────────────────────────────────┐\r\n"),
+            Print("┌─ Activity Log ─────────────────────────────────────────────┐\r\n"),
             ResetColor
         )?;
 
         for i in 0..8 {
             if let Some(entry) = log.get(log.len().saturating_sub(8) + i) {
-                let truncated = if entry.message.len() > 48 {
-                    format!("{}...", &entry.message[..45])
+                let truncated = if entry.message.len() > 49 {
+                    format!("{}...", &entry.message[..46])
                 } else {
                     entry.message.clone()
                 };
@@ -293,18 +293,18 @@ mod render {
                     SetForegroundColor(Color::DarkGrey),
                     Print(format!("[{}] ", entry.timestamp)),
                     ResetColor,
-                    Print(format!("{truncated:<48}")),
+                    Print(format!("{truncated:<49}")),
                     Print("│\r\n")
                 )?;
             } else {
-                execute!(stdout, Print("│                                                            │\r\n"))?;
+                execute!(stdout, Print("│                                                             │\r\n"))?;
             }
         }
 
         execute!(
             stdout,
             SetForegroundColor(Color::Magenta),
-            Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
+            Print("└─────────────────────────────────────────────────────────────┘\r\n\r\n"),
             ResetColor
         )
     }
