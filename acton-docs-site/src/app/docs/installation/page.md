@@ -397,7 +397,7 @@ if socket_path.exists() {
 
 Now that you're set up:
 
-- [Getting Started](/) - Build your first real actor
-- [Architecture](/docs/architecture) - Understand how it all works
+- [Your First Actor](/docs/your-first-actor) - Build your first real actor
+- [Actors & State](/docs/actors-and-state) - Understand the actor model
 - [Examples](/docs/examples) - Learn from working code
 - [FAQ & Troubleshooting](/docs/faq) - More common issues and answers
