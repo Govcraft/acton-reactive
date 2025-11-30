@@ -342,4 +342,50 @@ impl AgentHandleInterface for AgentHandle {
             Ok(())
         }
     }
+
+    /// Sends a boxed message to the agent with a custom reply-to address.
+    ///
+    /// This method is used for IPC request-response patterns where responses
+    /// should be routed back to a temporary IPC proxy channel rather than
+    /// another agent.
+    ///
+    /// When the target agent calls `reply_envelope.send(response)`, the response
+    /// will be delivered to the specified `reply_to` address.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message implementing `ActonMessage + Send + Sync`.
+    /// * `reply_to`: The [`MessageAddress`] where responses should be sent.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the message was successfully queued for delivery, or an error
+    /// if the send failed (e.g., channel closed).
+    #[cfg(feature = "ipc")]
+    #[instrument(skip(self, message, reply_to))]
+    fn send_boxed_with_reply_to(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+        reply_to: MessageAddress,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_ {
+        use std::sync::Arc;
+        async move {
+            // Create envelope with the custom reply-to address as sender
+            // and self (target agent) as recipient
+            let envelope = OutboundEnvelope::new_with_recipient(
+                reply_to,                  // The reply-to address (IPC proxy)
+                self.reply_address(),       // The recipient (target agent)
+                self.cancellation_token.clone(),
+            );
+            trace!(
+                recipient = %self.id,
+                reply_to = ?envelope.return_address.sender.root.as_str(),
+                "Sending boxed message with custom reply-to via IPC"
+            );
+            // Convert Box to Arc for the internal send mechanism
+            let arc_message: Arc<dyn ActonMessage + Send + Sync> = Arc::from(message);
+            envelope.send_arc(arc_message).await;
+            Ok(())
+        }
+    }
 }

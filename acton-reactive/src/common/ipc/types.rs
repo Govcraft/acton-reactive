@@ -106,7 +106,9 @@ impl From<std::io::Error> for IpcError {
 ///   "correlation_id": "req_01h9xz7n2e5p6q8r3t1u2v3w4x",
 ///   "target": "price_service",
 ///   "message_type": "PriceUpdate",
-///   "payload": { "symbol": "AAPL", "price": 150.25 }
+///   "payload": { "symbol": "AAPL", "price": 150.25 },
+///   "expects_reply": true,
+///   "response_timeout_ms": 5000
 /// }
 /// ```
 ///
@@ -123,6 +125,15 @@ impl From<std::io::Error> for IpcError {
 ///   in [`IpcTypeRegistry`](super::IpcTypeRegistry).
 ///
 /// - `payload`: The serialized message data as a JSON value.
+///
+/// - `expects_reply` (optional): Whether the client expects a response from the
+///   agent. When `true`, the IPC listener will wait for the agent to send a
+///   reply using `reply_envelope.send()` and forward it back to the client.
+///   Defaults to `false` for fire-and-forget messages.
+///
+/// - `response_timeout_ms` (optional): Maximum time in milliseconds to wait for
+///   a response when `expects_reply` is `true`. Defaults to 30000 (30 seconds).
+///   If the timeout expires, an error response is returned.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IpcEnvelope {
     /// Correlation ID for request-response tracking (MTI format recommended).
@@ -136,13 +147,35 @@ pub struct IpcEnvelope {
 
     /// Serialized payload.
     pub payload: serde_json::Value,
+
+    /// Whether the client expects a response from the agent.
+    ///
+    /// When `true`, the IPC listener creates a temporary channel to receive
+    /// the agent's response and waits for it (up to `response_timeout_ms`).
+    /// The agent should use `reply_envelope.send(response)` to send the reply.
+    ///
+    /// Defaults to `false` for fire-and-forget messages.
+    #[serde(default)]
+    pub expects_reply: bool,
+
+    /// Maximum time in milliseconds to wait for a response.
+    ///
+    /// Only used when `expects_reply` is `true`. Defaults to 30000 (30 seconds).
+    #[serde(default = "default_response_timeout")]
+    pub response_timeout_ms: u64,
+}
+
+/// Default response timeout: 30 seconds.
+const fn default_response_timeout() -> u64 {
+    30_000
 }
 
 impl IpcEnvelope {
-    /// Creates a new IPC envelope with a generated correlation ID.
+    /// Creates a new fire-and-forget IPC envelope with a generated correlation ID.
     ///
     /// Uses the MTI crate to generate a unique, time-ordered correlation ID
-    /// in the format `req_<uuid_v7>`.
+    /// in the format `req_<uuid_v7>`. This creates a fire-and-forget message
+    /// that does not expect a reply.
     ///
     /// # Arguments
     ///
@@ -167,10 +200,91 @@ impl IpcEnvelope {
             target: target.into(),
             message_type: message_type.into(),
             payload,
+            expects_reply: false,
+            response_timeout_ms: default_response_timeout(),
         }
     }
 
-    /// Creates a new IPC envelope with a specified correlation ID.
+    /// Creates a new request-response IPC envelope with a generated correlation ID.
+    ///
+    /// Uses the MTI crate to generate a unique, time-ordered correlation ID
+    /// in the format `req_<uuid_v7>`. This creates a request that expects a
+    /// reply from the target agent.
+    ///
+    /// The agent should use `reply_envelope.send(response)` in their handler
+    /// to send a reply back to the IPC client.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The logical name or ERN of the target agent.
+    /// * `message_type` - The registered type name of the message.
+    /// * `payload` - The serialized message payload.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let envelope = IpcEnvelope::new_request(
+    ///     "price_service",
+    ///     "GetPrice",
+    ///     serde_json::json!({ "symbol": "AAPL" }),
+    /// );
+    /// // The IPC listener will wait for the agent's response
+    /// ```
+    #[must_use]
+    pub fn new_request(
+        target: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: serde_json::Value,
+    ) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "req".create_type_id::<V7>().to_string(),
+            target: target.into(),
+            message_type: message_type.into(),
+            payload,
+            expects_reply: true,
+            response_timeout_ms: default_response_timeout(),
+        }
+    }
+
+    /// Creates a new request-response IPC envelope with a custom timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The logical name or ERN of the target agent.
+    /// * `message_type` - The registered type name of the message.
+    /// * `payload` - The serialized message payload.
+    /// * `timeout_ms` - Maximum time in milliseconds to wait for a response.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let envelope = IpcEnvelope::new_request_with_timeout(
+    ///     "price_service",
+    ///     "GetPrice",
+    ///     serde_json::json!({ "symbol": "AAPL" }),
+    ///     5000, // 5 second timeout
+    /// );
+    /// ```
+    #[must_use]
+    pub fn new_request_with_timeout(
+        target: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: serde_json::Value,
+        timeout_ms: u64,
+    ) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "req".create_type_id::<V7>().to_string(),
+            target: target.into(),
+            message_type: message_type.into(),
+            payload,
+            expects_reply: true,
+            response_timeout_ms: timeout_ms,
+        }
+    }
+
+    /// Creates a new IPC envelope with a specified correlation ID (fire-and-forget).
     ///
     /// Use this when you need to control the correlation ID, such as when
     /// forwarding messages or implementing custom correlation schemes.
@@ -186,7 +300,43 @@ impl IpcEnvelope {
             target: target.into(),
             message_type: message_type.into(),
             payload,
+            expects_reply: false,
+            response_timeout_ms: default_response_timeout(),
         }
+    }
+
+    /// Creates a new request-response IPC envelope with a specified correlation ID.
+    ///
+    /// Use this when you need to control the correlation ID while also expecting
+    /// a response from the target agent.
+    #[must_use]
+    pub fn with_correlation_id_request(
+        correlation_id: impl Into<String>,
+        target: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: serde_json::Value,
+        timeout_ms: u64,
+    ) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            target: target.into(),
+            message_type: message_type.into(),
+            payload,
+            expects_reply: true,
+            response_timeout_ms: timeout_ms,
+        }
+    }
+
+    /// Returns `true` if this envelope expects a reply from the target agent.
+    #[must_use]
+    pub const fn expects_reply(&self) -> bool {
+        self.expects_reply
+    }
+
+    /// Returns the response timeout as a `Duration`.
+    #[must_use]
+    pub const fn response_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.response_timeout_ms)
     }
 }
 
@@ -305,6 +455,37 @@ mod tests {
         assert!(envelope.correlation_id.starts_with("req_"));
         assert_eq!(envelope.target, "price_service");
         assert_eq!(envelope.message_type, "PriceUpdate");
+        assert!(!envelope.expects_reply);
+        assert_eq!(envelope.response_timeout_ms, 30_000);
+    }
+
+    #[test]
+    fn test_ipc_envelope_request() {
+        let envelope = IpcEnvelope::new_request(
+            "price_service",
+            "GetPrice",
+            serde_json::json!({ "symbol": "AAPL" }),
+        );
+
+        assert!(envelope.correlation_id.starts_with("req_"));
+        assert_eq!(envelope.target, "price_service");
+        assert_eq!(envelope.message_type, "GetPrice");
+        assert!(envelope.expects_reply);
+        assert_eq!(envelope.response_timeout_ms, 30_000);
+    }
+
+    #[test]
+    fn test_ipc_envelope_request_with_timeout() {
+        let envelope = IpcEnvelope::new_request_with_timeout(
+            "price_service",
+            "GetPrice",
+            serde_json::json!({ "symbol": "AAPL" }),
+            5000,
+        );
+
+        assert!(envelope.expects_reply);
+        assert_eq!(envelope.response_timeout_ms, 5000);
+        assert_eq!(envelope.response_timeout(), std::time::Duration::from_millis(5000));
     }
 
     #[test]
@@ -322,6 +503,38 @@ mod tests {
         assert_eq!(deserialized.correlation_id, "test_123");
         assert_eq!(deserialized.target, "agent");
         assert_eq!(deserialized.message_type, "Ping");
+        assert!(!deserialized.expects_reply);
+    }
+
+    #[test]
+    fn test_ipc_envelope_deserialization_defaults() {
+        // Test that expects_reply defaults to false when not present in JSON
+        let json = r#"{
+            "correlation_id": "test_123",
+            "target": "agent",
+            "message_type": "Ping",
+            "payload": {}
+        }"#;
+
+        let deserialized: IpcEnvelope = serde_json::from_str(json).unwrap();
+        assert!(!deserialized.expects_reply);
+        assert_eq!(deserialized.response_timeout_ms, 30_000);
+    }
+
+    #[test]
+    fn test_ipc_envelope_deserialization_with_expects_reply() {
+        let json = r#"{
+            "correlation_id": "test_123",
+            "target": "agent",
+            "message_type": "Query",
+            "payload": {"q": "test"},
+            "expects_reply": true,
+            "response_timeout_ms": 5000
+        }"#;
+
+        let deserialized: IpcEnvelope = serde_json::from_str(json).unwrap();
+        assert!(deserialized.expects_reply);
+        assert_eq!(deserialized.response_timeout_ms, 5000);
     }
 
     #[test]

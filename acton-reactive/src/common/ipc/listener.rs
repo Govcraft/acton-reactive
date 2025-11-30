@@ -22,10 +22,12 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
+use acton_ern::prelude::*;
 use dashmap::DashMap;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Semaphore;
+use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
@@ -35,8 +37,9 @@ use super::protocol::{
 };
 use super::registry::IpcTypeRegistry;
 use super::types::{IpcEnvelope, IpcError, IpcResponse};
-use crate::common::AgentHandle;
-use crate::traits::AgentHandleInterface;
+use crate::common::{AgentHandle, Envelope};
+use crate::message::MessageAddress;
+use crate::traits::{ActonMessage, AgentHandleInterface};
 
 /// Statistics for the IPC listener.
 #[derive(Debug, Default)]
@@ -399,7 +402,48 @@ async fn handle_connection(
     debug!("Connection #{} handler finished", conn_id);
 }
 
+/// Channel capacity for the IPC response proxy channel.
+const IPC_RESPONSE_CHANNEL_CAPACITY: usize = 1;
+
+/// Creates a temporary `MessageAddress` for receiving IPC responses.
+///
+/// This creates a short-lived MPSC channel that acts as a "reply-to" address
+/// for IPC request-response patterns. When an agent calls `reply_envelope.send()`,
+/// the response is sent to this channel.
+fn create_ipc_response_proxy(correlation_id: &str) -> (mpsc::Receiver<Envelope>, MessageAddress) {
+    let (sender, receiver) = mpsc::channel::<Envelope>(IPC_RESPONSE_CHANNEL_CAPACITY);
+
+    // Create a unique ERN for this IPC response proxy
+    let ern = Ern::with_root(format!("ipc_proxy_{correlation_id}"))
+        .expect("Failed to create ERN for IPC response proxy");
+
+    let address = MessageAddress::new(sender, ern);
+
+    (receiver, address)
+}
+
+/// Serializes a message to JSON for IPC response transmission.
+///
+/// Since `ActonMessage` doesn't require `Serialize`, we use the `Debug` representation
+/// as a fallback. A more robust solution would be to add a serialize method to
+/// `ActonMessage` or use the `erased-serde` crate.
+///
+/// For Phase 3, this provides basic response serialization that captures the message
+/// type and its debug representation.
+fn serialize_response(message: &dyn ActonMessage) -> serde_json::Value {
+    // Since we can't directly check if a type implements Serialize at runtime,
+    // we return the Debug representation as a fallback.
+    // In the future, this could be extended with a proper erased serialization trait.
+    serde_json::json!({
+        "type": std::any::type_name_of_val(message),
+        "debug": format!("{:?}", message),
+    })
+}
+
 /// Process an IPC envelope and route to the target agent.
+///
+/// If `expects_reply` is `true`, this function creates a temporary channel
+/// to receive the agent's response and waits for it (with timeout).
 async fn process_envelope(
     envelope: &IpcEnvelope,
     type_registry: &Arc<IpcTypeRegistry>,
@@ -425,8 +469,29 @@ async fn process_envelope(
         }
     };
 
+    // Handle request-response vs fire-and-forget
+    if envelope.expects_reply {
+        process_request_response(
+            correlation_id,
+            &agent_handle,
+            message,
+            envelope.response_timeout(),
+            stats,
+        )
+        .await
+    } else {
+        process_fire_and_forget(correlation_id, &agent_handle, message, stats).await
+    }
+}
+
+/// Process a fire-and-forget message (no response expected).
+async fn process_fire_and_forget(
+    correlation_id: &str,
+    agent_handle: &AgentHandle,
+    message: Box<dyn ActonMessage + Send + Sync>,
+    stats: &Arc<IpcListenerStats>,
+) -> IpcResponse {
     // Send the message to the agent
-    // Note: We use send_raw which accepts Box<dyn ActonMessage>
     if let Err(e) = agent_handle.send_boxed(message).await {
         let err = IpcError::IoError(format!("Failed to send message to agent: {e}"));
         stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -435,12 +500,68 @@ async fn process_envelope(
 
     stats.messages_routed.fetch_add(1, Ordering::Relaxed);
 
-    // For now, return a simple acknowledgment
-    // Phase 3 will add request-response correlation
+    // Return a simple acknowledgment for fire-and-forget messages
     IpcResponse::success(
         correlation_id,
         Some(serde_json::json!({ "status": "delivered" })),
     )
+}
+
+/// Process a request-response message (wait for agent's reply).
+async fn process_request_response(
+    correlation_id: &str,
+    agent_handle: &AgentHandle,
+    message: Box<dyn ActonMessage + Send + Sync>,
+    timeout: Duration,
+    stats: &Arc<IpcListenerStats>,
+) -> IpcResponse {
+    // Create a temporary channel to receive the response
+    let (mut response_receiver, reply_to_address) = create_ipc_response_proxy(correlation_id);
+
+    // Send the message with our proxy as the reply-to address
+    if let Err(e) = agent_handle.send_boxed_with_reply_to(message, reply_to_address).await {
+        let err = IpcError::IoError(format!("Failed to send message to agent: {e}"));
+        stats.errors.fetch_add(1, Ordering::Relaxed);
+        return IpcResponse::error(correlation_id, &err);
+    }
+
+    stats.messages_routed.fetch_add(1, Ordering::Relaxed);
+
+    // Wait for the response with timeout
+    match tokio::time::timeout(timeout, response_receiver.recv()).await {
+        Ok(Some(response_envelope)) => {
+            // Serialize the response message
+            let payload = serialize_response(response_envelope.message.as_ref());
+
+            trace!(
+                "Received response for correlation_id={}: {:?}",
+                correlation_id,
+                payload
+            );
+
+            IpcResponse::success(correlation_id, Some(payload))
+        }
+        Ok(None) => {
+            // Channel closed without receiving a response
+            let err = IpcError::IoError(
+                "Response channel closed without receiving a response".to_string(),
+            );
+            stats.errors.fetch_add(1, Ordering::Relaxed);
+            IpcResponse::error(correlation_id, &err)
+        }
+        Err(_) => {
+            // Timeout waiting for response
+            stats.errors.fetch_add(1, Ordering::Relaxed);
+            IpcResponse::error_with_message(
+                correlation_id,
+                "TIMEOUT",
+                format!(
+                    "Request timed out after {} ms waiting for response",
+                    timeout.as_millis()
+                ),
+            )
+        }
+    }
 }
 
 /// Check if a socket path exists and is accessible.

@@ -163,4 +163,26 @@ pub trait AgentHandleInterface: Send + Sync + Debug + Clone + 'static {
         &self,
         message: Box<dyn ActonMessage + Send + Sync>,
     ) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_;
+
+    /// Sends a boxed message asynchronously with a custom reply-to address.
+    ///
+    /// This method is used for IPC request-response patterns where responses
+    /// should be routed back to a temporary IPC proxy channel rather than
+    /// another agent. When the target agent calls `reply_envelope.send(response)`,
+    /// the response will be delivered to the specified `reply_to` address.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: A boxed message payload to send. Must implement [`ActonMessage`].
+    /// * `reply_to`: The [`MessageAddress`] where responses should be sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message could not be sent (e.g., if the channel is closed).
+    #[cfg(feature = "ipc")]
+    fn send_boxed_with_reply_to(
+        &self,
+        message: Box<dyn ActonMessage + Send + Sync>,
+        reply_to: MessageAddress,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_;
 }
