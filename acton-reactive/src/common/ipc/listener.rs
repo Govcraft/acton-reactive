@@ -953,22 +953,38 @@ fn create_ipc_response_proxy(correlation_id: &str) -> (mpsc::Receiver<Envelope>,
     (receiver, address)
 }
 
-/// Serializes a message to JSON for IPC response transmission.
+/// Serializes a response message to JSON using the type registry.
 ///
-/// Since `ActonMessage` doesn't require `Serialize`, we use the `Debug` representation
-/// as a fallback. A more robust solution would be to add a serialize method to
-/// `ActonMessage` or use the `erased-serde` crate.
+/// If the message type is registered in the IPC type registry, it will be
+/// properly serialized to JSON. Otherwise, falls back to a debug representation.
 ///
-/// For Phase 3, this provides basic response serialization that captures the message
-/// type and its debug representation.
-fn serialize_response(message: &dyn ActonMessage) -> serde_json::Value {
-    // Since we can't directly check if a type implements Serialize at runtime,
-    // we return the Debug representation as a fallback.
-    // In the future, this could be extended with a proper erased serialization trait.
-    serde_json::json!({
-        "type": std::any::type_name_of_val(message),
-        "debug": format!("{:?}", message),
-    })
+/// # Arguments
+///
+/// * `message` - The message to serialize
+/// * `type_registry` - The IPC type registry containing registered serializers
+fn serialize_response(
+    message: &dyn ActonMessage,
+    type_registry: &IpcTypeRegistry,
+) -> serde_json::Value {
+    let type_id = message.type_id();
+
+    // Try to serialize using the registered serializer
+    match type_registry.serialize_by_type_id(&type_id, message) {
+        Ok(value) => value,
+        Err(err) => {
+            // Fall back to debug representation for unregistered types
+            trace!(
+                type_name = std::any::type_name_of_val(message),
+                error = %err,
+                "Response type not registered for IPC serialization, using debug representation"
+            );
+            serde_json::json!({
+                "_ipc_fallback": true,
+                "type": std::any::type_name_of_val(message),
+                "debug": format!("{:?}", message),
+            })
+        }
+    }
 }
 
 /// Process an IPC envelope and route to the target agent.
@@ -1008,6 +1024,7 @@ async fn process_envelope(
             message,
             envelope.response_timeout(),
             stats,
+            type_registry,
         )
         .await
     } else {
@@ -1050,6 +1067,7 @@ async fn process_request_response(
     message: Box<dyn ActonMessage + Send + Sync>,
     timeout: Duration,
     stats: &Arc<IpcListenerStats>,
+    type_registry: &Arc<IpcTypeRegistry>,
 ) -> IpcResponse {
     // Create a temporary channel to receive the response
     let (mut response_receiver, reply_to_address) = create_ipc_response_proxy(correlation_id);
@@ -1072,8 +1090,8 @@ async fn process_request_response(
     // Wait for the response with timeout
     match tokio::time::timeout(timeout, response_receiver.recv()).await {
         Ok(Some(response_envelope)) => {
-            // Serialize the response message
-            let payload = serialize_response(response_envelope.message.as_ref());
+            // Serialize the response message using the type registry
+            let payload = serialize_response(response_envelope.message.as_ref(), type_registry);
 
             trace!(
                 "Received response for correlation_id={}: {:?}",
