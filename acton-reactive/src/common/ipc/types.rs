@@ -74,6 +74,19 @@ pub enum IpcError {
     ///
     /// The server is gracefully shutting down and not accepting new requests.
     ShuttingDown,
+
+    /// Unsupported protocol version.
+    ///
+    /// The client sent a message with a protocol version that this server
+    /// doesn't support. The client should negotiate a compatible version.
+    UnsupportedProtocolVersion {
+        /// The protocol version received from the client.
+        received: u8,
+        /// The minimum protocol version this server supports.
+        min_supported: u8,
+        /// The maximum protocol version this server supports.
+        max_supported: u8,
+    },
 }
 
 impl fmt::Display for IpcError {
@@ -91,6 +104,16 @@ impl fmt::Display for IpcError {
                 write!(f, "Rate limit exceeded, retry after {retry_after_ms}ms")
             }
             Self::ShuttingDown => write!(f, "Server is shutting down"),
+            Self::UnsupportedProtocolVersion {
+                received,
+                min_supported,
+                max_supported,
+            } => {
+                write!(
+                    f,
+                    "Unsupported protocol version {received:#04x}, supported range: {min_supported:#04x}-{max_supported:#04x}"
+                )
+            }
         }
     }
 }
@@ -870,6 +893,9 @@ impl IpcResponse {
             IpcError::Timeout => ("TIMEOUT", err.to_string()),
             IpcError::RateLimited { .. } => ("RATE_LIMITED", err.to_string()),
             IpcError::ShuttingDown => ("SHUTTING_DOWN", err.to_string()),
+            IpcError::UnsupportedProtocolVersion { .. } => {
+                ("UNSUPPORTED_PROTOCOL_VERSION", err.to_string())
+            }
         };
 
         Self {
@@ -1002,10 +1028,162 @@ pub struct AgentInfo {
     pub ern: String,
 }
 
+/// Protocol version information returned in discovery responses.
+///
+/// Provides clients with information about the server's protocol capabilities.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProtocolVersionInfo {
+    /// Current protocol version supported by this server.
+    pub current: u8,
+
+    /// Minimum protocol version this server can accept.
+    pub min_supported: u8,
+
+    /// Maximum protocol version this server can accept.
+    pub max_supported: u8,
+
+    /// Human-readable description of the current version.
+    pub description: String,
+
+    /// Protocol capability flags.
+    pub capabilities: ProtocolCapabilities,
+}
+
+/// Protocol capability flags for discovery responses.
+///
+/// Uses an enum set internally but serializes to a boolean field format
+/// for wire compatibility.
+#[derive(Clone, Debug, Default)]
+pub struct ProtocolCapabilities {
+    /// Set of supported capabilities.
+    capabilities: std::collections::HashSet<crate::common::ipc::protocol::ProtocolCapability>,
+}
+
+impl ProtocolCapabilities {
+    /// Create a new empty capabilities set.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create capabilities with all features enabled.
+    #[must_use]
+    pub fn all() -> Self {
+        use crate::common::ipc::protocol::ProtocolCapability;
+        Self::with_capabilities([
+            ProtocolCapability::MessagePack,
+            ProtocolCapability::Streaming,
+            ProtocolCapability::Push,
+            ProtocolCapability::Discovery,
+        ])
+    }
+
+    /// Create capabilities from an iterator of capability enums.
+    #[must_use]
+    pub fn with_capabilities<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = crate::common::ipc::protocol::ProtocolCapability>,
+    {
+        Self {
+            capabilities: iter.into_iter().collect(),
+        }
+    }
+
+    /// Add a capability.
+    pub fn insert(&mut self, capability: crate::common::ipc::protocol::ProtocolCapability) {
+        self.capabilities.insert(capability);
+    }
+
+    /// Check if `MessagePack` is supported.
+    #[must_use]
+    pub fn messagepack(&self) -> bool {
+        use crate::common::ipc::protocol::ProtocolCapability;
+        self.capabilities.contains(&ProtocolCapability::MessagePack)
+    }
+
+    /// Check if streaming is supported.
+    #[must_use]
+    pub fn streaming(&self) -> bool {
+        use crate::common::ipc::protocol::ProtocolCapability;
+        self.capabilities.contains(&ProtocolCapability::Streaming)
+    }
+
+    /// Check if push notifications are supported.
+    #[must_use]
+    pub fn push(&self) -> bool {
+        use crate::common::ipc::protocol::ProtocolCapability;
+        self.capabilities.contains(&ProtocolCapability::Push)
+    }
+
+    /// Check if discovery is supported.
+    #[must_use]
+    pub fn discovery(&self) -> bool {
+        use crate::common::ipc::protocol::ProtocolCapability;
+        self.capabilities.contains(&ProtocolCapability::Discovery)
+    }
+}
+
+impl Serialize for ProtocolCapabilities {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("ProtocolCapabilities", 4)?;
+        state.serialize_field("messagepack", &self.messagepack())?;
+        state.serialize_field("streaming", &self.streaming())?;
+        state.serialize_field("push", &self.push())?;
+        state.serialize_field("discovery", &self.discovery())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ProtocolCapabilities {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use crate::common::ipc::protocol::ProtocolCapability;
+        use serde::de::{MapAccess, Visitor};
+
+        struct CapabilitiesVisitor;
+
+        impl<'de> Visitor<'de> for CapabilitiesVisitor {
+            type Value = ProtocolCapabilities;
+
+            fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.write_str("a map of capability flags")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut caps = ProtocolCapabilities::new();
+                while let Some(key) = map.next_key::<&str>()? {
+                    let enabled: bool = map.next_value()?;
+                    if enabled {
+                        match key {
+                            "messagepack" => caps.insert(ProtocolCapability::MessagePack),
+                            "streaming" => caps.insert(ProtocolCapability::Streaming),
+                            "push" => caps.insert(ProtocolCapability::Push),
+                            "discovery" => caps.insert(ProtocolCapability::Discovery),
+                            _ => {} // Ignore unknown capabilities
+                        }
+                    }
+                }
+                Ok(caps)
+            }
+        }
+
+        deserializer.deserialize_map(CapabilitiesVisitor)
+    }
+}
+
 /// Response to a discovery request.
 ///
 /// Contains information about available agents and/or registered message types
-/// based on what was requested.
+/// based on what was requested, along with protocol version information.
 ///
 /// # Wire Format
 ///
@@ -1013,6 +1191,18 @@ pub struct AgentInfo {
 /// {
 ///   "correlation_id": "disc_01h9xz7n2e5p6q8r3t1u2v3w4x",
 ///   "success": true,
+///   "protocol_version": {
+///     "current": 2,
+///     "min_supported": 1,
+///     "max_supported": 2,
+///     "description": "v2 (multi-format, streaming, push, discovery)",
+///     "capabilities": {
+///       "messagepack": true,
+///       "streaming": true,
+///       "push": true,
+///       "discovery": true
+///     }
+///   },
 ///   "agents": [
 ///     { "name": "price_service", "ern": "ern:acton:..." },
 ///     { "name": "order_service", "ern": "ern:acton:..." }
@@ -1032,6 +1222,13 @@ pub struct IpcDiscoverResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 
+    /// Protocol version information.
+    ///
+    /// Always included in successful responses to help clients understand
+    /// what protocol features are available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<ProtocolVersionInfo>,
+
     /// List of exposed agents (if requested and successful).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agents: Option<Vec<AgentInfo>>,
@@ -1041,8 +1238,37 @@ pub struct IpcDiscoverResponse {
     pub message_types: Option<Vec<String>>,
 }
 
+impl ProtocolVersionInfo {
+    /// Creates protocol version info for the current protocol version.
+    ///
+    /// This is the standard way to include version information in discovery responses.
+    #[must_use]
+    pub fn current() -> Self {
+        use crate::common::ipc::protocol::{
+            MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION, PROTOCOL_VERSION, ProtocolCapability,
+        };
+
+        let mut capabilities = ProtocolCapabilities::with_capabilities([
+            ProtocolCapability::Streaming,
+            ProtocolCapability::Push,
+            ProtocolCapability::Discovery,
+        ]);
+
+        #[cfg(feature = "ipc-messagepack")]
+        capabilities.insert(ProtocolCapability::MessagePack);
+
+        Self {
+            current: PROTOCOL_VERSION,
+            min_supported: MIN_SUPPORTED_VERSION,
+            max_supported: MAX_SUPPORTED_VERSION,
+            description: "v2 (multi-format, streaming, push, discovery)".to_string(),
+            capabilities,
+        }
+    }
+}
+
 impl IpcDiscoverResponse {
-    /// Creates a successful discovery response.
+    /// Creates a successful discovery response with protocol version info.
     #[must_use]
     pub fn success(
         correlation_id: impl Into<String>,
@@ -1053,6 +1279,26 @@ impl IpcDiscoverResponse {
             correlation_id: correlation_id.into(),
             success: true,
             error: None,
+            protocol_version: Some(ProtocolVersionInfo::current()),
+            agents,
+            message_types,
+        }
+    }
+
+    /// Creates a successful discovery response without protocol version info.
+    ///
+    /// Use this when responding to v1 clients that don't expect version info.
+    #[must_use]
+    pub fn success_without_version(
+        correlation_id: impl Into<String>,
+        agents: Option<Vec<AgentInfo>>,
+        message_types: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: true,
+            error: None,
+            protocol_version: None,
             agents,
             message_types,
         }
@@ -1065,6 +1311,7 @@ impl IpcDiscoverResponse {
             correlation_id: correlation_id.into(),
             success: false,
             error: Some(error.into()),
+            protocol_version: None,
             agents: None,
             message_types: None,
         }

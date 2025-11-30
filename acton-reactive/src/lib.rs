@@ -81,7 +81,8 @@ pub mod ipc {
         socket_exists, socket_is_alive, start_listener, AgentInfo, IpcConfig,
         IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcListenerHandle,
         IpcListenerStats, IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
-        IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest, ShutdownResult,
+        IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest, ProtocolCapabilities,
+        ProtocolVersionInfo, ShutdownResult,
     };
 
     /// Wire protocol for IPC message framing.
@@ -97,9 +98,11 @@ pub mod ipc {
             write_response, write_response_with_format, write_stream_frame,
             write_stream_frame_with_format, write_subscribe_with_format,
             write_subscription_response, write_subscription_response_with_format,
-            write_unsubscribe_with_format, Format, HEADER_SIZE, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER,
+            write_unsubscribe_with_format, Format, HEADER_SIZE, HEADER_SIZE_V1, HEADER_SIZE_V2,
+            MAX_FRAME_SIZE, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION, MSG_TYPE_DISCOVER,
             MSG_TYPE_ERROR, MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE,
             MSG_TYPE_STREAM, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE, PROTOCOL_VERSION,
+            ProtocolVersion,
         };
     }
 }

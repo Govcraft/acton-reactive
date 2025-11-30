@@ -116,6 +116,7 @@ impl std::fmt::Debug for SubscriptionManager {
         f.debug_struct("SubscriptionManager")
             .field("connection_count", &self.connections.len())
             .field("subscribed_types_count", &self.type_to_connections.len())
+            .field("type_id_mappings", &self.type_id_to_name.read().len())
             .field("stats", &self.stats)
             .finish()
     }
@@ -466,8 +467,8 @@ mod tests {
 
         manager.forward_to_subscribers(&notification);
 
-        let received = receiver.try_recv().unwrap();
-        assert_eq!(received.message_type, "PriceUpdate");
+        let notification_out = receiver.try_recv().unwrap();
+        assert_eq!(notification_out.message_type, "PriceUpdate");
         assert_eq!(manager.stats().push_notifications_sent(), 1);
     }
 
@@ -488,9 +489,9 @@ mod tests {
 
     #[test]
     fn test_type_mapping() {
-        let manager = SubscriptionManager::new();
-
         struct TestMessage;
+
+        let manager = SubscriptionManager::new();
         let type_id = TypeId::of::<TestMessage>();
 
         manager.register_type_mapping(type_id, "TestMessage".to_string());
@@ -517,9 +518,9 @@ mod tests {
         sender.send(notification.clone()).await.unwrap();
 
         // Receive the notification
-        let mut rx = receiver.receiver;
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received.message_type, "TestMessage");
+        let mut channel = receiver.receiver;
+        let msg = channel.recv().await.unwrap();
+        assert_eq!(msg.message_type, "TestMessage");
     }
 
     #[test]

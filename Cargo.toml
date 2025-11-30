@@ -68,6 +68,7 @@ handlebars = "6.1.0"
 
 # Shared lints
 [workspace.lints.rust]
+warnings = "deny"
 unsafe_code = "deny"
 rust_2018_idioms = { level = "warn", priority = -1 }
 trivial_casts = "warn"

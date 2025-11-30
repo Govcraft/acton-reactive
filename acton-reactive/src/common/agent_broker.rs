@@ -141,7 +141,7 @@ impl AgentBroker {
 
                     // Forward to IPC subscribers if available
                     #[cfg(feature = "ipc")]
-                    Self::forward_to_ipc(ipc_sub_mgr, ipc_type_reg, &message_to_broadcast);
+                    Self::forward_to_ipc(&ipc_sub_mgr, &ipc_type_reg, &message_to_broadcast);
                 })
             })
             .act_on::<SubscribeBroker>(|agent, event| {
@@ -225,8 +225,8 @@ impl AgentBroker {
     /// Only available when the `ipc` feature is enabled.
     #[cfg(feature = "ipc")]
     fn forward_to_ipc(
-        ipc_sub_mgr: Arc<RwLock<Option<Arc<SubscriptionManager>>>>,
-        ipc_type_reg: Arc<IpcTypeRegistry>,
+        ipc_sub_mgr: &Arc<RwLock<Option<Arc<SubscriptionManager>>>>,
+        ipc_type_reg: &Arc<IpcTypeRegistry>,
         request: &BrokerRequest,
     ) {
         // Check if there's an active subscription manager

@@ -85,6 +85,8 @@ impl std::fmt::Debug for IpcTypeRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IpcTypeRegistry")
             .field("registered_types", &self.deserializers.len())
+            .field("type_id_mappings", &self.type_id_to_name.len())
+            .field("serializers", &self.serializers.len())
             .finish()
     }
 }

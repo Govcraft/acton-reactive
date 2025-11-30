@@ -43,11 +43,249 @@
 //! ```
 
 use super::types::{IpcEnvelope, IpcError, IpcResponse};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-/// Protocol version byte.
+// ============================================================================
+// Protocol Versioning
+// ============================================================================
+
+/// Current protocol version byte.
 pub const PROTOCOL_VERSION: u8 = 0x02;
+
+/// Minimum supported protocol version for backward compatibility.
+pub const MIN_SUPPORTED_VERSION: u8 = 0x01;
+
+/// Maximum supported protocol version.
+pub const MAX_SUPPORTED_VERSION: u8 = 0x02;
+
+/// Protocol capabilities represented as individual features.
+///
+/// Used for querying what features a specific protocol version supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolCapability {
+    /// Support for format byte in header (allows multi-format encoding).
+    FormatByte,
+    /// Support for `MessagePack` binary serialization.
+    MessagePack,
+    /// Support for streaming responses (multiple frames per request).
+    Streaming,
+    /// Support for push notifications (server-initiated messages).
+    Push,
+    /// Support for service discovery.
+    Discovery,
+}
+
+/// Capability flags stored as a bitfield for const compatibility.
+///
+/// This is an internal representation that allows `ProtocolVersion` constants
+/// to be defined at compile time while still providing a clean API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityFlags(u8);
+
+impl CapabilityFlags {
+    /// No capabilities.
+    pub const NONE: Self = Self(0);
+
+    /// Bit flag for format byte support.
+    const FORMAT_BYTE: u8 = 1 << 0;
+    /// Bit flag for `MessagePack` support.
+    const MESSAGEPACK: u8 = 1 << 1;
+    /// Bit flag for streaming support.
+    const STREAMING: u8 = 1 << 2;
+    /// Bit flag for push notification support.
+    const PUSH: u8 = 1 << 3;
+    /// Bit flag for discovery support.
+    const DISCOVERY: u8 = 1 << 4;
+
+    /// All v2 capabilities.
+    pub const V2_ALL: Self = Self(
+        Self::FORMAT_BYTE | Self::MESSAGEPACK | Self::STREAMING | Self::PUSH | Self::DISCOVERY
+    );
+
+    /// Check if a capability is supported.
+    #[must_use]
+    pub const fn supports(self, capability: ProtocolCapability) -> bool {
+        let flag = match capability {
+            ProtocolCapability::FormatByte => Self::FORMAT_BYTE,
+            ProtocolCapability::MessagePack => Self::MESSAGEPACK,
+            ProtocolCapability::Streaming => Self::STREAMING,
+            ProtocolCapability::Push => Self::PUSH,
+            ProtocolCapability::Discovery => Self::DISCOVERY,
+        };
+        self.0 & flag != 0
+    }
+
+    /// Get all capabilities as an iterator-friendly array.
+    #[must_use]
+    pub const fn as_array(self) -> [Option<ProtocolCapability>; 5] {
+        [
+            if self.0 & Self::FORMAT_BYTE != 0 { Some(ProtocolCapability::FormatByte) } else { None },
+            if self.0 & Self::MESSAGEPACK != 0 { Some(ProtocolCapability::MessagePack) } else { None },
+            if self.0 & Self::STREAMING != 0 { Some(ProtocolCapability::Streaming) } else { None },
+            if self.0 & Self::PUSH != 0 { Some(ProtocolCapability::Push) } else { None },
+            if self.0 & Self::DISCOVERY != 0 { Some(ProtocolCapability::Discovery) } else { None },
+        ]
+    }
+}
+
+/// Protocol version information with capability flags.
+///
+/// This struct provides detailed information about a specific protocol version,
+/// including what features it supports and its wire format characteristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtocolVersion {
+    /// Major version number (wire format byte).
+    pub major: u8,
+    /// Capability flags for this version.
+    capabilities: CapabilityFlags,
+    /// Header size in bytes for this version.
+    pub header_size: u8,
+}
+
+impl ProtocolVersion {
+    /// Protocol v1 (original release).
+    ///
+    /// Wire format: `[length:4][version:1][msg_type:1][payload...]`
+    ///
+    /// # Features
+    /// - 6-byte header (no format byte)
+    /// - JSON serialization only
+    /// - Message types: Request, Response, Error, Heartbeat
+    /// - No streaming, push, or discovery support
+    pub const V1: Self = Self {
+        major: 0x01,
+        capabilities: CapabilityFlags::NONE,
+        header_size: 6,
+    };
+
+    /// Protocol v2 (current version).
+    ///
+    /// Wire format: `[length:4][version:1][msg_type:1][format:1][payload...]`
+    ///
+    /// # Features
+    /// - 7-byte header (includes format byte)
+    /// - JSON and `MessagePack` serialization
+    /// - Message types: Request, Response, Error, Heartbeat, Push, Subscribe,
+    ///   Unsubscribe, Discover, Stream
+    /// - Full streaming, push, and discovery support
+    pub const V2: Self = Self {
+        major: 0x02,
+        capabilities: CapabilityFlags::V2_ALL,
+        header_size: 7,
+    };
+
+    /// Current protocol version used by this library.
+    pub const CURRENT: Self = Self::V2;
+
+    /// Check if this version supports a specific capability.
+    #[must_use]
+    pub const fn supports(&self, capability: ProtocolCapability) -> bool {
+        self.capabilities.supports(capability)
+    }
+
+    /// Check if format byte is supported.
+    #[must_use]
+    pub const fn supports_format_byte(&self) -> bool {
+        self.capabilities.supports(ProtocolCapability::FormatByte)
+    }
+
+    /// Check if `MessagePack` is supported.
+    #[must_use]
+    pub const fn supports_messagepack(&self) -> bool {
+        self.capabilities.supports(ProtocolCapability::MessagePack)
+    }
+
+    /// Check if streaming is supported.
+    #[must_use]
+    pub const fn supports_streaming(&self) -> bool {
+        self.capabilities.supports(ProtocolCapability::Streaming)
+    }
+
+    /// Check if push notifications are supported.
+    #[must_use]
+    pub const fn supports_push(&self) -> bool {
+        self.capabilities.supports(ProtocolCapability::Push)
+    }
+
+    /// Check if discovery is supported.
+    #[must_use]
+    pub const fn supports_discovery(&self) -> bool {
+        self.capabilities.supports(ProtocolCapability::Discovery)
+    }
+
+    /// Get the capability flags for this version.
+    #[must_use]
+    pub const fn capabilities(&self) -> CapabilityFlags {
+        self.capabilities
+    }
+
+    /// Get version info from a version byte.
+    #[must_use]
+    pub const fn from_byte(version: u8) -> Option<Self> {
+        match version {
+            0x01 => Some(Self::V1),
+            0x02 => Some(Self::V2),
+            _ => None,
+        }
+    }
+
+    /// Check if this version is supported by the current implementation.
+    #[must_use]
+    pub const fn is_supported(version: u8) -> bool {
+        version >= MIN_SUPPORTED_VERSION && version <= MAX_SUPPORTED_VERSION
+    }
+
+    /// Negotiate the best common version between client and server.
+    ///
+    /// Returns the highest version both sides support, or None if incompatible.
+    #[must_use]
+    pub const fn negotiate(client_version: u8, server_version: u8) -> Option<u8> {
+        if client_version < MIN_SUPPORTED_VERSION || server_version < MIN_SUPPORTED_VERSION {
+            return None;
+        }
+        // Use the lower of the two versions (both can speak it)
+        let negotiated = if client_version < server_version {
+            client_version
+        } else {
+            server_version
+        };
+        if negotiated <= MAX_SUPPORTED_VERSION {
+            Some(negotiated)
+        } else {
+            Some(MAX_SUPPORTED_VERSION)
+        }
+    }
+
+    /// Get a human-readable description of this version.
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
+        match self.major {
+            0x01 => "v1 (JSON only, basic messaging)",
+            0x02 => "v2 (multi-format, streaming, push, discovery)",
+            _ => "unknown version",
+        }
+    }
+
+    /// List all supported versions.
+    #[must_use]
+    pub const fn supported_versions() -> &'static [Self] {
+        &[Self::V1, Self::V2]
+    }
+}
+
+impl Default for ProtocolVersion {
+    fn default() -> Self {
+        Self::CURRENT
+    }
+}
+
+impl std::fmt::Display for ProtocolVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "v{} ({})", self.major, self.description())
+    }
+}
 
 // ============================================================================
 // Serialization Format
@@ -141,21 +379,72 @@ pub const MSG_TYPE_DISCOVER: u8 = 0x08;
 /// Message type: Stream frame (server → client, for streaming responses).
 pub const MSG_TYPE_STREAM: u8 = 0x09;
 
-/// Frame header size: 4 bytes length + 1 byte version + 1 byte type + 1 byte format.
-pub const HEADER_SIZE: usize = 7;
+/// Frame header size for v1: 4 bytes length + 1 byte version + 1 byte type.
+pub const HEADER_SIZE_V1: usize = 6;
+
+/// Frame header size for v2: 4 bytes length + 1 byte version + 1 byte type + 1 byte format.
+pub const HEADER_SIZE_V2: usize = 7;
+
+/// Frame header size (current version).
+pub const HEADER_SIZE: usize = HEADER_SIZE_V2;
 
 /// Maximum frame size (16 MiB hard limit).
 pub const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
-/// Read a frame header from the stream.
+/// Message types supported in v1 protocol.
+const V1_MESSAGE_TYPES: &[u8] = &[
+    MSG_TYPE_REQUEST,
+    MSG_TYPE_RESPONSE,
+    MSG_TYPE_ERROR,
+    MSG_TYPE_HEARTBEAT,
+];
+
+/// Message types supported in v2 protocol.
+const V2_MESSAGE_TYPES: &[u8] = &[
+    MSG_TYPE_REQUEST,
+    MSG_TYPE_RESPONSE,
+    MSG_TYPE_ERROR,
+    MSG_TYPE_HEARTBEAT,
+    MSG_TYPE_PUSH,
+    MSG_TYPE_SUBSCRIBE,
+    MSG_TYPE_UNSUBSCRIBE,
+    MSG_TYPE_DISCOVER,
+    MSG_TYPE_STREAM,
+];
+
+/// Validate message type for a given protocol version.
+fn validate_message_type(version: u8, msg_type: u8) -> Result<(), IpcError> {
+    let valid_types = match version {
+        0x01 => V1_MESSAGE_TYPES,
+        0x02 => V2_MESSAGE_TYPES,
+        _ => {
+            return Err(IpcError::ProtocolError(format!(
+                "Unknown protocol version: {version:#04x}"
+            )))
+        }
+    };
+
+    if valid_types.contains(&msg_type) {
+        Ok(())
+    } else {
+        Err(IpcError::ProtocolError(format!(
+            "Unknown message type {msg_type:#04x} for protocol v{version}"
+        )))
+    }
+}
+
+/// Read a frame header from the stream with backward compatibility.
+///
+/// Supports both v1 (6-byte) and v2 (7-byte) headers. For v1, format defaults to JSON.
 ///
 /// Returns `(payload_length, protocol_version, message_type, format)`.
 async fn read_header<R>(reader: &mut R) -> Result<(u32, u8, u8, Format), IpcError>
 where
     R: AsyncRead + Unpin,
 {
-    let mut header = [0u8; HEADER_SIZE];
-    reader.read_exact(&mut header).await.map_err(|e| {
+    // Read the base header (6 bytes - common to v1 and v2)
+    let mut base_header = [0u8; HEADER_SIZE_V1];
+    reader.read_exact(&mut base_header).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::UnexpectedEof {
             IpcError::ConnectionClosed
         } else {
@@ -163,45 +452,49 @@ where
         }
     })?;
 
-    let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-    let version = header[4];
-    let msg_type = header[5];
-    let format_byte = header[6];
+    let length = u32::from_be_bytes([base_header[0], base_header[1], base_header[2], base_header[3]]);
+    let version = base_header[4];
+    let msg_type = base_header[5];
 
-    // Validate protocol version
-    if version != PROTOCOL_VERSION {
-        return Err(IpcError::ProtocolError(format!(
-            "Unsupported protocol version: {version}, expected {PROTOCOL_VERSION}"
-        )));
+    // Validate protocol version is supported
+    if !ProtocolVersion::is_supported(version) {
+        return Err(IpcError::UnsupportedProtocolVersion {
+            received: version,
+            min_supported: MIN_SUPPORTED_VERSION,
+            max_supported: MAX_SUPPORTED_VERSION,
+        });
     }
 
-    // Validate message type
-    if !matches!(
-        msg_type,
-        MSG_TYPE_REQUEST
-            | MSG_TYPE_RESPONSE
-            | MSG_TYPE_ERROR
-            | MSG_TYPE_HEARTBEAT
-            | MSG_TYPE_PUSH
-            | MSG_TYPE_SUBSCRIBE
-            | MSG_TYPE_UNSUBSCRIBE
-            | MSG_TYPE_DISCOVER
-            | MSG_TYPE_STREAM
-    ) {
-        return Err(IpcError::ProtocolError(format!(
-            "Unknown message type: {msg_type:#04x}"
-        )));
-    }
+    // Validate message type for this version
+    validate_message_type(version, msg_type)?;
 
-    // Parse format
-    let format = Format::from_byte(format_byte).ok_or_else(|| {
-        IpcError::ProtocolError(format!("Unknown serialization format: {format_byte:#04x}"))
-    })?;
+    // Handle version-specific format byte
+    let format = if version >= 0x02 {
+        // v2+: read format byte
+        let mut format_byte = [0u8; 1];
+        reader.read_exact(&mut format_byte).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                IpcError::ConnectionClosed
+            } else {
+                IpcError::IoError(e.to_string())
+            }
+        })?;
+
+        Format::from_byte(format_byte[0]).ok_or_else(|| {
+            IpcError::ProtocolError(format!(
+                "Unknown serialization format: {:#04x}",
+                format_byte[0]
+            ))
+        })?
+    } else {
+        // v1: JSON only
+        Format::Json
+    };
 
     Ok((length, version, msg_type, format))
 }
 
-/// Write a frame header to the stream.
+/// Write a frame header to the stream using the current protocol version.
 async fn write_header<W>(
     writer: &mut W,
     payload_length: u32,
@@ -211,16 +504,45 @@ async fn write_header<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let mut header = [0u8; HEADER_SIZE];
-    header[..4].copy_from_slice(&payload_length.to_be_bytes());
-    header[4] = PROTOCOL_VERSION;
-    header[5] = msg_type;
-    header[6] = format.to_byte();
+    write_header_with_version(writer, payload_length, msg_type, format, PROTOCOL_VERSION).await
+}
 
-    writer
-        .write_all(&header)
-        .await
-        .map_err(|e| IpcError::IoError(e.to_string()))
+/// Write a frame header with a specific protocol version.
+///
+/// For v1: writes 6-byte header (no format byte, format ignored)
+/// For v2+: writes 7-byte header (includes format byte)
+async fn write_header_with_version<W>(
+    writer: &mut W,
+    payload_length: u32,
+    msg_type: u8,
+    format: Format,
+    version: u8,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    if version >= 0x02 {
+        // v2+ header: 7 bytes
+        let mut header = [0u8; HEADER_SIZE_V2];
+        header[..4].copy_from_slice(&payload_length.to_be_bytes());
+        header[4] = version;
+        header[5] = msg_type;
+        header[6] = format.to_byte();
+        writer
+            .write_all(&header)
+            .await
+            .map_err(|e| IpcError::IoError(e.to_string()))
+    } else {
+        // v1 header: 6 bytes (no format byte)
+        let mut header = [0u8; HEADER_SIZE_V1];
+        header[..4].copy_from_slice(&payload_length.to_be_bytes());
+        header[4] = version;
+        header[5] = msg_type;
+        writer
+            .write_all(&header)
+            .await
+            .map_err(|e| IpcError::IoError(e.to_string()))
+    }
 }
 
 /// Read a complete frame from the stream.
@@ -721,11 +1043,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invalid_protocol_version() {
-        // Craft a frame with invalid protocol version
+    async fn test_unsupported_protocol_version() {
+        // Craft a frame with unsupported protocol version
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&4u32.to_be_bytes()); // Length
-        buffer.push(0xFF); // Invalid version
+        buffer.push(0xFF); // Unsupported version
         buffer.push(MSG_TYPE_REQUEST);
         buffer.push(Format::JSON_BYTE); // Format
         buffer.extend_from_slice(b"test");
@@ -733,7 +1055,104 @@ mod tests {
         let mut reader = Cursor::new(buffer);
         let result = read_frame(&mut reader, 1024).await;
 
-        assert!(matches!(result, Err(IpcError::ProtocolError(_))));
+        // Should return UnsupportedProtocolVersion error
+        assert!(matches!(
+            result,
+            Err(IpcError::UnsupportedProtocolVersion {
+                received: 0xFF,
+                min_supported: MIN_SUPPORTED_VERSION,
+                max_supported: MAX_SUPPORTED_VERSION,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_protocol_version_from_byte() {
+        assert_eq!(ProtocolVersion::from_byte(0x01), Some(ProtocolVersion::V1));
+        assert_eq!(ProtocolVersion::from_byte(0x02), Some(ProtocolVersion::V2));
+        assert_eq!(ProtocolVersion::from_byte(0x03), None);
+        assert_eq!(ProtocolVersion::from_byte(0xFF), None);
+    }
+
+    #[test]
+    fn test_protocol_version_is_supported() {
+        assert!(ProtocolVersion::is_supported(0x01));
+        assert!(ProtocolVersion::is_supported(0x02));
+        assert!(!ProtocolVersion::is_supported(0x00));
+        assert!(!ProtocolVersion::is_supported(0x03));
+        assert!(!ProtocolVersion::is_supported(0xFF));
+    }
+
+    #[test]
+    fn test_protocol_version_negotiate() {
+        // Client v1, server v2 -> negotiate to v1
+        assert_eq!(ProtocolVersion::negotiate(0x01, 0x02), Some(0x01));
+        // Client v2, server v1 -> negotiate to v1
+        assert_eq!(ProtocolVersion::negotiate(0x02, 0x01), Some(0x01));
+        // Client v2, server v2 -> negotiate to v2
+        assert_eq!(ProtocolVersion::negotiate(0x02, 0x02), Some(0x02));
+        // Client v0 (unsupported) -> None
+        assert_eq!(ProtocolVersion::negotiate(0x00, 0x02), None);
+        // Server v0 (unsupported) -> None
+        assert_eq!(ProtocolVersion::negotiate(0x01, 0x00), None);
+    }
+
+    #[test]
+    fn test_protocol_version_capabilities() {
+        // V1 capabilities
+        let v1 = ProtocolVersion::V1;
+        assert!(!v1.supports_format_byte());
+        assert!(!v1.supports_messagepack());
+        assert!(!v1.supports_streaming());
+        assert!(!v1.supports_push());
+        assert!(!v1.supports_discovery());
+        assert_eq!(v1.header_size, 6);
+
+        // V2 capabilities
+        let v2 = ProtocolVersion::V2;
+        assert!(v2.supports_format_byte());
+        assert!(v2.supports_messagepack());
+        assert!(v2.supports_streaming());
+        assert!(v2.supports_push());
+        assert!(v2.supports_discovery());
+        assert_eq!(v2.header_size, 7);
+    }
+
+    #[test]
+    fn test_protocol_capability_enum() {
+        use super::ProtocolCapability;
+
+        let v2 = ProtocolVersion::V2;
+        assert!(v2.supports(ProtocolCapability::FormatByte));
+        assert!(v2.supports(ProtocolCapability::MessagePack));
+        assert!(v2.supports(ProtocolCapability::Streaming));
+        assert!(v2.supports(ProtocolCapability::Push));
+        assert!(v2.supports(ProtocolCapability::Discovery));
+
+        let v1 = ProtocolVersion::V1;
+        assert!(!v1.supports(ProtocolCapability::FormatByte));
+        assert!(!v1.supports(ProtocolCapability::MessagePack));
+        assert!(!v1.supports(ProtocolCapability::Streaming));
+        assert!(!v1.supports(ProtocolCapability::Push));
+        assert!(!v1.supports(ProtocolCapability::Discovery));
+    }
+
+    #[test]
+    fn test_protocol_version_constants() {
+        assert_eq!(MIN_SUPPORTED_VERSION, 0x01);
+        assert_eq!(MAX_SUPPORTED_VERSION, 0x02);
+        assert_eq!(PROTOCOL_VERSION, 0x02);
+        assert_eq!(HEADER_SIZE_V1, 6);
+        assert_eq!(HEADER_SIZE_V2, 7);
+        assert_eq!(HEADER_SIZE, HEADER_SIZE_V2);
+    }
+
+    #[test]
+    fn test_protocol_version_display() {
+        let v1 = ProtocolVersion::V1;
+        let v2 = ProtocolVersion::V2;
+        assert!(v1.to_string().contains("v1"));
+        assert!(v2.to_string().contains("v2"));
     }
 
     #[tokio::test]
