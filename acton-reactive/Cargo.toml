@@ -91,3 +91,14 @@ required-features = ["ipc"]
 name = "ipc_basic"
 path = "examples/ipc_basic/main.rs"
 required-features = ["ipc"]
+
+# IPC Subscriptions Demo (push notifications via broker subscriptions)
+[[example]]
+name = "ipc_subscriptions_server"
+path = "examples/ipc_subscriptions/server.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "ipc_subscriptions_client"
+path = "examples/ipc_subscriptions/client.rs"
+required-features = ["ipc"]
