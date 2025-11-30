@@ -644,6 +644,12 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
             if let Some(broker) = config.get_broker().cloned() {
                 managed_actor.broker = broker;
             }
+            // Apply custom inbox capacity if specified
+            if let Some(capacity) = config.inbox_capacity() {
+                let (outbox, inbox) = channel(capacity);
+                managed_actor.handle.outbox = outbox;
+                managed_actor.inbox = inbox;
+            }
         }
 
         debug_assert!(

@@ -18,6 +18,10 @@
 pub enum MessageError {
     /// Indicates that sending a message failed.
     SendFailed(String),
+    /// Indicates that the recipient's channel is closed.
+    ChannelClosed,
+    /// Indicates that the send operation was cancelled.
+    Cancelled,
     /// Represents other types of errors.
     OtherError(String),
 }
@@ -33,6 +37,8 @@ impl std::fmt::Display for MessageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SendFailed(msg) => write!(f, "Failed to send message: {msg}"),
+            Self::ChannelClosed => write!(f, "Recipient channel is closed"),
+            Self::Cancelled => write!(f, "Send operation was cancelled"),
             Self::OtherError(msg) => write!(f, "Error: {msg}"),
         }
     }

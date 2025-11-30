@@ -658,6 +658,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
     let (mut reader, writer) = stream.into_split();
     let max_message_size = ctx.config.limits.max_message_size;
     let push_buffer_size = ctx.config.limits.push_buffer_size;
+    let read_timeout = ctx.config.read_timeout();
     let mut rate_limiter = RateLimiter::new(&ctx.config.rate_limit);
 
     // Create push notification channel and register connection for subscriptions
@@ -693,7 +694,17 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
                 break;
             }
 
-            frame_result = read_frame(&mut reader, max_message_size) => {
+            frame_result = tokio::time::timeout(read_timeout, read_frame(&mut reader, max_message_size)) => {
+                // Handle read timeout
+                let frame_result = match frame_result {
+                    Ok(result) => result,
+                    Err(_elapsed) => {
+                        debug!(conn_id, timeout_ms = read_timeout.as_millis(), "Connection read timeout");
+                        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                };
+
                 match frame_result {
                     Ok((msg_type, format, payload)) => {
                         if is_heartbeat(msg_type) {

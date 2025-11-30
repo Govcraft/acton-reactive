@@ -38,6 +38,9 @@ pub struct ActorConfig {
     pub(crate) broker: Option<BrokerRef>,
     /// Optional handle to the actor's parent (supervisor).
     parent: Option<ParentRef>,
+    /// Optional custom inbox capacity for this actor.
+    /// If `None`, uses the global default from configuration.
+    inbox_capacity: Option<usize>,
 }
 
 impl ActorConfig {
@@ -77,14 +80,35 @@ impl ActorConfig {
                 id: child_id,
                 broker,
                 parent: Some(parent_ref),
+                inbox_capacity: None,
             })
         } else {
             Ok(Self {
                 id,
                 broker,
                 parent, // parent is None here
+                inbox_capacity: None,
             })
         }
+    }
+
+    /// Sets a custom inbox capacity for this actor.
+    ///
+    /// This allows overriding the global default inbox capacity on a per-actor basis.
+    /// High-throughput actors may benefit from larger capacities, while low-throughput
+    /// actors can use smaller capacities to conserve memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - The inbox channel capacity for this actor.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` for method chaining.
+    #[must_use]
+    pub const fn with_inbox_capacity(mut self, capacity: usize) -> Self {
+        self.inbox_capacity = Some(capacity);
+        self
     }
 
     /// Creates a new `ActorConfig` for a top-level actor with a root identifier.
@@ -125,5 +149,13 @@ impl ActorConfig {
     #[inline]
     pub(crate) const fn parent(&self) -> Option<&ParentRef> {
         self.parent.as_ref()
+    }
+
+    /// Returns the optional custom inbox capacity for this actor.
+    ///
+    /// If `None`, the actor should use the global default from configuration.
+    #[inline]
+    pub(crate) const fn inbox_capacity(&self) -> Option<usize> {
+        self.inbox_capacity
     }
 }

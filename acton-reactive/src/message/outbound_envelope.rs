@@ -160,33 +160,43 @@ impl OutboundEnvelope {
 
         // Try to use the existing runtime if we're already in a Tokio context.
         // This avoids the overhead of creating a new runtime per call.
-        match Handle::try_current() {
-            Ok(handle) => {
-                // We're inside a Tokio runtime - spawn on the existing runtime
-                trace!(
-                    sender = %envelope.return_address.sender,
-                    recipient = ?envelope.recipient_address.as_ref().map(|r| r.sender.to_string()),
-                    "Replying via existing runtime handle"
-                );
-                handle.spawn(async move {
-                    envelope.send_message_inner(message_arc).await;
-                });
-            }
-            Err(_) => {
-                // We're outside any Tokio context - need to create a runtime.
-                // Use spawn_blocking would panic here since we're not in a runtime.
-                warn!(
-                    sender = %envelope.return_address.sender,
-                    "reply() called outside Tokio context; creating temporary runtime"
-                );
-                std::thread::spawn(move || {
-                    // Create a current-thread runtime for minimal overhead
-                    let rt = Runtime::new().expect("Failed to create Tokio runtime for reply");
-                    rt.block_on(envelope.send_message_inner(message_arc));
-                });
-            }
+        if let Ok(handle) = Handle::try_current() {
+            // We're inside a Tokio runtime - spawn on the existing runtime
+            trace!(
+                sender = %envelope.return_address.sender,
+                recipient = ?envelope.recipient_address.as_ref().map(|r| r.sender.to_string()),
+                "Replying via existing runtime handle"
+            );
+            // Spawn a boxed future to reduce stack usage from large tokio::select! in send_message_inner
+            Self::spawn_reply_task(&handle, envelope, message_arc);
+        } else {
+            // We're outside any Tokio context - need to create a runtime.
+            warn!(
+                sender = %envelope.return_address.sender,
+                "reply() called outside Tokio context; creating temporary runtime"
+            );
+            Self::spawn_reply_thread(envelope, message_arc);
         }
         Ok(())
+    }
+
+    /// Helper to spawn reply task on existing runtime, using boxed future.
+    fn spawn_reply_task(
+        handle: &Handle,
+        envelope: Self,
+        message: Arc<dyn ActonMessage + Send + Sync>,
+    ) {
+        handle.spawn(Box::pin(async move {
+            envelope.send_message_inner(message).await;
+        }));
+    }
+
+    /// Helper to spawn reply on a new thread with temporary runtime.
+    fn spawn_reply_thread(envelope: Self, message: Arc<dyn ActonMessage + Send + Sync>) {
+        std::thread::spawn(move || {
+            let rt = Runtime::new().expect("Failed to create Tokio runtime for reply");
+            rt.block_on(Box::pin(envelope.send_message_inner(message)));
+        });
     }
 
     /// Crate-internal: Asynchronously sends the message payload to the recipient.
@@ -244,6 +254,8 @@ impl OutboundEnvelope {
     /// defaults to `return_address`.
     ///
     /// This is the preferred method for sending messages from within an asynchronous context.
+    /// For fire-and-forget scenarios where errors can be ignored, this method logs errors
+    /// internally. For explicit error handling, use [`try_send`](OutboundEnvelope::try_send).
     ///
     /// # Arguments
     ///
@@ -252,6 +264,73 @@ impl OutboundEnvelope {
     pub async fn send(&self, message: impl ActonMessage + 'static) {
         // Arc the message and call the internal async sender.
         self.send_message_inner(Arc::new(message)).await;
+    }
+
+    /// Sends a message asynchronously with explicit error handling.
+    ///
+    /// This method is similar to [`send`](OutboundEnvelope::send), but returns a `Result`
+    /// indicating whether the message was successfully delivered to the recipient's channel.
+    /// Use this when you need to handle delivery failures explicitly rather than relying
+    /// on internal logging.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: The message payload to send. Must implement [`ActonMessage`] and be `'static`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - The message was successfully queued in the recipient's channel
+    /// * `Err(MessageError)` - The message could not be delivered
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The recipient's channel is closed (`MessageError::ChannelClosed`)
+    /// - The operation was cancelled (`MessageError::Cancelled`)
+    /// - The channel capacity could not be reserved (`MessageError::SendFailed`)
+    #[instrument(skip(self, message), level = "trace", fields(message_type = std::any::type_name_of_val(&message)))]
+    pub async fn try_send(&self, message: impl ActonMessage + 'static) -> Result<(), MessageError> {
+        let message = Arc::new(message);
+
+        // Determine the target address: recipient if Some, otherwise return_address.
+        let target_address = self
+            .recipient_address
+            .as_ref()
+            .unwrap_or(&self.return_address);
+
+        // Check channel state synchronously to avoid capturing in async
+        if target_address.address.is_closed() {
+            trace!(sender = %self.return_address.sender, recipient = %target_address.sender, "Recipient channel is closed");
+            return Err(MessageError::ChannelClosed);
+        }
+
+        // Extract only what's needed for the async block to minimize future size
+        let channel_sender = target_address.address.clone();
+        let cancellation = self.cancellation_token.clone();
+        let return_addr = self.return_address.clone();
+        let target_addr = target_address.clone();
+
+        // Use Box::pin on the select block itself
+        Box::pin(async move {
+            tokio::select! {
+                () = cancellation.cancelled() => {
+                    Err(MessageError::Cancelled)
+                }
+                permit_result = channel_sender.reserve() => {
+                    match permit_result {
+                        Ok(permit) => {
+                            let internal_envelope = Envelope::new(message, return_addr, target_addr);
+                            permit.send(internal_envelope);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            Err(MessageError::SendFailed(e.to_string()))
+                        }
+                    }
+                }
+            }
+        })
+        .await
     }
 
     /// Sends an Arc-wrapped message asynchronously using this envelope.
