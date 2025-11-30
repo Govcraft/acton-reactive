@@ -14,13 +14,16 @@
  * limitations under that License.
  */
 
-//! IPC Multi-Agent Example
+//! IPC Multi-Agent Example with Dashboard UI
 //!
 //! This example demonstrates exposing multiple agents via IPC, each providing
-//! a different service. It showcases:
+//! a different service, with a real-time dashboard that updates in place.
+//!
+//! # Features
 //!
 //! - Multiple agents with different responsibilities
 //! - IPC routing to different services by logical name
+//! - Real-time dashboard with in-place updates
 //! - Listener statistics monitoring
 //! - Graceful shutdown with Ctrl+C handling
 //!
@@ -42,14 +45,25 @@
 //! ```
 
 use std::collections::HashMap;
+use std::io::{stdout, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
 use acton_macro::acton_actor;
 use acton_reactive::ipc::{socket_exists, IpcConfig, IpcListenerStats};
 use acton_reactive::prelude::*;
+use crossterm::{
+    cursor::{Hide, Show},
+    event::{Event, EventStream, KeyCode, KeyModifiers},
+    execute,
+    terminal::{
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
+};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 // ============================================================================
 // Message Definitions
@@ -87,116 +101,359 @@ struct GetConfig {
     key: String,
 }
 
-/// A message to print text to the console.
-#[derive(Clone, Debug)]
-struct Print(String);
+// ============================================================================
+// Dashboard State
+// ============================================================================
 
-/// A message to print a section header.
+/// State for a single service displayed in the dashboard.
+#[derive(Clone, Debug, Default)]
+struct ServiceState {
+    name: String,
+    running: bool,
+    details: String,
+}
+
+/// Activity log entry.
 #[derive(Clone, Debug)]
-struct PrintSection(String);
+struct ActivityEntry {
+    timestamp: String,
+    message: String,
+}
+
+/// Complete dashboard state synchronized via watch channel.
+#[derive(Clone, Debug, Default)]
+struct DashboardState {
+    services: Vec<ServiceState>,
+    connections_active: usize,
+    connections_total: usize,
+    messages_received: usize,
+    messages_routed: usize,
+    errors: usize,
+    activity_log: Vec<ActivityEntry>,
+    socket_path: String,
+}
+
+impl DashboardState {
+    fn new() -> Self {
+        Self {
+            services: vec![
+                ServiceState {
+                    name: "Counter".to_string(),
+                    running: true,
+                    details: "Value: 0, Ops: 0".to_string(),
+                },
+                ServiceState {
+                    name: "Logger".to_string(),
+                    running: true,
+                    details: "Entries: 0".to_string(),
+                },
+                ServiceState {
+                    name: "Config".to_string(),
+                    running: true,
+                    details: "Keys: 0".to_string(),
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn add_activity(&mut self, message: String) {
+        let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.activity_log.push(ActivityEntry { timestamp, message });
+        // Keep only last 10 entries
+        if self.activity_log.len() > 10 {
+            self.activity_log.remove(0);
+        }
+    }
+
+    fn update_counter(&mut self, value: i64, ops: usize) {
+        if let Some(service) = self.services.iter_mut().find(|s| s.name == "Counter") {
+            service.details = format!("Value: {value}, Ops: {ops}");
+        }
+    }
+
+    fn update_logger(&mut self, entries: usize) {
+        if let Some(service) = self.services.iter_mut().find(|s| s.name == "Logger") {
+            service.details = format!("Entries: {entries}");
+        }
+    }
+
+    fn update_config(&mut self, keys: usize) {
+        if let Some(service) = self.services.iter_mut().find(|s| s.name == "Config") {
+            service.details = format!("Keys: {keys}");
+        }
+    }
+}
+
+// ============================================================================
+// Dashboard UI
+// ============================================================================
+
+/// Render helper functions for dashboard sections.
+mod render {
+    use crossterm::{
+        cursor::MoveTo,
+        execute,
+        style::{Color, Print, ResetColor, SetForegroundColor},
+    };
+
+    use super::{ActivityEntry, DashboardState, ServiceState};
+
+    pub fn header(stdout: &mut std::io::Stdout, socket_path: &str) -> std::io::Result<()> {
+        execute!(
+            stdout,
+            MoveTo(0, 0),
+            SetForegroundColor(Color::Cyan),
+            Print("═══════════════════════════════════════════════════════════\r\n"),
+            Print("  IPC Multi-Agent Server Dashboard\r\n"),
+            Print("═══════════════════════════════════════════════════════════\r\n"),
+            ResetColor,
+            SetForegroundColor(Color::DarkGrey),
+            Print(format!("  Socket: {socket_path}\r\n\r\n")),
+            ResetColor
+        )
+    }
+
+    pub fn services(stdout: &mut std::io::Stdout, services: &[ServiceState]) -> std::io::Result<()> {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Yellow),
+            Print("┌─ Services ────────────────────────────────────────────────┐\r\n"),
+            ResetColor
+        )?;
+
+        for service in services {
+            let (status_color, status_char) = if service.running {
+                (Color::Green, "●")
+            } else {
+                (Color::Red, "○")
+            };
+            let content = format!("{status_char} {:<10}{:<46}", service.name, service.details);
+            execute!(
+                stdout,
+                Print("│ "),
+                SetForegroundColor(status_color),
+                Print(&content[..2]),
+                ResetColor,
+                Print(&content[2..]),
+                Print("│\r\n")
+            )?;
+        }
+
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Yellow),
+            Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
+            ResetColor
+        )
+    }
+
+    pub fn statistics(stdout: &mut std::io::Stdout, state: &DashboardState) -> std::io::Result<()> {
+        let row1 = format!(
+            " {:>8} active    {:>8} total",
+            state.connections_active, state.connections_total
+        );
+        let row2 = format!(
+            " {:>8} received  {:>8} routed    {:>8} errors",
+            state.messages_received, state.messages_routed, state.errors
+        );
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Blue),
+            Print("┌─ IPC Statistics ──────────────────────────────────────────┐\r\n"),
+            ResetColor,
+            Print(format!("│{row1:<60}│\r\n")),
+            Print(format!("│{row2:<60}│\r\n")),
+            SetForegroundColor(Color::Blue),
+            Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
+            ResetColor
+        )
+    }
+
+    pub fn activity_log(stdout: &mut std::io::Stdout, log: &[ActivityEntry]) -> std::io::Result<()> {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Magenta),
+            Print("┌─ Activity Log ────────────────────────────────────────────┐\r\n"),
+            ResetColor
+        )?;
+
+        for i in 0..8 {
+            if let Some(entry) = log.get(log.len().saturating_sub(8) + i) {
+                let truncated = if entry.message.len() > 48 {
+                    format!("{}...", &entry.message[..45])
+                } else {
+                    entry.message.clone()
+                };
+                execute!(
+                    stdout,
+                    Print("│ "),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!("[{}] ", entry.timestamp)),
+                    ResetColor,
+                    Print(format!("{truncated:<48}")),
+                    Print("│\r\n")
+                )?;
+            } else {
+                execute!(stdout, Print("│                                                            │\r\n"))?;
+            }
+        }
+
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Magenta),
+            Print("└────────────────────────────────────────────────────────────┘\r\n\r\n"),
+            ResetColor
+        )
+    }
+
+    pub fn footer(stdout: &mut std::io::Stdout) -> std::io::Result<()> {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print("  Press Ctrl+C to shutdown gracefully\r\n"),
+            ResetColor
+        )
+    }
+}
+
+/// Dashboard manages the terminal UI with alternate screen buffer.
+struct Dashboard {
+    state_rx: watch::Receiver<DashboardState>,
+}
+
+impl Dashboard {
+    const fn new(state_rx: watch::Receiver<DashboardState>) -> Self {
+        Self { state_rx }
+    }
+
+    /// Enter alternate screen and enable raw mode.
+    fn enter() -> std::io::Result<()> {
+        enable_raw_mode()?;
+        execute!(stdout(), EnterAlternateScreen, Hide, Clear(ClearType::All))?;
+        Ok(())
+    }
+
+    /// Render the dashboard to the terminal.
+    fn render(state: &DashboardState) -> std::io::Result<()> {
+        let mut stdout = stdout();
+        render::header(&mut stdout, &state.socket_path)?;
+        render::services(&mut stdout, &state.services)?;
+        render::statistics(&mut stdout, state)?;
+        render::activity_log(&mut stdout, &state.activity_log)?;
+        render::footer(&mut stdout)?;
+        stdout.flush()
+    }
+
+    /// Run the render loop until shutdown.
+    async fn run(&self, mut shutdown_rx: watch::Receiver<bool>) {
+        let mut event_stream = EventStream::new();
+        let mut render_interval = tokio::time::interval(Duration::from_millis(100));
+
+        loop {
+            tokio::select! {
+                // Check for shutdown signal
+                result = shutdown_rx.changed() => {
+                    if result.is_ok() && *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+
+                // Rate-limited render
+                _ = render_interval.tick() => {
+                    let state = self.state_rx.borrow().clone();
+                    if let Err(e) = Self::render(&state) {
+                        eprintln!("Render error: {e}");
+                    }
+                }
+
+                // Handle keyboard events
+                event = event_stream.next() => {
+                    if let Some(Ok(Event::Key(key_event))) = event {
+                        if key_event.code == KeyCode::Char('c')
+                            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 // ============================================================================
 // Agent States
 // ============================================================================
-
-/// Console printer agent state for coordinated output.
-#[acton_actor]
-struct PrinterState;
 
 /// Counter service agent state.
 #[acton_actor]
 struct CounterState {
     value: i64,
     operations: usize,
+    state_tx: Option<watch::Sender<DashboardState>>,
 }
 
 /// Logger service agent state.
 #[acton_actor]
 struct LoggerState {
     entries: Vec<(String, String)>,
+    state_tx: Option<watch::Sender<DashboardState>>,
 }
 
 /// Config service agent state.
 #[acton_actor]
 struct ConfigState {
     values: HashMap<String, String>,
+    state_tx: Option<watch::Sender<DashboardState>>,
 }
 
 // ============================================================================
 // Agent Creation Functions
 // ============================================================================
 
-/// Creates the printer agent for coordinated console output.
-async fn create_printer_agent(runtime: &mut AgentRuntime) -> AgentHandle {
-    let mut printer = runtime.new_agent::<PrinterState>();
-    printer
-        .act_on::<Print>(|_agent, envelope| {
-            println!("{}", envelope.message().0);
-            AgentReply::immediate()
-        })
-        .act_on::<PrintSection>(|_agent, envelope| {
-            println!("\n=== {} ===\n", envelope.message().0);
-            AgentReply::immediate()
-        });
-    printer.start().await
-}
-
 /// Creates the counter service agent.
 async fn create_counter_agent(
     runtime: &mut AgentRuntime,
-    printer: &AgentHandle,
+    state_tx: watch::Sender<DashboardState>,
 ) -> AgentHandle {
     let mut counter = runtime.new_agent_with_name::<CounterState>("counter".to_string());
-    let printer_clone = printer.clone();
+
+    // Store the sender in the agent state
+    counter.model.state_tx = Some(state_tx.clone());
 
     counter
         .mutate_on::<Increment>(move |agent, envelope| {
             let amount = envelope.message().amount;
             agent.model.value += amount;
             agent.model.operations += 1;
-            let p = printer_clone.clone();
             let value = agent.model.value;
             let ops = agent.model.operations;
 
-            Box::pin(async move {
-                p.send(Print(format!(
-                    "[Counter] Incremented by {amount} -> value={value}, ops={ops}"
-                )))
-                .await;
-            })
-        })
-        .mutate_on::<Decrement>({
-            let p = printer.clone();
-            move |agent, envelope| {
-                let amount = envelope.message().amount;
-                agent.model.value -= amount;
-                agent.model.operations += 1;
-                let p = p.clone();
-                let value = agent.model.value;
-                let ops = agent.model.operations;
-
-                Box::pin(async move {
-                    p.send(Print(format!(
-                        "[Counter] Decremented by {amount} -> value={value}, ops={ops}"
-                    )))
-                    .await;
-                })
+            if let Some(tx) = &agent.model.state_tx {
+                tx.send_modify(|state| {
+                    state.update_counter(value, ops);
+                    state.add_activity(format!("Counter +{amount} → {value}"));
+                });
             }
-        })
-        .after_stop({
-            let p = printer.clone();
-            move |agent| {
-                let p = p.clone();
-                let value = agent.model.value;
-                let ops = agent.model.operations;
 
-                Box::pin(async move {
-                    p.send(Print(format!(
-                        "[Counter] Shutdown - final value={value}, total ops={ops}"
-                    )))
-                    .await;
-                })
+            Box::pin(async {})
+        })
+        .mutate_on::<Decrement>(move |agent, envelope| {
+            let amount = envelope.message().amount;
+            agent.model.value -= amount;
+            agent.model.operations += 1;
+            let value = agent.model.value;
+            let ops = agent.model.operations;
+
+            if let Some(tx) = &agent.model.state_tx {
+                tx.send_modify(|state| {
+                    state.update_counter(value, ops);
+                    state.add_activity(format!("Counter -{amount} → {value}"));
+                });
             }
+
+            Box::pin(async {})
         });
 
     counter.start().await
@@ -205,43 +462,27 @@ async fn create_counter_agent(
 /// Creates the logger service agent.
 async fn create_logger_agent(
     runtime: &mut AgentRuntime,
-    printer: &AgentHandle,
+    state_tx: watch::Sender<DashboardState>,
 ) -> AgentHandle {
     let mut logger = runtime.new_agent_with_name::<LoggerState>("logger".to_string());
 
-    logger
-        .mutate_on::<LogMessage>({
-            let p = printer.clone();
-            move |agent, envelope| {
-                let level = envelope.message().level.clone();
-                let message = envelope.message().message.clone();
-                agent.model.entries.push((level.clone(), message.clone()));
-                let p = p.clone();
-                let count = agent.model.entries.len();
+    logger.model.state_tx = Some(state_tx.clone());
 
-                Box::pin(async move {
-                    p.send(Print(format!(
-                        "[Logger] [{level}] {message} (entry #{count})"
-                    )))
-                    .await;
-                })
-            }
-        })
-        .after_stop({
-            let p = printer.clone();
-            move |agent| {
-                let p = p.clone();
-                let entries = agent.model.entries.clone();
+    logger.mutate_on::<LogMessage>(move |agent, envelope| {
+        let level = envelope.message().level.clone();
+        let message = envelope.message().message.clone();
+        agent.model.entries.push((level.clone(), message.clone()));
+        let count = agent.model.entries.len();
 
-                Box::pin(async move {
-                    p.send(Print(format!(
-                        "[Logger] Shutdown - {} total entries logged",
-                        entries.len()
-                    )))
-                    .await;
-                })
-            }
-        });
+        if let Some(tx) = &agent.model.state_tx {
+            tx.send_modify(|state| {
+                state.update_logger(count);
+                state.add_activity(format!("[{level}] {message}"));
+            });
+        }
+
+        Box::pin(async {})
+    });
 
     logger.start().await
 }
@@ -249,90 +490,71 @@ async fn create_logger_agent(
 /// Creates the config service agent.
 async fn create_config_agent(
     runtime: &mut AgentRuntime,
-    printer: &AgentHandle,
+    state_tx: watch::Sender<DashboardState>,
 ) -> AgentHandle {
     let mut config = runtime.new_agent_with_name::<ConfigState>("config".to_string());
 
+    config.model.state_tx = Some(state_tx.clone());
+
     config
-        .mutate_on::<SetConfig>({
-            let p = printer.clone();
-            move |agent, envelope| {
-                let key = envelope.message().key.clone();
-                let value = envelope.message().value.clone();
-                agent.model.values.insert(key.clone(), value.clone());
-                let p = p.clone();
-                let count = agent.model.values.len();
+        .mutate_on::<SetConfig>(move |agent, envelope| {
+            let key = envelope.message().key.clone();
+            let value = envelope.message().value.clone();
+            agent.model.values.insert(key.clone(), value.clone());
+            let count = agent.model.values.len();
 
-                Box::pin(async move {
-                    p.send(Print(format!(
-                        "[Config] Set {key}={value} ({count} total keys)"
-                    )))
-                    .await;
-                })
+            if let Some(tx) = &agent.model.state_tx {
+                tx.send_modify(|state| {
+                    state.update_config(count);
+                    state.add_activity(format!("Config: {key}={value}"));
+                });
             }
+
+            Box::pin(async {})
         })
-        .mutate_on::<GetConfig>({
-            let p = printer.clone();
-            move |agent, envelope| {
-                let key = envelope.message().key.clone();
-                let value = agent.model.values.get(&key).cloned();
-                let p = p.clone();
+        .mutate_on::<GetConfig>(move |agent, envelope| {
+            let key = envelope.message().key.clone();
+            let value = agent.model.values.get(&key).cloned();
 
-                Box::pin(async move {
-                    match value {
-                        Some(v) => {
-                            p.send(Print(format!("[Config] Get {key}={v}"))).await;
-                        }
-                        None => {
-                            p.send(Print(format!("[Config] Get {key}=<not found>"))).await;
-                        }
-                    }
-                })
+            if let Some(tx) = &agent.model.state_tx {
+                let msg = value.map_or_else(
+                    || format!("Config get: {key} (not found)"),
+                    |v| format!("Config get: {key}={v}"),
+                );
+                tx.send_modify(|state| {
+                    state.add_activity(msg);
+                });
             }
-        })
-        .after_stop({
-            let p = printer.clone();
-            move |agent| {
-                let p = p.clone();
-                let values = agent.model.values.clone();
 
-                Box::pin(async move {
-                    p.send(Print(format!(
-                        "[Config] Shutdown - {} keys stored",
-                        values.len()
-                    )))
-                    .await;
-                    for (k, v) in &values {
-                        p.send(Print(format!("  {k}={v}"))).await;
-                    }
-                })
-            }
+            Box::pin(async {})
         });
 
     config.start().await
 }
 
-/// Periodically displays listener statistics.
-async fn display_stats_loop(
+/// Periodically updates IPC statistics in the dashboard state.
+async fn stats_update_loop(
     stats: Arc<IpcListenerStats>,
-    printer: AgentHandle,
-    shutdown: Arc<Notify>,
+    state_tx: watch::Sender<DashboardState>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
-    interval.tick().await; // Skip first immediate tick
+    let mut interval = tokio::time::interval(Duration::from_millis(250));
 
     loop {
         tokio::select! {
-            () = shutdown.notified() => break,
+            result = shutdown_rx.changed() => {
+                if result.is_ok() && *shutdown_rx.borrow() {
+                    break;
+                }
+            }
             _ = interval.tick() => {
-                printer.send(Print(format!(
-                    "[Stats] Connections: {} accepted, {} active | Messages: {} received, {} routed | Errors: {}",
-                    stats.connections_accepted(),
-                    stats.connections_active(),
-                    stats.messages_received(),
-                    stats.messages_routed(),
-                    stats.errors()
-                ))).await;
+                state_tx.send_modify(|state| {
+                    state.connections_active = stats.connections_active();
+                    state.connections_total = stats.connections_accepted();
+                    state.messages_received = stats.messages_received();
+                    state.messages_routed = stats.messages_routed();
+                    state.errors = stats.errors();
+                });
             }
         }
     }
@@ -344,11 +566,23 @@ async fn display_stats_loop(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut runtime = ActonApp::launch();
+    // Create dashboard state channel
+    let (state_tx, state_rx) = watch::channel(DashboardState::new());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Create printer for coordinated output
-    let printer = create_printer_agent(&mut runtime).await;
-    printer.send(PrintSection("IPC Multi-Agent Server".to_string())).await;
+    // Create dashboard
+    let dashboard = Dashboard::new(state_rx);
+
+    // Enter alternate screen
+    Dashboard::enter()?;
+
+    // Ensure we cleanup on panic or early exit
+    let cleanup_guard = scopeguard::guard((), |()| {
+        let _ = execute!(stdout(), Show, LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+    });
+
+    let mut runtime = ActonApp::launch();
 
     // Register all IPC message types
     let registry = runtime.ipc_registry();
@@ -358,92 +592,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     registry.register::<SetConfig>("SetConfig");
     registry.register::<GetConfig>("GetConfig");
 
-    printer
-        .send(Print(format!("Registered {} IPC message types", registry.len())))
-        .await;
+    state_tx.send_modify(|state| {
+        state.add_activity(format!("Registered {} IPC message types", registry.len()));
+    });
 
     // Create service agents
-    let counter = create_counter_agent(&mut runtime, &printer).await;
-    let logger = create_logger_agent(&mut runtime, &printer).await;
-    let config = create_config_agent(&mut runtime, &printer).await;
+    let counter = create_counter_agent(&mut runtime, state_tx.clone()).await;
+    let logger = create_logger_agent(&mut runtime, state_tx.clone()).await;
+    let config = create_config_agent(&mut runtime, state_tx.clone()).await;
 
     // Expose agents for IPC
     runtime.ipc_expose("counter", counter.clone());
     runtime.ipc_expose("logger", logger.clone());
     runtime.ipc_expose("config", config.clone());
 
-    printer
-        .send(Print(format!(
-            "Exposed {} agents for IPC: counter, logger, config",
-            runtime.ipc_agent_count()
-        )))
-        .await;
+    state_tx.send_modify(|state| {
+        state.add_activity("Exposed agents: counter, logger, config".to_string());
+    });
 
     // Start the IPC listener
     let ipc_config = IpcConfig::load();
     let socket_path = ipc_config.socket_path();
-    printer
-        .send(Print(format!("Socket path: {}", socket_path.display())))
-        .await;
+
+    state_tx.send_modify(|state| {
+        state.socket_path = socket_path.display().to_string();
+    });
 
     let listener_handle = runtime.start_ipc_listener().await?;
-    printer.send(Print("IPC listener started!".to_string())).await;
+
+    state_tx.send_modify(|state| {
+        state.add_activity("IPC listener started".to_string());
+    });
 
     // Verify socket is ready
     tokio::time::sleep(Duration::from_millis(50)).await;
     if socket_exists(&socket_path) {
-        printer
-            .send(Print("Socket is ready for connections".to_string()))
-            .await;
+        state_tx.send_modify(|state| {
+            state.add_activity("Socket ready for connections".to_string());
+        });
     }
 
-    printer
-        .send(Print("\nPress Ctrl+C to shutdown...".to_string()))
-        .await;
-
-    // Set up shutdown notification
-    let shutdown = Arc::new(Notify::new());
-    let shutdown_clone = shutdown.clone();
-
-    // Start stats display task
+    // Start stats update loop
     let stats_clone = listener_handle.stats.clone();
-    let stats_printer = printer.clone();
-    let stats_shutdown = shutdown.clone();
+    let stats_shutdown_rx = shutdown_rx.clone();
+    let stats_state_tx = state_tx.clone();
     tokio::spawn(async move {
-        display_stats_loop(stats_clone, stats_printer, stats_shutdown).await;
+        stats_update_loop(stats_clone, stats_state_tx, stats_shutdown_rx).await;
     });
 
-    // Wait for Ctrl+C
+    // Run dashboard until Ctrl+C
+    let dashboard_shutdown_rx = shutdown_rx.clone();
+    let dashboard_task = tokio::spawn(async move {
+        dashboard.run(dashboard_shutdown_rx).await;
+    });
+
+    // Wait for Ctrl+C or dashboard exit
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            printer.send(PrintSection("Shutdown Initiated".to_string())).await;
-        }
+        _ = tokio::signal::ctrl_c() => {}
+        _ = dashboard_task => {}
     }
 
-    // Signal shutdown to stats loop
-    shutdown_clone.notify_waiters();
-
-    // Display final stats
-    let stats = &listener_handle.stats;
-    printer
-        .send(Print(format!(
-            "\nFinal Statistics:\n  Connections accepted: {}\n  Messages received: {}\n  Messages routed: {}\n  Errors: {}",
-            stats.connections_accepted(),
-            stats.messages_received(),
-            stats.messages_routed(),
-            stats.errors()
-        )))
-        .await;
+    // Signal shutdown
+    let _ = shutdown_tx.send(true);
 
     // Stop the listener
     listener_handle.stop();
-    printer.send(Print("IPC listener stopped".to_string())).await;
 
     // Allow time for async cleanup
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Shutdown the runtime
     runtime.shutdown_all().await?;
+
+    // Leave alternate screen (cleanup guard handles this, but be explicit)
+    drop(cleanup_guard);
+
     println!("\n=== Server Shutdown Complete ===");
 
     Ok(())
