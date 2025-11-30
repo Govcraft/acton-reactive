@@ -6,13 +6,13 @@ nextjs:
     description: Learn from working code. Each example demonstrates specific patterns and concepts.
 ---
 
-Learn from working code. Each example demonstrates specific patterns and concepts you can apply in your own applications.
+Learn from working code. Each example demonstrates specific patterns and concepts.
 
 {% quick-links %}
 
-{% quick-link title="Basic Actor" icon="installation" href="#basic-actor" description="State, messages, handlers, and replies" /%}
+{% quick-link title="Basic Actor" icon="installation" href="#basic-actor" description="State, messages, handlers, replies" /%}
 
-{% quick-link title="Lifecycle Hooks" icon="presets" href="#lifecycle-hooks" description="before_start, after_stop, and timing" /%}
+{% quick-link title="Lifecycle Hooks" icon="presets" href="#lifecycle-hooks" description="Startup and shutdown timing" /%}
 
 {% quick-link title="Broadcasting" icon="plugins" href="#broadcast-messaging" description="Pub/sub with the broker" /%}
 
@@ -29,20 +29,17 @@ Learn from working code. Each example demonstrates specific patterns and concept
 Demonstrates fundamental actor concepts: state management, message handling, and request-reply patterns.
 
 ```rust
-// Define actor state
 #[acton_actor]
 struct BasicActorState {
     some_state: usize,
 }
 
-// Define messages
 #[acton_message]
 struct PingMsg;
 
 #[acton_message]
 struct PongMsg;
 
-// Configure handlers
 actor_builder
     .mutate_on::<PingMsg>(|actor, ctx| {
         actor.model.some_state += 1;
@@ -61,17 +58,9 @@ actor_builder
     });
 ```
 
-**Run it:**
 ```bash
 cargo run --example basic
 ```
-
-**Concepts covered:**
-- Actor state with `#[acton_actor]`
-- Messages with `#[acton_message]`
-- Handler registration with `mutate_on`
-- Reply envelopes for request-reply
-- State assertions in `after_stop`
 
 ---
 
@@ -82,17 +71,13 @@ cargo run --example basic
 Shows all four lifecycle hooks and their execution order.
 
 ```rust
-tracker_actor
+actor
     .before_start(|_| {
-        println!("Preparing to track items...");
+        println!("Preparing...");
         Reply::ready()
     })
     .after_start(|_| {
-        println!("Now tracking items!");
-        Reply::ready()
-    })
-    .mutate_on::<AddItem>(|actor, ctx| {
-        actor.model.items.push(ctx.message().0.clone());
+        println!("Ready!");
         Reply::ready()
     })
     .before_stop(|_| {
@@ -100,7 +85,7 @@ tracker_actor
         Reply::ready()
     })
     .after_stop(|actor| {
-        println!("Final items: {:?}", actor.model.items);
+        println!("Final state: {:?}", actor.model);
         Reply::ready()
     });
 ```
@@ -110,7 +95,6 @@ tracker_actor
 before_start → message loop → after_start → [processing] → before_stop → after_stop
 ```
 
-**Run it:**
 ```bash
 cargo run --example lifecycles
 ```
@@ -136,7 +120,6 @@ Demonstrates pub/sub messaging using the broker.
 ```
 
 ```rust
-// Get the broker
 let broker = runtime.broker();
 
 // Subscribe before starting
@@ -144,17 +127,10 @@ data_collector.handle().subscribe::<NewData>().await;
 aggregator.handle().subscribe::<NewData>().await;
 printer.handle().subscribe::<StatusUpdate>().await;
 
-// Start actors
-let _dc = data_collector.start().await;
-let _agg = aggregator.start().await;
-let _printer = printer.start().await;
-
 // Broadcast - all subscribed actors receive
 broker.broadcast(NewData(5)).await;
-broker.broadcast(NewData(10)).await;
 ```
 
-**Run it:**
 ```bash
 cargo run --example broadcast
 ```
@@ -165,19 +141,8 @@ cargo run --example broadcast
 
 **Location:** `examples/configuration/main.rs`
 
-Shows how to load and use configuration files.
+Shows how to load and use configuration files from XDG locations.
 
-```rust
-// Acton automatically loads from XDG locations:
-// Linux: ~/.config/acton/config.toml
-// macOS: ~/Library/Application Support/acton/config.toml
-// Windows: %APPDATA%\acton\config.toml
-
-let runtime = ActonApp::launch();
-// Config is automatically loaded and available
-```
-
-**Run it:**
 ```bash
 cargo run --example configuration
 ```
@@ -204,7 +169,6 @@ A complete multi-actor application showing real-world patterns.
 - Complex state management
 - Request-reply across actors
 
-**Run it:**
 ```bash
 cargo run --example fruit_market
 ```
@@ -213,156 +177,59 @@ cargo run --example fruit_market
 
 ## IPC Examples
 
-These examples require the `ipc` feature and demonstrate inter-process communication.
+These examples require the `ipc` feature. See [IPC Setup](/docs/ipc-setup) for configuration details.
 
 ### IPC Basic
 
-**Location:** `examples/ipc_basic/main.rs`
+Foundation example for IPC setup and type registration.
 
-Foundation example for IPC setup.
-
-```rust
-// 1. Get IPC registry
-let registry = runtime.ipc_registry();
-
-// 2. Register message types
-registry.register::<PriceUpdate>("PriceUpdate");
-registry.register::<GetPrice>("GetPrice");
-
-// 3. Expose actor via IPC
-runtime.ipc_expose("prices", price_handle);
-
-// 4. Start listener
-let listener = runtime.start_ipc_listener().await?;
-```
-
-**Run it:**
 ```bash
-cargo run --example ipc_basic
+cargo run --example ipc_basic --features ipc
 ```
-
----
 
 ### IPC Bidirectional
 
-**Location:** `examples/ipc_bidirectional_demo/`
+Request-response patterns over IPC with multiple services.
 
-Request-response patterns over IPC.
-
-```text
-┌──────────────┐     Request      ┌──────────────┐
-│    Client    │ ───────────────→ │ IPC Listener │
-│              │                  └──────┬───────┘
-│              │                         │
-│              │     Response            ▼
-│              │ ←────────────── │  Calculator  │
-└──────────────┘                 └──────────────┘
-```
-
-**Run it:**
 ```bash
 # Terminal 1
-cargo run --example ipc_bidirectional_demo --bin server
+cargo run --example ipc_bidirectional_demo --bin server --features ipc
 
 # Terminal 2
-cargo run --example ipc_bidirectional_demo --bin client
+cargo run --example ipc_bidirectional_demo --bin client --features ipc
 ```
-
----
 
 ### IPC Streaming
 
-**Location:** `examples/ipc_streaming/`
+Multi-frame streaming responses (countdowns, pagination).
 
-Multi-frame streaming responses.
-
-```rust
-// Handler sends multiple responses
-actor.mutate_on::<CountdownRequest>(|_actor, ctx| {
-    let start = ctx.message().from;
-    let reply = ctx.reply_envelope();
-
-    Reply::pending(async move {
-        for i in (1..=start).rev() {
-            reply.send(CountdownTick { value: i }).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-});
-```
-
-**Run it:**
 ```bash
 # Terminal 1
-cargo run --example ipc_streaming --bin server
+cargo run --example ipc_streaming --bin server --features ipc
 
 # Terminal 2
-cargo run --example ipc_streaming --bin client
+cargo run --example ipc_streaming --bin client --features ipc
 ```
-
----
 
 ### IPC Subscriptions
 
-**Location:** `examples/ipc_subscriptions/`
-
 Push notifications via broker subscriptions.
 
-```text
-                              ┌──────────────┐
-                              │  Price Feed  │
-                              └──────┬───────┘
-                                     │ broadcast
-                                     ▼
-┌──────────────┐              ┌──────────────┐
-│  Client A    │←─────────────│  ActorBroker │
-│ (subscribed) │  push        └──────┬───────┘
-└──────────────┘                     │
-                                     │
-┌──────────────┐                     │
-│  Client B    │←────────────────────┘
-│ (subscribed) │  push
-└──────────────┘
-```
-
-**Run it:**
 ```bash
 # Terminal 1
-cargo run --example ipc_subscriptions --bin server
+cargo run --example ipc_subscriptions --bin server --features ipc
 
 # Terminal 2
-cargo run --example ipc_subscriptions --bin client
+cargo run --example ipc_subscriptions --bin client --features ipc
 ```
-
----
 
 ### IPC Client Libraries
 
-**Location:** `examples/ipc_client_libraries/`
-
 Polyglot clients in Python and Node.js.
 
-**Python client:**
-```python
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect('/tmp/acton.sock')
-
-send_request(sock, 'calculator', 'AddRequest', {'a': 5, 'b': 3})
-response = read_response(sock)
-print(f"Result: {response['payload']['result']}")  # 8
-```
-
-**Node.js client:**
-```javascript
-const client = net.createConnection('/tmp/acton.sock');
-sendRequest('calculator', 'AddRequest', { a: 5, b: 3 });
-// Response: { result: 8 }
-```
-
-**Run it:**
 ```bash
 # Terminal 1
-cargo run --example ipc_client_libraries
+cargo run --example ipc_client_libraries --features ipc
 
 # Terminal 2
 cd examples/ipc_client_libraries/python && python client.py
@@ -377,25 +244,21 @@ cd examples/ipc_client_libraries/node && node client.js
 | Example | Pattern | Key Concepts |
 |---------|---------|--------------|
 | basic | Direct messaging | State, replies, assertions |
-| lifecycles | Lifecycle management | Hooks, timing |
+| lifecycles | Lifecycle hooks | Hook timing |
 | broadcast | Pub/Sub | Broker, subscriptions |
 | configuration | Config loading | XDG paths, TOML |
-| fruit_market | Multi-actor system | Coordination, real-world patterns |
-| ipc_basic | IPC setup | Type registry, exposure |
-| ipc_bidirectional | Request-Response over IPC | Multiple services |
-| ipc_streaming | Streaming responses | Multi-frame, pagination |
-| ipc_subscriptions | Push notifications | Broker over IPC |
-| ipc_client_libraries | Polyglot clients | Python, Node.js |
+| fruit_market | Multi-actor | Coordination, real-world |
+| ipc_* | IPC communication | Type registry, wire protocol |
 
 ---
 
-## Running All Examples
+## Running Examples
 
 ```bash
 # List all examples
 cargo run --example
 
-# Run a specific example
+# Run core examples
 cargo run --example basic
 cargo run --example lifecycles
 cargo run --example broadcast

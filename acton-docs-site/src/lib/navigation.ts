@@ -5,7 +5,6 @@ export const navigation = [
       { title: 'Introduction', href: '/' },
       { title: 'Installation', href: '/docs/installation' },
       { title: 'Your first actor', href: '/docs/your-first-actor' },
-      { title: 'Project structure', href: '/docs/project-structure' },
     ],
   },
   {
@@ -30,14 +29,28 @@ export const navigation = [
     links: [
       { title: 'Supervision & children', href: '/docs/supervision' },
       { title: 'Pub/Sub broadcasting', href: '/docs/pub-sub' },
-      { title: 'IPC communication', href: '/docs/ipc' },
+    ],
+  },
+  {
+    title: 'IPC Communication',
+    links: [
+      { title: 'IPC setup', href: '/docs/ipc-setup' },
+      { title: 'IPC protocol', href: '/docs/ipc-protocol' },
+      { title: 'IPC patterns', href: '/docs/ipc-patterns' },
+    ],
+  },
+  {
+    title: 'Testing',
+    links: [
+      { title: 'Testing basics', href: '/docs/testing-basics' },
+      { title: 'Testing patterns', href: '/docs/testing-patterns' },
+      { title: 'Testing integration', href: '/docs/testing-integration' },
     ],
   },
   {
     title: 'Guides',
     links: [
       { title: 'Configuration', href: '/docs/configuration' },
-      { title: 'Testing', href: '/docs/testing' },
       { title: 'Examples', href: '/docs/examples' },
     ],
   },
@@ -45,8 +58,7 @@ export const navigation = [
     title: 'Reference',
     links: [
       { title: 'API reference', href: '/docs/api-reference' },
-      { title: 'Troubleshooting', href: '/docs/troubleshooting' },
-      { title: 'FAQ', href: '/docs/faq' },
+      { title: 'FAQ & troubleshooting', href: '/docs/faq' },
     ],
   },
 ]

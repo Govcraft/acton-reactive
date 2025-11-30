@@ -8,6 +8,24 @@ mermaid.initialize({
   theme: 'neutral',
   securityLevel: 'strict',
   fontFamily: 'inherit',
+  sequence: {
+    diagramMarginX: 30,
+    diagramMarginY: 20,
+    actorMargin: 60,
+    width: 150,
+    height: 50,
+    boxMargin: 10,
+    boxTextMargin: 5,
+    noteMargin: 10,
+    messageMargin: 35,
+    mirrorActors: true,
+    useMaxWidth: true,
+  },
+  flowchart: {
+    useMaxWidth: true,
+    htmlLabels: true,
+    padding: 15,
+  },
 })
 
 export function Mermaid({ chart }: { chart: string }) {
@@ -64,7 +82,7 @@ export function Mermaid({ chart }: { chart: string }) {
   return (
     <div
       ref={containerRef}
-      className="my-6 flex justify-center overflow-auto rounded-lg bg-slate-50 p-4 dark:bg-slate-800/50"
+      className="my-6 w-full overflow-x-auto rounded-lg bg-slate-50 p-4 dark:bg-slate-800/50 [&_svg]:mx-auto [&_svg]:block [&_svg]:max-w-full"
       aria-label="Mermaid diagram"
     />
   )
