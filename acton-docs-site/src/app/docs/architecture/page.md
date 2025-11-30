@@ -14,31 +14,31 @@ This document provides comprehensive architectural documentation for the `acton-
 
 ```mermaid
 graph TB
-    subgraph "Application Layer"
-        App[User Application]
+    subgraph AppLayer["Application Layer"]
+        App["User Application"]
     end
 
-    subgraph "acton-reactive Core"
-        ActonApp[ActonApp]
-        Runtime[AgentRuntime]
-        Broker[AgentBroker]
+    subgraph Core["acton-reactive Core"]
+        ActonApp["ActonApp"]
+        Runtime["AgentRuntime"]
+        Broker["AgentBroker"]
     end
 
-    subgraph "Agent System"
-        Agent1[ManagedAgent 1]
-        Agent2[ManagedAgent 2]
-        Agent3[ManagedAgent 3]
+    subgraph AgentSys["Agent System"]
+        Agent1["ManagedAgent 1"]
+        Agent2["ManagedAgent 2"]
+        Agent3["ManagedAgent 3"]
     end
 
-    subgraph "Messaging Layer"
-        Handlers[Message Handlers]
-        Envelopes[Envelopes]
-        Channels[MPSC Channels]
+    subgraph MsgLayer["Messaging Layer"]
+        Handlers["Message Handlers"]
+        Envelopes["Envelopes"]
+        Channels["MPSC Channels"]
     end
 
-    subgraph "External"
-        IPC[IPC Listener]
-        ExtProc[External Processes]
+    subgraph External
+        IPC["IPC Listener"]
+        ExtProc["External Processes"]
     end
 
     App --> ActonApp
@@ -79,39 +79,39 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph "lib.rs Prelude"
-        Prelude[Public API Surface]
+    subgraph LibPrelude["lib.rs Prelude"]
+        Prelude["Public API Surface"]
     end
 
-    subgraph "actor/"
-        ManagedAgent[managed_agent.rs]
-        AgentConfig[agent_config.rs]
-        Idle[idle.rs]
-        Started[started.rs]
+    subgraph ActorMod["actor/"]
+        ManagedAgent["managed_agent.rs"]
+        AgentConfig["agent_config.rs"]
+        Idle["idle.rs"]
+        Started["started.rs"]
     end
 
-    subgraph "common/"
-        Acton[acton.rs]
-        AgentRuntime2[agent_runtime.rs]
-        AgentHandle2[agent_handle.rs]
-        AgentBroker2[agent_broker.rs]
-        Config[config.rs]
-        IPCMod[ipc/]
+    subgraph CommonMod["common/"]
+        Acton["acton.rs"]
+        AgentRuntime2["agent_runtime.rs"]
+        AgentHandle2["agent_handle.rs"]
+        AgentBroker2["agent_broker.rs"]
+        Config["config.rs"]
+        IPCMod["ipc/"]
     end
 
-    subgraph "message/"
-        Envelope[envelope.rs]
-        OutboundEnvelope[outbound_envelope.rs]
-        MessageAddress[message_address.rs]
-        MessageContext[message_context.rs]
-        BrokerRequest[broker_request.rs]
+    subgraph MessageMod["message/"]
+        Envelope["envelope.rs"]
+        OutboundEnvelope["outbound_envelope.rs"]
+        MessageAddress["message_address.rs"]
+        MessageContext["message_context.rs"]
+        BrokerRequest["broker_request.rs"]
     end
 
-    subgraph "traits/"
-        ActonMessage[acton_message.rs]
-        AgentHandleInterface[agent_handle_interface.rs]
-        BrokerTrait[broker.rs]
-        Subscriber[subscriber.rs]
+    subgraph TraitsMod["traits/"]
+        ActonMessage["acton_message.rs"]
+        AgentHandleInterface["agent_handle_interface.rs"]
+        BrokerTrait["broker.rs"]
+        Subscriber["subscriber.rs"]
     end
 
     Prelude --> ManagedAgent
@@ -277,22 +277,22 @@ sequenceDiagram
 
 ```mermaid
 graph TB
-    subgraph "Handler Registration"
-        MutateOn[mutate_on M]
-        ActOn[act_on M]
-        MutateOnFallible[mutate_on_fallible M]
-        ActOnFallible[act_on_fallible M]
+    subgraph HandlerReg["Handler Registration"]
+        MutateOn["mutate_on"]
+        ActOn["act_on"]
+        MutateOnFallible["mutate_on_fallible"]
+        ActOnFallible["act_on_fallible"]
     end
 
-    subgraph "Handler Storage"
-        MutableHandlers[message_handlers: DashMap]
-        ReadOnlyHandlers[read_only_handlers: DashMap]
-        ErrorHandlers[error_handlers: DashMap]
+    subgraph HandlerStore["Handler Storage"]
+        MutableHandlers["message_handlers"]
+        ReadOnlyHandlers["read_only_handlers"]
+        ErrorHandlers["error_handlers"]
     end
 
-    subgraph "Execution Model"
-        Exclusive[Exclusive Access Sequential]
-        Concurrent[Shared Access Concurrent with HWM]
+    subgraph ExecModel["Execution Model"]
+        Exclusive["Exclusive Access - Sequential"]
+        Concurrent["Shared Access - Concurrent"]
     end
 
     MutateOn --> MutableHandlers
@@ -310,33 +310,33 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Publishers"
-        Pub1[Agent 1]
-        Pub2[Agent 2]
+    subgraph Publishers
+        Pub1["Agent 1"]
+        Pub2["Agent 2"]
     end
 
-    subgraph "AgentBroker"
-        BrokerAgent[Broker Agent]
-        SubRegistry[Subscription Registry TypeId to Vec MessageAddress]
+    subgraph BrokerSubgraph["AgentBroker"]
+        BrokerAgent["Broker Agent"]
+        SubRegistry["Subscription Registry"]
     end
 
-    subgraph "Subscribers"
-        Sub1[Agent A]
-        Sub2[Agent B]
-        Sub3[Agent C]
+    subgraph Subscribers
+        Sub1["Agent A"]
+        Sub2["Agent B"]
+        Sub3["Agent C"]
     end
 
-    Pub1 -->|broadcast msg| BrokerAgent
-    Pub2 -->|broadcast msg| BrokerAgent
+    Pub1 -->|broadcast| BrokerAgent
+    Pub2 -->|broadcast| BrokerAgent
 
     BrokerAgent --> SubRegistry
-    SubRegistry -->|lookup TypeId| Sub1
-    SubRegistry -->|lookup TypeId| Sub2
-    SubRegistry -->|lookup TypeId| Sub3
+    SubRegistry -->|lookup| Sub1
+    SubRegistry -->|lookup| Sub2
+    SubRegistry -->|lookup| Sub3
 
-    Sub1 -.->|subscribe M| SubRegistry
-    Sub2 -.->|subscribe M| SubRegistry
-    Sub3 -.->|subscribe M| SubRegistry
+    Sub1 -.->|subscribe| SubRegistry
+    Sub2 -.->|subscribe| SubRegistry
+    Sub3 -.->|subscribe| SubRegistry
 ```
 
 ### Subscription Flow
@@ -346,18 +346,18 @@ sequenceDiagram
     participant Agent
     participant Broker as AgentBroker
     participant Registry as Subscription Registry
+    participant Publisher
 
     Agent->>Broker: subscribe PriceUpdate
-    Broker->>Registry: register TypeId of PriceUpdate agent_address
+    Broker->>Registry: register TypeId
     Registry-->>Broker: OK
     Broker-->>Agent: Subscribed
 
     Note over Agent,Registry: Later...
 
-    participant Publisher
     Publisher->>Broker: broadcast PriceUpdate
-    Broker->>Registry: lookup subscribers for TypeId
-    Registry-->>Broker: agent_address list
+    Broker->>Registry: lookup subscribers
+    Registry-->>Broker: subscriber list
     Broker->>Agent: forward PriceUpdate
 ```
 
@@ -367,24 +367,24 @@ sequenceDiagram
 
 ```mermaid
 graph TB
-    subgraph "Root Level"
-        Runtime[AgentRuntime]
-        Roots[roots: DashMap]
+    subgraph RootLevel["Root Level"]
+        Runtime["AgentRuntime"]
+        Roots["roots DashMap"]
     end
 
-    subgraph "First Level Agents"
-        Parent1[Parent Agent 1]
-        Parent2[Parent Agent 2]
+    subgraph FirstLevel["First Level Agents"]
+        Parent1["Parent Agent 1"]
+        Parent2["Parent Agent 2"]
     end
 
-    subgraph "Child Agents"
-        Child1A[Child 1A]
-        Child1B[Child 1B]
-        Child2A[Child 2A]
+    subgraph ChildLevel["Child Agents"]
+        Child1A["Child 1A"]
+        Child1B["Child 1B"]
+        Child2A["Child 2A"]
     end
 
-    subgraph "Grandchild Agents"
-        GC1[Grandchild 1]
+    subgraph GrandchildLevel["Grandchild Agents"]
+        GC1["Grandchild 1"]
     end
 
     Runtime --> Roots
@@ -414,29 +414,29 @@ root_service/                    # Root agent ERN
 
 ```mermaid
 graph TB
-    subgraph "External Processes"
-        Client1[Python Client]
-        Client2[Node.js Client]
-        Client3[Other Process]
+    subgraph ExtProcs["External Processes"]
+        Client1["Python Client"]
+        Client2["Node.js Client"]
+        Client3["Other Process"]
     end
 
-    subgraph "IPC Layer"
-        Socket[Unix Socket /tmp/acton.sock]
-        Listener[IpcListener]
-        Protocol[Wire Protocol Length-Prefixed Frames]
-        RateLimiter[Rate Limiter]
+    subgraph IPCLayer["IPC Layer"]
+        Socket["Unix Socket"]
+        Listener["IpcListener"]
+        Protocol["Wire Protocol"]
+        RateLimiter["Rate Limiter"]
     end
 
-    subgraph "Type System"
-        Registry[IpcTypeRegistry]
-        Deserializer[Message Deserializer]
+    subgraph TypeSys["Type System"]
+        Registry["IpcTypeRegistry"]
+        Deserializer["Message Deserializer"]
     end
 
-    subgraph "Agent System"
-        Router[Agent Router]
-        Agent1[Agent 1]
-        Agent2[Agent 2]
-        BrokerNode[AgentBroker]
+    subgraph AgentSys["Agent System"]
+        Router["Agent Router"]
+        Agent1["Agent 1"]
+        Agent2["Agent 2"]
+        BrokerNode["AgentBroker"]
     end
 
     Client1 --> Socket
@@ -463,39 +463,39 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph "Compile-Time Enforcement"
-        Idle[ManagedAgent Idle M]
-        Started[ManagedAgent Started M]
+    subgraph CompileTime["Compile-Time Enforcement"]
+        IdleState["ManagedAgent - Idle"]
+        StartedState["ManagedAgent - Started"]
     end
 
-    subgraph "Idle-Only Methods"
-        MutateOn[mutate_on]
-        ActOn[act_on]
-        Hooks[lifecycle hooks]
+    subgraph IdleMethods["Idle-Only Methods"]
+        MutateOn["mutate_on"]
+        ActOn["act_on"]
+        Hooks["lifecycle hooks"]
     end
 
-    subgraph "Started-Only Methods"
-        Model[model]
-        ModelMut[model_mut]
-        Send[send]
-        Supervise[supervise]
+    subgraph StartedMethods["Started-Only Methods"]
+        Model["model"]
+        ModelMut["model_mut"]
+        Send["send"]
+        Supervise["supervise"]
     end
 
-    subgraph "Transition"
-        Start[start await]
+    subgraph Trans["Transition"]
+        Start["start await"]
     end
 
-    MutateOn --> Idle
-    ActOn --> Idle
-    Hooks --> Idle
+    MutateOn --> IdleState
+    ActOn --> IdleState
+    Hooks --> IdleState
 
-    Idle -->|start| Start
-    Start --> Started
+    IdleState -->|start| Start
+    Start --> StartedState
 
-    Model --> Started
-    ModelMut --> Started
-    Send --> Started
-    Supervise --> Started
+    Model --> StartedState
+    ModelMut --> StartedState
+    Send --> StartedState
+    Supervise --> StartedState
 ```
 
 ---
