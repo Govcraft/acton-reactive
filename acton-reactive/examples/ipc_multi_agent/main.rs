@@ -141,19 +141,19 @@ impl DashboardState {
                 ServiceState {
                     name: "Counter".to_string(),
                     running: true,
-                    col1: "Value: 0".to_string(),
-                    col2: "Ops: 0".to_string(),
+                    col1: "0 value".to_string(),
+                    col2: "0 ops".to_string(),
                 },
                 ServiceState {
                     name: "Logger".to_string(),
                     running: true,
-                    col1: "Entries: 0".to_string(),
+                    col1: "0 entries".to_string(),
                     col2: String::new(),
                 },
                 ServiceState {
                     name: "Config".to_string(),
                     running: true,
-                    col1: "Keys: 0".to_string(),
+                    col1: "0 keys".to_string(),
                     col2: String::new(),
                 },
             ],
@@ -172,20 +172,20 @@ impl DashboardState {
 
     fn update_counter(&mut self, value: i64, ops: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Counter") {
-            service.col1 = format!("Value: {value}");
-            service.col2 = format!("Ops: {ops}");
+            service.col1 = format!("{value} value");
+            service.col2 = format!("{ops} ops");
         }
     }
 
     fn update_logger(&mut self, entries: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Logger") {
-            service.col1 = format!("Entries: {entries}");
+            service.col1 = format!("{entries} entries");
         }
     }
 
     fn update_config(&mut self, keys: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Config") {
-            service.col1 = format!("Keys: {keys}");
+            service.col1 = format!("{keys} keys");
         }
     }
 }
@@ -239,7 +239,7 @@ mod render {
                 SetForegroundColor(status_color),
                 Print(status_char),
                 ResetColor,
-                Print(format!(" {:<10}{:<24}{:<23}", service.name, service.col1, service.col2)),
+                Print(format!("  {:<10}{:<24}{:<22}", service.name, service.col1, service.col2)),
                 Print("│\r\n")
             )?;
         }
