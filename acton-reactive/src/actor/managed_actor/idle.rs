@@ -647,19 +647,21 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         let actor_ref = self.handle.clone(); // Clone handle before consuming self.
 
         // Convert the actor to the Started state.
-        let active_actor: ManagedActor<Started, State> = self.into();
-        // Leak the actor into a static reference for the spawned task.
-        // The task itself is responsible for managing the actor's lifetime.
-        let actor = Box::leak(Box::new(active_actor));
+        let mut active_actor: ManagedActor<Started, State> = self.into();
 
-        trace!("Executing before_start hook for actor: {}", actor.id());
-        (actor.before_start)(actor).await; // Execute before_start hook.
+        trace!("Executing before_start hook for actor: {}", active_actor.id());
+        (active_actor.before_start)(&active_actor).await; // Execute before_start hook.
 
-        trace!("Spawning main task (wake) for actor: {}", actor.id());
-        // Spawn the main message processing loop.
-        actor_ref
-            .tracker()
-            .spawn(actor.wake(message_handlers, read_only_handlers));
+        trace!("Spawning main task (wake) for actor: {}", active_actor.id());
+        // Move ownership of the actor into the spawned task.
+        // This ensures proper memory cleanup when the task completes,
+        // avoiding the previous Box::leak pattern.
+        actor_ref.tracker().spawn(async move {
+            active_actor
+                .wake(message_handlers, read_only_handlers)
+                .await;
+            // active_actor is dropped here when the task completes
+        });
         // Close the tracker to indicate the main task is launched.
         actor_ref.tracker().close();
 

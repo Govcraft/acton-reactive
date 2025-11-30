@@ -401,7 +401,7 @@ pub fn acton_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Validate that the function is async
     if sig.asyncness.is_none() {
         return syn::Error::new_spanned(
-            &sig.fn_token,
+            sig.fn_token,
             "the async keyword is missing from the function declaration",
         )
         .to_compile_error()
@@ -411,7 +411,7 @@ pub fn acton_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Validate function name is main
     if sig.ident != "main" {
         return syn::Error::new_spanned(
-            &sig.ident,
+            &sig.ident, // Keep reference to avoid moving sig.ident which is used later
             "acton_main can only be applied to the main function",
         )
         .to_compile_error()
