@@ -19,8 +19,8 @@ use std::fmt::Debug; // Import Debug
 use std::hash::{Hash, Hasher}; // Import Hash and Hasher
 use std::sync::Arc;
 
-use tokio::runtime::Runtime; // Used in reply
-use tracing::{error, instrument, trace};
+use tokio::runtime::{Handle, Runtime};
+use tracing::{error, instrument, trace, warn};
 
 use crate::common::{Envelope, MessageError};
 use crate::message::message_address::MessageAddress;
@@ -131,15 +131,18 @@ impl OutboundEnvelope {
         }
     }
 
-    /// Sends a message using this envelope, blocking the current thread until sent.
+    /// Sends a message using this envelope synchronously.
     ///
-    /// **Warning:** This method spawns a blocking Tokio task and creates a new Tokio runtime
-    /// internally to execute the asynchronous `send` operation. This is generally **discouraged**
-    /// within an existing asynchronous context as it can lead to performance issues or deadlocks.
-    /// Prefer using the asynchronous [`OutboundEnvelope::send`] method whenever possible.
+    /// This method attempts to send a message without requiring an async context.
+    /// It uses the following strategy:
     ///
-    /// This method is primarily intended for scenarios where an asynchronous context is not readily
-    /// available, but its use should be carefully considered.
+    /// 1. If called from within a Tokio runtime context, it spawns the send operation
+    ///    on the existing runtime (most efficient).
+    /// 2. If called from outside any Tokio context, it creates a minimal runtime
+    ///    to execute the send (fallback for non-async code paths).
+    ///
+    /// **Recommendation:** Prefer using the asynchronous [`OutboundEnvelope::send`] method
+    /// whenever possible, as it integrates better with async workflows.
     ///
     /// # Arguments
     ///
@@ -152,23 +155,38 @@ impl OutboundEnvelope {
     ///   allows for future error handling. Potential errors (like closed channels) are logged internally.
     #[instrument(skip(self, message), fields(message_type = std::any::type_name_of_val(&message)))]
     pub fn reply(&self, message: impl ActonMessage + 'static) -> Result<(), MessageError> {
-        // Consider changing return type if errors aren't propagated.
         let envelope = self.clone();
-        let message_arc = Arc::new(message); // Arc the message once
+        let message_arc = Arc::new(message);
 
-        // Spawn a blocking task to handle the async send without blocking the caller's async runtime (if any).
-        // Note: Creating a new Runtime per call is inefficient.
-        tokio::task::spawn_blocking(move || {
-            trace!(sender = %envelope.return_address.sender, recipient = ?envelope.recipient_address.as_ref().map(|r| r.sender.to_string()), "Replying synchronously (blocking task)");
-            // Consider using Handle::current().block_on if already in a runtime context,
-            // but creating a new one avoids potential deadlocks if called from non-Tokio thread.
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async move {
-                // Use the internal async send logic.
-                envelope.send_message_inner(message_arc).await;
-            });
-        });
-        Ok(()) // Currently doesn't propagate errors from send_message_inner
+        // Try to use the existing runtime if we're already in a Tokio context.
+        // This avoids the overhead of creating a new runtime per call.
+        match Handle::try_current() {
+            Ok(handle) => {
+                // We're inside a Tokio runtime - spawn on the existing runtime
+                trace!(
+                    sender = %envelope.return_address.sender,
+                    recipient = ?envelope.recipient_address.as_ref().map(|r| r.sender.to_string()),
+                    "Replying via existing runtime handle"
+                );
+                handle.spawn(async move {
+                    envelope.send_message_inner(message_arc).await;
+                });
+            }
+            Err(_) => {
+                // We're outside any Tokio context - need to create a runtime.
+                // Use spawn_blocking would panic here since we're not in a runtime.
+                warn!(
+                    sender = %envelope.return_address.sender,
+                    "reply() called outside Tokio context; creating temporary runtime"
+                );
+                std::thread::spawn(move || {
+                    // Create a current-thread runtime for minimal overhead
+                    let rt = Runtime::new().expect("Failed to create Tokio runtime for reply");
+                    rt.block_on(envelope.send_message_inner(message_arc));
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Crate-internal: Asynchronously sends the message payload to the recipient.
