@@ -100,6 +100,13 @@ pub struct IpcLimitsConfig {
 
     /// Maximum message size in bytes.
     pub max_message_size: usize,
+
+    /// Buffer size for push notifications per connection.
+    ///
+    /// When a connection subscribes to message types, push notifications are
+    /// buffered in a channel. If the buffer fills up because the client isn't
+    /// reading fast enough, notifications will be dropped.
+    pub push_buffer_size: usize,
 }
 
 /// Timeout configuration for IPC operations.
@@ -167,6 +174,7 @@ impl Default for IpcLimitsConfig {
         Self {
             max_connections: 100,
             max_message_size: 1_048_576, // 1 MiB
+            push_buffer_size: 100,       // 100 pending push notifications
         }
     }
 }

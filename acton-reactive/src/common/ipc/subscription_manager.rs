@@ -332,7 +332,8 @@ impl SubscriptionManager {
 /// This is given to the push notification forwarding task so it can
 /// receive notifications and write them to the connection's stream.
 pub struct PushReceiver {
-    /// The connection ID.
+    /// The connection ID, useful for debugging and logging.
+    #[allow(dead_code)]
     pub conn_id: ConnectionId,
     /// The receiver for push notifications.
     pub receiver: mpsc::Receiver<IpcPushNotification>,

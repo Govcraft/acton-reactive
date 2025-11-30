@@ -314,6 +314,9 @@ where
 }
 
 /// Read a push notification from the stream.
+///
+/// This is used by IPC clients to receive push notifications from the server.
+#[allow(dead_code)]
 pub async fn read_push<R>(
     reader: &mut R,
     max_size: usize,
@@ -333,6 +336,9 @@ where
 }
 
 /// Write a subscribe request to the stream.
+///
+/// This is used by IPC clients to send subscription requests to the server.
+#[allow(dead_code)]
 pub async fn write_subscribe<W>(
     writer: &mut W,
     request: &super::types::IpcSubscribeRequest,
@@ -345,6 +351,9 @@ where
 }
 
 /// Write an unsubscribe request to the stream.
+///
+/// This is used by IPC clients to send unsubscription requests to the server.
+#[allow(dead_code)]
 pub async fn write_unsubscribe<W>(
     writer: &mut W,
     request: &super::types::IpcUnsubscribeRequest,
@@ -354,6 +363,27 @@ where
 {
     let payload = serde_json::to_vec(request)?;
     write_frame(writer, MSG_TYPE_UNSUBSCRIBE, &payload).await
+}
+
+/// Write a subscription response to the stream.
+///
+/// Subscription responses are sent in reply to subscribe/unsubscribe requests.
+/// They use the standard `MSG_TYPE_RESPONSE` message type since they are
+/// responses to client-initiated requests.
+pub async fn write_subscription_response<W>(
+    writer: &mut W,
+    response: &super::types::IpcSubscriptionResponse,
+) -> Result<(), IpcError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let msg_type = if response.success {
+        MSG_TYPE_RESPONSE
+    } else {
+        MSG_TYPE_ERROR
+    };
+    let payload = serde_json::to_vec(response)?;
+    write_frame(writer, msg_type, &payload).await
 }
 
 #[cfg(test)]

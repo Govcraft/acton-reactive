@@ -32,11 +32,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 use super::config::IpcConfig;
-use super::protocol::{is_heartbeat, read_frame, write_heartbeat, write_response, MSG_TYPE_REQUEST};
+use super::protocol::{
+    is_heartbeat, is_subscribe, is_unsubscribe, read_frame, write_heartbeat, write_push,
+    write_response, write_subscription_response, MSG_TYPE_REQUEST,
+};
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
-use super::subscription_manager::SubscriptionManager;
-use super::types::{IpcEnvelope, IpcError, IpcResponse};
+use super::subscription_manager::{create_push_channel, PushReceiver, SubscriptionManager};
+use super::types::{
+    IpcEnvelope, IpcError, IpcResponse, IpcSubscribeRequest, IpcSubscriptionResponse,
+    IpcUnsubscribeRequest,
+};
 use crate::common::{AgentHandle, Envelope};
 use crate::message::MessageAddress;
 use crate::traits::{ActonMessage, AgentHandleInterface};
@@ -218,16 +224,6 @@ struct ConnectionContext {
     subscription_manager: Arc<SubscriptionManager>,
 }
 
-impl ConnectionContext {
-    /// Returns a reference to the subscription manager.
-    ///
-    /// This is used for handling subscribe/unsubscribe requests
-    /// and forwarding broker notifications to IPC clients.
-    #[inline]
-    fn subscription_manager(&self) -> &SubscriptionManager {
-        &self.subscription_manager
-    }
-}
 
 /// IPC listener handle for managing the listener lifecycle.
 pub struct IpcListenerHandle {
@@ -636,20 +632,33 @@ async fn handle_request_frame(
 
 /// Handle a single client connection.
 async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionContext) {
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, writer) = stream.into_split();
     let max_message_size = ctx.config.limits.max_message_size;
+    let push_buffer_size = ctx.config.limits.push_buffer_size;
     let mut rate_limiter = RateLimiter::new(&ctx.config.rate_limit);
 
-    // Access subscription manager to log subscription stats
-    let sub_stats = ctx.subscription_manager();
+    // Create push notification channel and register connection for subscriptions
+    let (push_sender, push_receiver) = create_push_channel(conn_id, push_buffer_size);
+    ctx.subscription_manager.register_connection(conn_id, push_sender);
 
     debug!(
         conn_id,
         rate_limiting_enabled = rate_limiter.is_enabled(),
         available_tokens = rate_limiter.available_tokens(),
-        active_subscriptions = sub_stats.total_subscriptions(),
-        "Connection handler started"
+        push_buffer_size,
+        "Connection handler started with subscription support"
     );
+
+    // Spawn push notification forwarder task
+    // The writer half is shared between the main loop and push forwarder via Arc<Mutex>
+    let writer = Arc::new(tokio::sync::Mutex::new(writer));
+    let push_writer = writer.clone();
+    let push_cancel = ctx.cancel_token.clone();
+    let push_stats = ctx.stats.clone();
+
+    let push_task = tokio::spawn(async move {
+        run_push_forwarder(conn_id, push_receiver, push_writer, push_cancel, push_stats).await;
+    });
 
     loop {
         tokio::select! {
@@ -665,10 +674,21 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
                     Ok((msg_type, payload)) => {
                         if is_heartbeat(msg_type) {
                             trace!(conn_id, "Received heartbeat");
-                            if let Err(e) = write_heartbeat(&mut writer).await {
+                            if let Err(e) = write_heartbeat(&mut *writer.lock().await).await {
                                 error!(conn_id, error = %e, "Failed to send heartbeat response");
                                 break;
                             }
+                            continue;
+                        }
+
+                        // Handle subscription requests
+                        if is_subscribe(msg_type) {
+                            handle_subscribe_frame(conn_id, &payload, &ctx, &mut *writer.lock().await).await;
+                            continue;
+                        }
+
+                        if is_unsubscribe(msg_type) {
+                            handle_unsubscribe_frame(conn_id, &payload, &ctx, &mut *writer.lock().await).await;
                             continue;
                         }
 
@@ -679,7 +699,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 
                         if matches!(
                             handle_request_frame(
-                                conn_id, &payload, &mut rate_limiter, &ctx, &mut writer,
+                                conn_id, &payload, &mut rate_limiter, &ctx, &mut *writer.lock().await,
                             ).await,
                             RequestResult::Break
                         ) {
@@ -700,8 +720,150 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
         }
     }
 
+    // Unregister connection from subscription manager (cleans up all subscriptions)
+    ctx.subscription_manager.unregister_connection(conn_id);
+
+    // Wait for push forwarder task to finish
+    push_task.abort();
+    let _ = push_task.await;
+
     ctx.stats.connections_active.fetch_sub(1, Ordering::Relaxed);
     debug!(conn_id, "Connection handler finished");
+}
+
+/// Run the push notification forwarder task.
+///
+/// This task receives push notifications from the subscription manager and
+/// writes them to the client connection. It runs concurrently with the main
+/// connection loop.
+async fn run_push_forwarder(
+    conn_id: usize,
+    mut receiver: PushReceiver,
+    writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    cancel_token: CancellationToken,
+    stats: Arc<IpcListenerStats>,
+) {
+    trace!(conn_id, "Push forwarder started");
+
+    loop {
+        tokio::select! {
+            biased;
+
+            () = cancel_token.cancelled() => {
+                trace!(conn_id, "Push forwarder received shutdown signal");
+                break;
+            }
+
+            notification = receiver.receiver.recv() => {
+                if let Some(push) = notification {
+                    match write_push(&mut *writer.lock().await, &push).await {
+                        Ok(()) => {
+                            stats.push_notifications_sent.fetch_add(1, Ordering::Relaxed);
+                            trace!(
+                                conn_id,
+                                message_type = %push.message_type,
+                                notification_id = %push.notification_id,
+                                "Sent push notification"
+                            );
+                        }
+                        Err(e) => {
+                            error!(conn_id, error = %e, "Failed to send push notification");
+                            // Connection is broken, exit the forwarder
+                            break;
+                        }
+                    }
+                } else {
+                    // Channel closed, connection is shutting down
+                    trace!(conn_id, "Push channel closed");
+                    break;
+                }
+            }
+        }
+    }
+
+    trace!(conn_id, "Push forwarder finished");
+}
+
+/// Handle a subscribe request frame.
+async fn handle_subscribe_frame(
+    conn_id: usize,
+    payload: &[u8],
+    ctx: &ConnectionContext,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) {
+    let request: IpcSubscribeRequest = match serde_json::from_slice(payload) {
+        Ok(req) => req,
+        Err(e) => {
+            error!(conn_id, error = %e, "Failed to parse subscribe request");
+            let response = IpcSubscriptionResponse::error("unknown", format!("Parse error: {e}"));
+            let _ = write_subscription_response(writer, &response).await;
+            ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    trace!(
+        conn_id,
+        correlation_id = %request.correlation_id,
+        message_types = ?request.message_types,
+        "Received subscribe request"
+    );
+
+    // Subscribe to the requested message types
+    let subscribed_types = ctx
+        .subscription_manager
+        .subscribe(conn_id, &request.message_types);
+
+    ctx.stats
+        .subscriptions_processed
+        .fetch_add(1, Ordering::Relaxed);
+
+    let response = IpcSubscriptionResponse::success(&request.correlation_id, subscribed_types);
+
+    if let Err(e) = write_subscription_response(writer, &response).await {
+        error!(conn_id, error = %e, "Failed to send subscribe response");
+    }
+}
+
+/// Handle an unsubscribe request frame.
+async fn handle_unsubscribe_frame(
+    conn_id: usize,
+    payload: &[u8],
+    ctx: &ConnectionContext,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) {
+    let request: IpcUnsubscribeRequest = match serde_json::from_slice(payload) {
+        Ok(req) => req,
+        Err(e) => {
+            error!(conn_id, error = %e, "Failed to parse unsubscribe request");
+            let response = IpcSubscriptionResponse::error("unknown", format!("Parse error: {e}"));
+            let _ = write_subscription_response(writer, &response).await;
+            ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    trace!(
+        conn_id,
+        correlation_id = %request.correlation_id,
+        message_types = ?request.message_types,
+        "Received unsubscribe request"
+    );
+
+    // Unsubscribe from the requested message types
+    let remaining_types = ctx
+        .subscription_manager
+        .unsubscribe(conn_id, &request.message_types);
+
+    ctx.stats
+        .subscriptions_processed
+        .fetch_add(1, Ordering::Relaxed);
+
+    let response = IpcSubscriptionResponse::success(&request.correlation_id, remaining_types);
+
+    if let Err(e) = write_subscription_response(writer, &response).await {
+        error!(conn_id, error = %e, "Failed to send unsubscribe response");
+    }
 }
 
 /// Channel capacity for the IPC response proxy channel.

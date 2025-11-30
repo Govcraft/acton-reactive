@@ -436,7 +436,10 @@ pub struct IpcSubscribeRequest {
 
 impl IpcSubscribeRequest {
     /// Creates a new subscribe request with a generated correlation ID.
+    ///
+    /// Used by IPC clients to create subscription requests.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new(message_types: Vec<String>) -> Self {
         use mti::prelude::*;
         Self {
@@ -446,7 +449,10 @@ impl IpcSubscribeRequest {
     }
 
     /// Creates a new subscribe request with a specified correlation ID.
+    ///
+    /// Used by IPC clients to create subscription requests with custom correlation IDs.
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_correlation_id(correlation_id: impl Into<String>, message_types: Vec<String>) -> Self {
         Self {
             correlation_id: correlation_id.into(),
@@ -478,7 +484,10 @@ pub struct IpcUnsubscribeRequest {
 
 impl IpcUnsubscribeRequest {
     /// Creates a new unsubscribe request with a generated correlation ID.
+    ///
+    /// Used by IPC clients to create unsubscription requests.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new(message_types: Vec<String>) -> Self {
         use mti::prelude::*;
         Self {
@@ -488,7 +497,10 @@ impl IpcUnsubscribeRequest {
     }
 
     /// Creates a new unsubscribe request to unsubscribe from all message types.
+    ///
+    /// Used by IPC clients to unsubscribe from all broker broadcasts.
     #[must_use]
+    #[allow(dead_code)]
     pub fn unsubscribe_all() -> Self {
         use mti::prelude::*;
         Self {

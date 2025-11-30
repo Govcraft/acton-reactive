@@ -75,16 +75,24 @@
 //! ```
 
 // --- Public Re-exports ---
+// These are intentionally public API items for external consumers
+
 pub use config::IpcConfig;
 pub use listener::{
     run as start_listener, socket_exists, socket_is_alive, IpcListenerHandle, IpcListenerStats,
     ShutdownResult,
 };
 pub use registry::IpcTypeRegistry;
+
+// Subscription manager types - used by external clients for broker forwarding
+#[allow(unused_imports)]
 pub use subscription_manager::{
     create_push_channel, ConnectionId, PushReceiver, PushSender, SubscriptionManager,
     SubscriptionStats,
 };
+
+// IPC types - used by external clients for message serialization
+#[allow(unused_imports)]
 pub use types::{
     IpcEnvelope, IpcError, IpcPushNotification, IpcResponse, IpcSubscribeRequest,
     IpcSubscriptionResponse, IpcUnsubscribeRequest,
