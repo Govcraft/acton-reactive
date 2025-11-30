@@ -5,6 +5,7 @@ export const navigation = [
       { title: 'Introduction', href: '/' },
       { title: 'Installation', href: '/docs/installation' },
       { title: 'Your first actor', href: '/docs/your-first-actor' },
+      { title: 'Project structure', href: '/docs/project-structure' },
     ],
   },
   {
@@ -44,7 +45,8 @@ export const navigation = [
     title: 'Reference',
     links: [
       { title: 'API reference', href: '/docs/api-reference' },
-      { title: 'FAQ & troubleshooting', href: '/docs/faq' },
+      { title: 'Troubleshooting', href: '/docs/troubleshooting' },
+      { title: 'FAQ', href: '/docs/faq' },
     ],
   },
 ]

@@ -1,12 +1,12 @@
 ---
-title: FAQ & Troubleshooting
+title: FAQ
 nextjs:
   metadata:
-    title: FAQ & Troubleshooting - acton-reactive
-    description: Common questions, gotchas, and solutions when working with acton-reactive.
+    title: FAQ - acton-reactive
+    description: Frequently asked questions about acton-reactive.
 ---
 
-Common questions, gotchas, and solutions when working with `acton-reactive`.
+Frequently asked questions about `acton-reactive`.
 
 ---
 
