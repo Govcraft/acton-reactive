@@ -218,7 +218,7 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Yellow),
-            Print("┌─ Services ────────────────────────────────────────────────┐\r\n"),
+            Print("┌─ Services ─────────────────────────────────────────────────┐\r\n"),
             ResetColor
         )?;
 
@@ -262,7 +262,7 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Blue),
-            Print("┌─ IPC Statistics ──────────────────────────────────────────┐\r\n"),
+            Print("┌─ IPC Statistics ───────────────────────────────────────────┐\r\n"),
             ResetColor,
             Print(format!("│{row1:<60}│\r\n")),
             Print(format!("│{row2:<60}│\r\n")),
@@ -276,7 +276,7 @@ mod render {
         execute!(
             stdout,
             SetForegroundColor(Color::Magenta),
-            Print("┌─ Activity Log ────────────────────────────────────────────┐\r\n"),
+            Print("┌─ Activity Log ─────────────────────────────────────────────┐\r\n"),
             ResetColor
         )?;
 
