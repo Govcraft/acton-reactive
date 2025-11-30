@@ -140,19 +140,19 @@ impl DashboardState {
             services: vec![
                 ServiceState {
                     name: "Counter".to_string(),
-                    running: true,
+                    running: false,
                     col1: "0 value".to_string(),
                     col2: "0 ops".to_string(),
                 },
                 ServiceState {
                     name: "Logger".to_string(),
-                    running: true,
+                    running: false,
                     col1: "0 entries".to_string(),
                     col2: String::new(),
                 },
                 ServiceState {
                     name: "Config".to_string(),
-                    running: true,
+                    running: false,
                     col1: "0 keys".to_string(),
                     col2: String::new(),
                 },
@@ -186,6 +186,12 @@ impl DashboardState {
     fn update_config(&mut self, keys: usize) {
         if let Some(service) = self.services.iter_mut().find(|s| s.name == "Config") {
             service.col1 = format!("{keys} keys");
+        }
+    }
+
+    fn set_service_running(&mut self, name: &str, running: bool) {
+        if let Some(service) = self.services.iter_mut().find(|s| s.name == name) {
+            service.running = running;
         }
     }
 }
@@ -614,8 +620,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create service agents
     let counter = create_counter_agent(&mut runtime, state_tx.clone()).await;
+    state_tx.send_modify(|state| state.set_service_running("Counter", true));
+
     let logger = create_logger_agent(&mut runtime, state_tx.clone()).await;
+    state_tx.send_modify(|state| state.set_service_running("Logger", true));
+
     let config = create_config_agent(&mut runtime, state_tx.clone()).await;
+    state_tx.send_modify(|state| state.set_service_running("Config", true));
 
     // Expose agents for IPC
     runtime.ipc_expose("counter", counter.clone());
