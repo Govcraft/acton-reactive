@@ -42,12 +42,51 @@ use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
 use super::subscription_manager::{create_push_channel, PushReceiver, SubscriptionManager};
 use super::types::{
-    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcResponse,
-    IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
+    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
+    IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
+    IpcUnsubscribeRequest,
 };
 use crate::common::{ActorHandle, Envelope};
 use crate::message::MessageAddress;
 use crate::traits::{ActonMessage, ActorHandleInterface};
+
+// ============================================================================
+// Writer Channel Types
+// ============================================================================
+
+/// Commands for the connection writer task.
+///
+/// All write operations are sent through a channel to a dedicated writer task,
+/// eliminating the need for mutex-based synchronization between the main request
+/// loop and the push forwarder task.
+enum WriteCommand {
+    /// Write a response message.
+    Response { response: IpcResponse, format: Format },
+    /// Write a heartbeat.
+    Heartbeat,
+    /// Write a push notification.
+    Push(IpcPushNotification),
+    /// Write a subscription response.
+    SubscriptionResponse {
+        response: IpcSubscriptionResponse,
+        format: Format,
+    },
+    /// Write a discovery response.
+    DiscoveryResponse {
+        response: IpcDiscoverResponse,
+        format: Format,
+    },
+    /// Write a stream frame.
+    StreamFrame { frame: IpcStreamFrame, format: Format },
+}
+
+/// Channel capacity for the writer command channel.
+///
+/// Set to a reasonable size to handle bursts while providing backpressure.
+const WRITER_CHANNEL_CAPACITY: usize = 64;
+
+/// Handle for sending write commands to the writer task.
+type WriterHandle = mpsc::Sender<WriteCommand>;
 
 /// Statistics for the IPC listener.
 #[derive(Debug)]
@@ -593,6 +632,76 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
     }
 }
 
+// ============================================================================
+// Writer Task
+// ============================================================================
+
+/// Run the writer task that exclusively owns the socket write half.
+///
+/// This task receives write commands through a channel and processes them
+/// sequentially. By having a single owner for the writer, we eliminate the
+/// need for mutex-based synchronization between the main request loop and
+/// the push forwarder task.
+///
+/// The task exits when:
+/// - The channel is closed (all senders dropped)
+/// - The cancellation token is triggered
+/// - A write error occurs
+async fn run_writer_task(
+    conn_id: usize,
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+    mut receiver: mpsc::Receiver<WriteCommand>,
+    cancel_token: CancellationToken,
+) {
+    trace!(conn_id, "Writer task started");
+
+    loop {
+        tokio::select! {
+            biased;
+
+            () = cancel_token.cancelled() => {
+                trace!(conn_id, "Writer task received shutdown signal");
+                break;
+            }
+
+            command = receiver.recv() => {
+                let Some(cmd) = command else {
+                    trace!(conn_id, "Writer channel closed");
+                    break;
+                };
+
+                let result = match cmd {
+                    WriteCommand::Response { response, format } => {
+                        write_response_with_format(&mut writer, &response, format).await
+                    }
+                    WriteCommand::Heartbeat => {
+                        write_heartbeat(&mut writer).await
+                    }
+                    WriteCommand::Push(notification) => {
+                        write_push(&mut writer, &notification).await
+                    }
+                    WriteCommand::SubscriptionResponse { response, format } => {
+                        write_subscription_response_with_format(&mut writer, &response, format).await
+                    }
+                    WriteCommand::DiscoveryResponse { response, format } => {
+                        write_discovery_response_with_format(&mut writer, &response, format).await
+                    }
+                    WriteCommand::StreamFrame { frame, format } => {
+                        write_stream_frame_with_format(&mut writer, &frame, format).await
+                    }
+                };
+
+                if let Err(e) = result {
+                    error!(conn_id, error = %e, "Writer task encountered write error");
+                    break;
+                }
+            }
+        }
+    }
+
+    trace!(conn_id, "Writer task finished");
+}
+
 /// Result of handling a single request frame.
 enum RequestResult {
     /// Continue processing more frames.
@@ -608,7 +717,7 @@ async fn handle_request_frame(
     format: Format,
     rate_limiter: &mut RateLimiter,
     ctx: &ConnectionContext,
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    writer: &WriterHandle,
 ) -> RequestResult {
     ctx.stats.messages_received.fetch_add(1, Ordering::Relaxed);
 
@@ -626,8 +735,12 @@ async fn handle_request_frame(
 
         trace!(conn_id, "Rejecting request during shutdown drain");
 
-        if let Err(e) = write_response_with_format(writer, &response, format).await {
-            error!(conn_id, error = %e, "Failed to send shutdown response");
+        if writer
+            .send(WriteCommand::Response { response, format })
+            .await
+            .is_err()
+        {
+            error!(conn_id, "Failed to send shutdown response: writer channel closed");
             return RequestResult::Break;
         }
         return RequestResult::Continue;
@@ -648,8 +761,12 @@ async fn handle_request_frame(
 
         trace!(conn_id, retry_after_ms, "Rate limited");
 
-        if let Err(e) = write_response_with_format(writer, &response, format).await {
-            error!(conn_id, error = %e, "Failed to send rate limit response");
+        if writer
+            .send(WriteCommand::Response { response, format })
+            .await
+            .is_err()
+        {
+            error!(conn_id, "Failed to send rate limit response: writer channel closed");
             return RequestResult::Break;
         }
         return RequestResult::Continue;
@@ -668,8 +785,12 @@ async fn handle_request_frame(
                 "SERIALIZATION_ERROR",
                 format!("Failed to parse envelope: {e}"),
             );
-            if let Err(e) = write_response_with_format(writer, &response, format).await {
-                error!(conn_id, error = %e, "Failed to send error response");
+            if writer
+                .send(WriteCommand::Response { response, format })
+                .await
+                .is_err()
+            {
+                error!(conn_id, "Failed to send error response: writer channel closed");
                 return RequestResult::Break;
             }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -705,12 +826,60 @@ async fn handle_request_frame(
     // Done processing - decrement in-flight counter
     ctx.stats.decrement_in_flight();
 
-    if let Err(e) = write_response_with_format(writer, &response, format).await {
-        error!(conn_id, error = %e, "Failed to send response");
+    if writer
+        .send(WriteCommand::Response { response, format })
+        .await
+        .is_err()
+    {
+        error!(conn_id, "Failed to send response: writer channel closed");
         return RequestResult::Break;
     }
 
     RequestResult::Continue
+}
+
+/// Process a single frame from the client connection.
+///
+/// Returns `true` to continue the loop, `false` to break.
+async fn process_frame(
+    conn_id: usize,
+    msg_type: u8,
+    format: Format,
+    payload: &[u8],
+    rate_limiter: &mut RateLimiter,
+    ctx: &ConnectionContext,
+    writer_tx: &WriterHandle,
+) -> bool {
+    if is_heartbeat(msg_type) {
+        trace!(conn_id, "Received heartbeat");
+        if writer_tx.send(WriteCommand::Heartbeat).await.is_err() {
+            error!(conn_id, "Failed to send heartbeat: writer channel closed");
+            return false;
+        }
+        return true;
+    }
+
+    if is_subscribe(msg_type) {
+        return handle_subscribe_frame(conn_id, payload, format, ctx, writer_tx).await;
+    }
+
+    if is_unsubscribe(msg_type) {
+        return handle_unsubscribe_frame(conn_id, payload, format, ctx, writer_tx).await;
+    }
+
+    if is_discover(msg_type) {
+        return handle_discover_frame(conn_id, payload, format, ctx, writer_tx).await;
+    }
+
+    if msg_type != MSG_TYPE_REQUEST {
+        warn!(conn_id, msg_type, "Unexpected message type");
+        return true;
+    }
+
+    !matches!(
+        handle_request_frame(conn_id, payload, format, rate_limiter, ctx, writer_tx).await,
+        RequestResult::Break
+    )
 }
 
 /// Handle a single client connection.
@@ -726,6 +895,9 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
     ctx.subscription_manager
         .register_connection(conn_id, push_sender);
 
+    // Create writer command channel - eliminates the need for Mutex
+    let (writer_tx, writer_rx) = mpsc::channel::<WriteCommand>(WRITER_CHANNEL_CAPACITY);
+
     debug!(
         conn_id,
         rate_limiting_enabled = rate_limiter.is_enabled(),
@@ -734,10 +906,14 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
         "Connection handler started with subscription support"
     );
 
-    // Spawn push notification forwarder task
-    // The writer half is shared between the main loop and push forwarder via Arc<Mutex>
-    let writer = Arc::new(tokio::sync::Mutex::new(writer));
-    let push_writer = writer.clone();
+    // Spawn the writer task that exclusively owns the socket write half
+    let writer_cancel = ctx.cancel_token.clone();
+    let writer_task = tokio::spawn(async move {
+        run_writer_task(conn_id, writer, writer_rx, writer_cancel).await;
+    });
+
+    // Spawn push notification forwarder task - now sends through the channel
+    let push_writer = writer_tx.clone();
     let push_cancel = ctx.cancel_token.clone();
     let push_stats = ctx.stats.clone();
 
@@ -745,6 +921,44 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
         run_push_forwarder(conn_id, push_receiver, push_writer, push_cancel, push_stats).await;
     });
 
+    run_connection_loop(
+        conn_id,
+        &mut reader,
+        read_timeout,
+        max_message_size,
+        &mut rate_limiter,
+        &ctx,
+        &writer_tx,
+    )
+    .await;
+
+    // Unregister connection from subscription manager (cleans up all subscriptions)
+    ctx.subscription_manager.unregister_connection(conn_id);
+
+    // Drop our sender to signal the writer task to finish
+    drop(writer_tx);
+
+    // Wait for push forwarder and writer tasks to finish
+    push_task.abort();
+    let _ = push_task.await;
+
+    // Wait for writer task to finish (it will exit when channel closes)
+    let _ = writer_task.await;
+
+    ctx.stats.connections_active.fetch_sub(1, Ordering::Relaxed);
+    debug!(conn_id, "Connection handler finished");
+}
+
+/// Run the main connection read loop.
+async fn run_connection_loop(
+    conn_id: usize,
+    reader: &mut tokio::net::unix::OwnedReadHalf,
+    read_timeout: Duration,
+    max_message_size: usize,
+    rate_limiter: &mut RateLimiter,
+    ctx: &ConnectionContext,
+    writer_tx: &WriterHandle,
+) {
     loop {
         tokio::select! {
             biased;
@@ -754,8 +968,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
                 break;
             }
 
-            frame_result = tokio::time::timeout(read_timeout, read_frame(&mut reader, max_message_size)) => {
-                // Handle read timeout
+            frame_result = tokio::time::timeout(read_timeout, read_frame(reader, max_message_size)) => {
                 let frame_result = match frame_result {
                     Ok(result) => result,
                     Err(_elapsed) => {
@@ -767,43 +980,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 
                 match frame_result {
                     Ok((msg_type, format, payload)) => {
-                        if is_heartbeat(msg_type) {
-                            trace!(conn_id, "Received heartbeat");
-                            if let Err(e) = write_heartbeat(&mut *writer.lock().await).await {
-                                error!(conn_id, error = %e, "Failed to send heartbeat response");
-                                break;
-                            }
-                            continue;
-                        }
-
-                        // Handle subscription requests
-                        if is_subscribe(msg_type) {
-                            handle_subscribe_frame(conn_id, &payload, format, &ctx, &mut *writer.lock().await).await;
-                            continue;
-                        }
-
-                        if is_unsubscribe(msg_type) {
-                            handle_unsubscribe_frame(conn_id, &payload, format, &ctx, &mut *writer.lock().await).await;
-                            continue;
-                        }
-
-                        // Handle discovery requests
-                        if is_discover(msg_type) {
-                            handle_discover_frame(conn_id, &payload, format, &ctx, &mut *writer.lock().await).await;
-                            continue;
-                        }
-
-                        if msg_type != MSG_TYPE_REQUEST {
-                            warn!(conn_id, msg_type, "Unexpected message type");
-                            continue;
-                        }
-
-                        if matches!(
-                            handle_request_frame(
-                                conn_id, &payload, format, &mut rate_limiter, &ctx, &mut *writer.lock().await,
-                            ).await,
-                            RequestResult::Break
-                        ) {
+                        if !process_frame(conn_id, msg_type, format, &payload, rate_limiter, ctx, writer_tx).await {
                             break;
                         }
                     }
@@ -820,27 +997,17 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
             }
         }
     }
-
-    // Unregister connection from subscription manager (cleans up all subscriptions)
-    ctx.subscription_manager.unregister_connection(conn_id);
-
-    // Wait for push forwarder task to finish
-    push_task.abort();
-    let _ = push_task.await;
-
-    ctx.stats.connections_active.fetch_sub(1, Ordering::Relaxed);
-    debug!(conn_id, "Connection handler finished");
 }
 
 /// Run the push notification forwarder task.
 ///
 /// This task receives push notifications from the subscription manager and
-/// writes them to the client connection. It runs concurrently with the main
-/// connection loop.
+/// forwards them to the writer task via the channel. It runs concurrently
+/// with the main connection loop.
 async fn run_push_forwarder(
     conn_id: usize,
     mut receiver: PushReceiver,
-    writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    writer: WriterHandle,
     cancel_token: CancellationToken,
     stats: Arc<IpcListenerStats>,
 ) {
@@ -857,22 +1024,22 @@ async fn run_push_forwarder(
 
             notification = receiver.receiver.recv() => {
                 if let Some(push) = notification {
-                    match write_push(&mut *writer.lock().await, &push).await {
-                        Ok(()) => {
-                            stats.push_notifications_sent.fetch_add(1, Ordering::Relaxed);
-                            trace!(
-                                conn_id,
-                                message_type = %push.message_type,
-                                notification_id = %push.notification_id,
-                                "Sent push notification"
-                            );
-                        }
-                        Err(e) => {
-                            error!(conn_id, error = %e, "Failed to send push notification");
-                            // Connection is broken, exit the forwarder
-                            break;
-                        }
+                    let message_type = push.message_type.clone();
+                    let notification_id = push.notification_id.clone();
+
+                    if writer.send(WriteCommand::Push(push)).await.is_err() {
+                        error!(conn_id, "Failed to send push notification: writer channel closed");
+                        // Connection is broken, exit the forwarder
+                        break;
                     }
+
+                    stats.push_notifications_sent.fetch_add(1, Ordering::Relaxed);
+                    trace!(
+                        conn_id,
+                        message_type = %message_type,
+                        notification_id = %notification_id,
+                        "Sent push notification"
+                    );
                 } else {
                     // Channel closed, connection is shutting down
                     trace!(conn_id, "Push channel closed");
@@ -886,21 +1053,30 @@ async fn run_push_forwarder(
 }
 
 /// Handle a subscribe request frame.
+///
+/// Returns `true` to continue processing, `false` to break the connection loop.
 async fn handle_subscribe_frame(
     conn_id: usize,
     payload: &[u8],
     format: Format,
     ctx: &ConnectionContext,
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-) {
+    writer: &WriterHandle,
+) -> bool {
     let request: IpcSubscribeRequest = match format.deserialize(payload) {
         Ok(req) => req,
         Err(e) => {
             error!(conn_id, error = %e, "Failed to parse subscribe request");
             let response = IpcSubscriptionResponse::error("unknown", format!("Parse error: {e}"));
-            let _ = write_subscription_response_with_format(writer, &response, format).await;
+            if writer
+                .send(WriteCommand::SubscriptionResponse { response, format })
+                .await
+                .is_err()
+            {
+                error!(conn_id, "Failed to send subscribe error: writer channel closed");
+                return false;
+            }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-            return;
+            return true;
         }
     };
 
@@ -922,27 +1098,43 @@ async fn handle_subscribe_frame(
 
     let response = IpcSubscriptionResponse::success(&request.correlation_id, subscribed_types);
 
-    if let Err(e) = write_subscription_response_with_format(writer, &response, format).await {
-        error!(conn_id, error = %e, "Failed to send subscribe response");
+    if writer
+        .send(WriteCommand::SubscriptionResponse { response, format })
+        .await
+        .is_err()
+    {
+        error!(conn_id, "Failed to send subscribe response: writer channel closed");
+        return false;
     }
+
+    true
 }
 
 /// Handle an unsubscribe request frame.
+///
+/// Returns `true` to continue processing, `false` to break the connection loop.
 async fn handle_unsubscribe_frame(
     conn_id: usize,
     payload: &[u8],
     format: Format,
     ctx: &ConnectionContext,
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-) {
+    writer: &WriterHandle,
+) -> bool {
     let request: IpcUnsubscribeRequest = match format.deserialize(payload) {
         Ok(req) => req,
         Err(e) => {
             error!(conn_id, error = %e, "Failed to parse unsubscribe request");
             let response = IpcSubscriptionResponse::error("unknown", format!("Parse error: {e}"));
-            let _ = write_subscription_response_with_format(writer, &response, format).await;
+            if writer
+                .send(WriteCommand::SubscriptionResponse { response, format })
+                .await
+                .is_err()
+            {
+                error!(conn_id, "Failed to send unsubscribe error: writer channel closed");
+                return false;
+            }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-            return;
+            return true;
         }
     };
 
@@ -964,27 +1156,43 @@ async fn handle_unsubscribe_frame(
 
     let response = IpcSubscriptionResponse::success(&request.correlation_id, remaining_types);
 
-    if let Err(e) = write_subscription_response_with_format(writer, &response, format).await {
-        error!(conn_id, error = %e, "Failed to send unsubscribe response");
+    if writer
+        .send(WriteCommand::SubscriptionResponse { response, format })
+        .await
+        .is_err()
+    {
+        error!(conn_id, "Failed to send unsubscribe response: writer channel closed");
+        return false;
     }
+
+    true
 }
 
 /// Handle a discovery request frame.
+///
+/// Returns `true` to continue processing, `false` to break the connection loop.
 async fn handle_discover_frame(
     conn_id: usize,
     payload: &[u8],
     format: Format,
     ctx: &ConnectionContext,
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-) {
+    writer: &WriterHandle,
+) -> bool {
     let request: IpcDiscoverRequest = match format.deserialize(payload) {
         Ok(req) => req,
         Err(e) => {
             error!(conn_id, error = %e, "Failed to parse discover request");
             let response = IpcDiscoverResponse::error("unknown", format!("Parse error: {e}"));
-            let _ = write_discovery_response_with_format(writer, &response, format).await;
+            if writer
+                .send(WriteCommand::DiscoveryResponse { response, format })
+                .await
+                .is_err()
+            {
+                error!(conn_id, "Failed to send discover error: writer channel closed");
+                return false;
+            }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-            return;
+            return true;
         }
     };
 
@@ -1020,8 +1228,13 @@ async fn handle_discover_frame(
 
     let response = IpcDiscoverResponse::success(&request.correlation_id, actors, message_types);
 
-    if let Err(e) = write_discovery_response_with_format(writer, &response, format).await {
-        error!(conn_id, error = %e, "Failed to send discover response");
+    if writer
+        .send(WriteCommand::DiscoveryResponse { response, format })
+        .await
+        .is_err()
+    {
+        error!(conn_id, "Failed to send discover response: writer channel closed");
+        return false;
     }
 
     debug!(
@@ -1029,6 +1242,8 @@ async fn handle_discover_frame(
         correlation_id = %request.correlation_id,
         "Sent discover response"
     );
+
+    true
 }
 
 /// Channel capacity for the IPC response proxy channel.
@@ -1162,12 +1377,16 @@ fn process_fire_and_forget(
 
 /// Send a stream error frame and return the appropriate result.
 async fn send_stream_error(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-    frame: &IpcStreamFrame,
+    writer: &WriterHandle,
+    frame: IpcStreamFrame,
     format: Format,
 ) -> RequestResult {
-    if let Err(e) = write_stream_frame_with_format(writer, frame, format).await {
-        error!(error = %e, "Failed to send stream error frame");
+    if writer
+        .send(WriteCommand::StreamFrame { frame, format })
+        .await
+        .is_err()
+    {
+        error!("Failed to send stream error frame: writer channel closed");
         return RequestResult::Break;
     }
     RequestResult::Continue
@@ -1178,7 +1397,7 @@ async fn run_stream_loop(
     correlation_id: &str,
     timeout: Duration,
     receiver: &mut mpsc::Receiver<Envelope>,
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    writer: &WriterHandle,
     format: Format,
     type_registry: &IpcTypeRegistry,
     stats: &IpcListenerStats,
@@ -1196,7 +1415,7 @@ async fn run_stream_loop(
                 format!("Stream timed out after {} ms", timeout.as_millis()),
             );
             stats.errors.fetch_add(1, Ordering::Relaxed);
-            return send_stream_error(writer, &frame, format).await;
+            return send_stream_error(writer, frame, format).await;
         }
 
         match tokio::time::timeout(remaining, receiver.recv()).await {
@@ -1204,8 +1423,12 @@ async fn run_stream_loop(
                 let payload = serialize_response(response_envelope.message.as_ref(), type_registry);
                 let frame = IpcStreamFrame::data(correlation_id, sequence, payload);
                 trace!(correlation_id, sequence, "Sending stream frame");
-                if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
-                    error!(error = %e, "Failed to send stream frame");
+                if writer
+                    .send(WriteCommand::StreamFrame { frame, format })
+                    .await
+                    .is_err()
+                {
+                    error!("Failed to send stream frame: writer channel closed");
                     return RequestResult::Break;
                 }
                 sequence += 1;
@@ -1213,8 +1436,12 @@ async fn run_stream_loop(
             Ok(None) => {
                 let frame = IpcStreamFrame::final_frame(correlation_id, sequence, None);
                 debug!(correlation_id, total_frames = sequence, "Stream completed");
-                if let Err(e) = write_stream_frame_with_format(writer, &frame, format).await {
-                    error!(error = %e, "Failed to send final stream frame");
+                if writer
+                    .send(WriteCommand::StreamFrame { frame, format })
+                    .await
+                    .is_err()
+                {
+                    error!("Failed to send final stream frame: writer channel closed");
                     return RequestResult::Break;
                 }
                 break;
@@ -1227,7 +1454,7 @@ async fn run_stream_loop(
                     format!("Stream timed out after {} ms", timeout.as_millis()),
                 );
                 stats.errors.fetch_add(1, Ordering::Relaxed);
-                return send_stream_error(writer, &frame, format).await;
+                return send_stream_error(writer, frame, format).await;
             }
         }
     }
@@ -1243,7 +1470,7 @@ async fn process_stream_request(
     envelope: &IpcEnvelope,
     format: Format,
     ctx: &ConnectionContext,
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    writer: &WriterHandle,
 ) -> RequestResult {
     let correlation_id = &envelope.correlation_id;
     let timeout = envelope.response_timeout();
@@ -1256,7 +1483,7 @@ async fn process_stream_request(
             format!("Actor not found: {}", envelope.target),
         );
         ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-        return send_stream_error(writer, &frame, format).await;
+        return send_stream_error(writer, frame, format).await;
     };
     let actor_handle = entry.value().clone();
     drop(entry);
@@ -1275,7 +1502,7 @@ async fn process_stream_request(
                 e.to_string(),
             );
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-            return send_stream_error(writer, &frame, format).await;
+            return send_stream_error(writer, frame, format).await;
         }
     };
 
@@ -1292,7 +1519,7 @@ async fn process_stream_request(
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             IpcStreamFrame::error(correlation_id, 0, e.to_string())
         };
-        return send_stream_error(writer, &frame, format).await;
+        return send_stream_error(writer, frame, format).await;
     }
 
     ctx.stats.messages_routed.fetch_add(1, Ordering::Relaxed);
