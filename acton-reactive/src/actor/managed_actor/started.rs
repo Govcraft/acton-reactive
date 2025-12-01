@@ -241,10 +241,23 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
     }
 }
 
+/// Result of attempting to stop a single child actor.
+enum ChildStopResult {
+    /// Child stopped successfully
+    Success,
+    /// Child stop returned an error
+    Error { child_id: String, error: String },
+    /// Child stop timed out
+    Timeout { child_id: String },
+}
+
 /// Terminates all child actors of the given handle concurrently.
 ///
 /// This is a standalone async function to avoid the `&mut self` / `&self` async borrow
 /// checker constraints that would require `State: Sync`.
+///
+/// Timeout and error results are aggregated to avoid log flooding when many children
+/// fail simultaneously.
 #[instrument(skip(handle))]
 async fn terminate_children(handle: &crate::common::ActorHandle, actor_id: &acton_ern::Ern) {
     use std::time::Duration;
@@ -269,27 +282,74 @@ async fn terminate_children(handle: &crate::common::ActorHandle, actor_id: &acto
                             "Stop signal sent to and child {} shut down successfully.",
                             child_handle.id()
                         );
+                        ChildStopResult::Success
                     }
                     Ok(Err(e)) => {
-                        tracing::error!(
+                        trace!(
                             "Stop signal to child {} returned error: {:?}",
                             child_handle.id(),
                             e
                         );
+                        ChildStopResult::Error {
+                            child_id: child_handle.id().to_string(),
+                            error: format!("{e:?}"),
+                        }
                     }
                     Err(_) => {
-                        tracing::error!(
+                        trace!(
                             "Shutdown timeout for child {} after {} ms",
                             child_handle.id(),
                             timeout_ms
                         );
+                        ChildStopResult::Timeout {
+                            child_id: child_handle.id().to_string(),
+                        }
                     }
                 }
             }
         })
         .collect();
 
-    join_all(stop_futures).await; // Wait for all stop signals to be sent/processed.
+    let results = join_all(stop_futures).await;
+
+    // Aggregate and log failures
+    let mut timeout_children: Vec<&str> = Vec::new();
+    let mut error_children: Vec<(&str, &str)> = Vec::new();
+
+    for result in &results {
+        match result {
+            ChildStopResult::Success => {}
+            ChildStopResult::Timeout { child_id } => {
+                timeout_children.push(child_id);
+            }
+            ChildStopResult::Error { child_id, error } => {
+                error_children.push((child_id, error));
+            }
+        }
+    }
+
+    if !timeout_children.is_empty() {
+        tracing::error!(
+            "Shutdown timeout ({} ms) for {} child(ren) of actor {}: [{}]",
+            timeout_ms,
+            timeout_children.len(),
+            actor_id,
+            timeout_children.join(", ")
+        );
+    }
+
+    if !error_children.is_empty() {
+        tracing::error!(
+            "Shutdown errors for {} child(ren) of actor {}: [{}]",
+            error_children.len(),
+            actor_id,
+            error_children
+                .iter()
+                .map(|(id, err)| format!("{id}: {err}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
 
     trace!("All children stopped for actor: {}.", actor_id);
 }
