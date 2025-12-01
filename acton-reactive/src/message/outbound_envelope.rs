@@ -17,10 +17,38 @@
 use std::cmp::PartialEq;
 use std::fmt::Debug; // Import Debug
 use std::hash::{Hash, Hasher}; // Import Hash and Hasher
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tokio::runtime::{Handle, Runtime};
-use tracing::{error, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
+
+/// Shared runtime for synchronous `reply()` calls made outside of a Tokio context.
+///
+/// This runtime is created lazily on first use and persists for the process lifetime.
+/// Using a shared runtime avoids the expensive overhead of creating a new runtime
+/// (and associated thread pools) for each `reply()` call from non-async code.
+///
+/// The runtime uses the multi-threaded flavor with a single worker thread. This allows
+/// `spawn()` to work without blocking the caller (preserving fire-and-forget semantics),
+/// while keeping resource usage minimal since reply operations are lightweight channel sends.
+static SYNC_REPLY_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+/// Gets or creates the shared fallback runtime for synchronous `reply()` calls.
+///
+/// This function is called when `reply()` is invoked outside of any Tokio runtime
+/// context. Rather than creating a new runtime per call (expensive), we lazily
+/// initialize a single shared runtime that handles all sync reply operations.
+fn sync_reply_runtime() -> &'static Runtime {
+    SYNC_REPLY_RUNTIME.get_or_init(|| {
+        debug!("Creating shared fallback runtime for sync reply() calls");
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .thread_name("acton-sync-reply")
+            .build()
+            .expect("Failed to create fallback Tokio runtime for sync reply()")
+    })
+}
 
 use crate::common::{Envelope, MessageError};
 use crate::message::message_address::MessageAddress;
@@ -170,12 +198,12 @@ impl OutboundEnvelope {
             // Spawn a boxed future to reduce stack usage from large tokio::select! in send_message_inner
             Self::spawn_reply_task(&handle, envelope, message_arc);
         } else {
-            // We're outside any Tokio context - need to create a runtime.
+            // We're outside any Tokio context - use the shared fallback runtime.
             warn!(
                 sender = %envelope.return_address.sender,
-                "reply() called outside Tokio context; creating temporary runtime"
+                "reply() called outside Tokio context; using shared fallback runtime"
             );
-            Self::spawn_reply_thread(envelope, message_arc);
+            Self::spawn_reply_on_fallback(envelope, message_arc);
         }
         Ok(())
     }
@@ -191,11 +219,14 @@ impl OutboundEnvelope {
         }));
     }
 
-    /// Helper to spawn reply on a new thread with temporary runtime.
-    fn spawn_reply_thread(envelope: Self, message: Arc<dyn ActonMessage + Send + Sync>) {
-        std::thread::spawn(move || {
-            let rt = Runtime::new().expect("Failed to create Tokio runtime for reply");
-            rt.block_on(Box::pin(envelope.send_message_inner(message)));
+    /// Spawns a reply task on the shared fallback runtime.
+    ///
+    /// This is much more efficient than the previous approach of creating a new
+    /// `std::thread` and `Runtime` per call. The shared runtime amortizes the
+    /// cost across all sync `reply()` calls.
+    fn spawn_reply_on_fallback(envelope: Self, message: Arc<dyn ActonMessage + Send + Sync>) {
+        sync_reply_runtime().spawn(async move {
+            envelope.send_message_inner(message).await;
         });
     }
 
