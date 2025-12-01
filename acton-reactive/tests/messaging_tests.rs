@@ -48,7 +48,7 @@ mod setup;
 async fn test_messaging_behavior() -> anyhow::Result<()> {
     initialize_tracing();
     // Launch the runtime environment.
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     // Create an actor builder for PoolItem state.
     let mut pool_item_actor_builder = runtime.new_actor::<PoolItem>();
 
@@ -95,7 +95,7 @@ async fn test_messaging_behavior() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_basic_messenger() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     // Create an actor builder for Messenger state (which is likely empty or minimal).
     let mut messenger_actor_builder = runtime.new_actor::<Messenger>();
 
@@ -140,7 +140,7 @@ async fn test_basic_messenger() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_async_messaging_behavior() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let mut pool_item_actor_builder = runtime.new_actor::<PoolItem>();
 
     pool_item_actor_builder

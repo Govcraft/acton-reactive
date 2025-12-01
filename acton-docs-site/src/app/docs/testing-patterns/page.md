@@ -23,7 +23,7 @@ struct QueryResponse(String);
 
 #[tokio::test]
 async fn test_request_response() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let (tx, mut rx) = mpsc::channel::<String>(1);
 
@@ -82,7 +82,7 @@ struct RiskyOperation { should_fail: bool }
 
 #[tokio::test]
 async fn test_error_handling() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let (tx, mut rx) = mpsc::channel::<String>(1);
 
@@ -122,7 +122,7 @@ async fn test_error_handling() {
 ```rust
 #[tokio::test]
 async fn test_fallible_success() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let (success_tx, mut success_rx) = mpsc::channel::<()>(1);
     let (error_tx, mut error_rx) = mpsc::channel::<()>(1);
@@ -179,7 +179,7 @@ struct DataUpdate { value: i32 }
 
 #[tokio::test]
 async fn test_broadcast_delivery() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let broker = runtime.broker();
 
     let (tx1, mut rx1) = mpsc::channel::<i32>(10);
@@ -225,7 +225,7 @@ async fn test_broadcast_delivery() {
 ```rust
 #[tokio::test]
 async fn test_unsubscribe() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let broker = runtime.broker();
 
     let (tx, mut rx) = mpsc::channel::<i32>(10);
@@ -279,7 +279,7 @@ struct MessageB;
 
 #[tokio::test]
 async fn test_handler_selection() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let (tx, mut rx) = mpsc::channel::<&'static str>(10);
 
@@ -330,7 +330,7 @@ struct ReadQuery;
 
 #[tokio::test]
 async fn test_concurrent_reads() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let concurrent_count = Arc::new(AtomicU32::new(0));
     let max_concurrent = Arc::new(AtomicU32::new(0));
@@ -387,7 +387,7 @@ async fn test_concurrent_reads() {
 ```rust
 #[tokio::test]
 async fn test_empty_payload() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let (tx, mut rx) = mpsc::channel::<bool>(1);
 
     let mut actor = runtime.new_actor::<TestState>();
@@ -411,7 +411,7 @@ async fn test_empty_payload() {
 ```rust
 #[tokio::test]
 async fn test_rapid_messages() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let (tx, mut rx) = mpsc::channel::<u32>(1000);
 
     let mut actor = runtime.new_actor::<CounterState>();

@@ -35,7 +35,7 @@ struct GetItems;
 #[acton_main]
 async fn main() {
     // 1. Launch the Acton runtime.
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // 2. Create the actor builder for ItemTracker state.
     let mut tracker_actor_builder = runtime.new_actor::<ItemTracker>();

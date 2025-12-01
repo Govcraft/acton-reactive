@@ -361,7 +361,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
 
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Register all IPC message types
     let registry = runtime.ipc_registry();

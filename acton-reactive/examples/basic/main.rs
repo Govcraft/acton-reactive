@@ -40,7 +40,7 @@ struct BuhByeMsg;
 #[acton_main]
 async fn main() {
     // 1. Launch the Acton runtime environment.
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // 2. Create an actor builder.
     //    `new_actor` takes the *state type* (model) as a generic parameter.

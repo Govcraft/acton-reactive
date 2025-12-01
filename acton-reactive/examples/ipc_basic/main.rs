@@ -457,7 +457,7 @@ async fn demonstrate_ipc_hiding(runtime: &ActorRuntime, printer: &ActorHandle) {
 
 #[acton_main]
 async fn main() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Create printer actor for coordinated console output
     let printer = create_printer_actor(&mut runtime).await;

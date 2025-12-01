@@ -76,7 +76,7 @@ Your actor state must be:
 Actors are created through the runtime:
 
 ```rust
-let mut runtime = ActonApp::launch();
+let mut runtime = ActonApp::launch_async().await;
 
 // Create an actor builder
 let mut cart = runtime.new_actor::<ShoppingCart>();
@@ -220,7 +220,7 @@ See [Handler Types](/docs/handler-types) for the full picture.
 Create as many actors as you need:
 
 ```rust
-let mut runtime = ActonApp::launch();
+let mut runtime = ActonApp::launch_async().await;
 
 // Create multiple actors of the same type
 let mut worker1 = runtime.new_actor::<Worker>();

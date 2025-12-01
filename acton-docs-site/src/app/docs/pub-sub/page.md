@@ -15,7 +15,7 @@ Sometimes you need to notify multiple actors about an event. Instead of sending 
 Every Acton runtime has a broker - think of it as a bulletin board where actors can post announcements and subscribe to topics.
 
 ```rust
-let mut runtime = ActonApp::launch();
+let mut runtime = ActonApp::launch_async().await;
 
 // Get the broker
 let broker = runtime.broker();

@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
     execute!(stdout, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
 
     // 1. Launch the Acton runtime environment.
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // 2. Create the main 'Register' actor.
     //    The `Register::new_transaction` function likely sets up the Register actor

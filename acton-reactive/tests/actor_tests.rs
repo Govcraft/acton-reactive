@@ -56,7 +56,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
 
     // Launch the Acton runtime environment. This provides the necessary infrastructure
     // for creating and managing actors.
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // Configure the actor's identity (ERN) and relationship (no parent, no broker needed here).
     let actor_config = ActorConfig::new(Ern::with_root("improve_show").unwrap(), None, None)?;
@@ -154,7 +154,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
     initialize_tracing();
 
     // Launch the Acton runtime.
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // --- Counter Actor ---
     // Create a builder for the Counter actor.
@@ -231,7 +231,7 @@ async fn test_lifecycle_handlers() -> anyhow::Result<()> {
 async fn test_child_actor() -> anyhow::Result<()> {
     // Initialize tracing for logging purposes
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // --- Parent Actor ---
     let parent_config = ActorConfig::new(
@@ -336,7 +336,7 @@ async fn test_child_actor() -> anyhow::Result<()> {
 async fn test_find_child_actor() -> anyhow::Result<()> {
     // Initialize tracing for logging purposes
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // --- Parent Actor ---
     let parent_actor_builder = runtime.new_actor::<PoolItem>();
@@ -399,7 +399,7 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_actor_mutation() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // Configure and create the Comedian actor builder.
     let actor_config =
@@ -499,7 +499,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
     initialize_tracing();
 
     // Launch the Acton system and await its readiness
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // --- Parent Actor (Comedian) ---
     // Create the parent actor builder.

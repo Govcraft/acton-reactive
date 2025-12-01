@@ -221,7 +221,7 @@ actor.mutate_on::<MyMessage>(|actor, ctx| {
 fn main() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let mut app = ActonApp::launch();
+        let mut app = ActonApp::launch_async().await;
         // ... do stuff
     }); // Runtime drops, actors may not finish!
 }
@@ -232,7 +232,7 @@ fn main() {
 ```rust
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
     // ... do stuff
     app.shutdown_all().await.expect("Shutdown failed");
 }

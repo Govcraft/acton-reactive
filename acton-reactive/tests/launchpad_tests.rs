@@ -61,7 +61,7 @@ mod setup;
 #[acton_test]
 async fn test_launch_passing_acton() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let broker_handle = runtime.broker();
 
     // Configuration for the parent actor.
@@ -172,7 +172,7 @@ async fn wait_and_respond() {
 #[acton_test]
 async fn test_launchpad() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let broker_handle = runtime.broker();
 
     // Spawn Comedian using default config + setup function.

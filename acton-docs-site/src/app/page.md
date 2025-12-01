@@ -94,7 +94,7 @@ struct Increment(u32);
 
 #[acton_main]
 async fn main() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let mut counter = runtime.new_actor::<CounterState>();
 
     counter.mutate_on::<Increment>(|actor, ctx| {

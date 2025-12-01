@@ -35,7 +35,7 @@ struct Increment;
 
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
     let mut counter = app.new_actor::<Counter>();
 
     counter.mutate_on::<Increment>(|actor, _| {
@@ -116,7 +116,7 @@ use actors::counter::{CounterState, configure_counter};
 
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
     let mut counter = app.new_actor::<CounterState>();
     configure_counter(&mut counter);

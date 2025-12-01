@@ -62,7 +62,7 @@
 //! }
 //!
 //! // Register the message type for IPC
-//! let mut runtime = ActonApp::launch();
+//! let mut runtime = ActonApp::launch_async().await;
 //! runtime.ipc_registry().register::<PriceUpdate>("PriceUpdate");
 //!
 //! // Expose an actor for IPC access

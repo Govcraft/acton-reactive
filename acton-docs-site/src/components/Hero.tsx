@@ -19,7 +19,7 @@ struct Increment(u32);
 
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
     let mut actor = app.new_actor::<Counter>();
     actor.mutate_on::<Increment>(|actor, ctx| {
         actor.model.count += ctx.message().0;

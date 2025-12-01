@@ -12,7 +12,7 @@ async fn test_default_configuration_loading() -> Result<(), anyhow::Error> {
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
     // Launch ActonApp which should load defaults
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
     // Verify the app started successfully by creating an actor
     let actor_builder = app.new_actor::<TestActor>();
@@ -51,7 +51,7 @@ async fn test_custom_configuration_override() -> anyhow::Result<()> {
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
     // Launch ActonApp which should load the custom config
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
     // Create a test actor to verify the custom config is used
     let actor_builder = app.new_actor::<TestActor>();
@@ -81,7 +81,7 @@ async fn test_xdg_directory_resolution() -> Result<(), anyhow::Error> {
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
     // Launch and verify it uses the config
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
     let actor_builder = app.new_actor::<TestActor>();
     let _handle = actor_builder.start().await;
 
@@ -109,7 +109,7 @@ async fn test_malformed_config_handling() -> Result<(), anyhow::Error> {
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
     // Should still launch successfully with defaults
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
     let actor_builder = app.new_actor::<TestActor>();
     let _handle = actor_builder.start().await;
 
@@ -121,7 +121,7 @@ async fn test_malformed_config_handling() -> Result<(), anyhow::Error> {
 #[acton_test]
 async fn test_backward_compatibility() -> Result<(), anyhow::Error> {
     // Don't set any XDG variables - should use system defaults
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
     // Verify basic functionality still works
     let mut actor_builder = app.new_actor::<CounterActor>();
@@ -154,7 +154,7 @@ async fn test_config_values_used_in_behavior() -> Result<(), anyhow::Error> {
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
     // Create actor that should use the small inbox capacity
     let mut actor_builder = app.new_actor::<CounterActor>();
@@ -190,7 +190,7 @@ async fn test_consistent_config_across_actors() -> Result<(), anyhow::Error> {
     fs::write(config_dir.join("config.toml"), config_content).unwrap();
     std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
     // Create multiple actors
     let builder1 = app.new_actor::<CounterActor>();

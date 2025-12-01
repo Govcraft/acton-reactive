@@ -29,7 +29,7 @@ async fn main() {
     println!();
 
     // Launch the Acton runtime - configuration is loaded automatically
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Create an actor with custom name to demonstrate configuration
     let mut actor_builder = runtime.new_actor::<ConfigActor>();

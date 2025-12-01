@@ -311,7 +311,7 @@ handle.stop().await;
 ### Stopping All Actors
 
 ```rust
-let mut runtime = ActonApp::launch();
+let mut runtime = ActonApp::launch_async().await;
 
 // Create and start actors...
 
@@ -366,7 +366,7 @@ Hooks are great for test assertions:
 ```rust
 #[tokio::test]
 async fn test_actor_processes_all_messages() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let mut actor = runtime.new_actor::<Counter>();
 
     actor

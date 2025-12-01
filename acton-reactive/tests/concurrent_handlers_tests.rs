@@ -90,7 +90,7 @@ pub struct StatsRequest;
 #[acton_test]
 async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let mut actor_builder = runtime.new_actor::<ConcurrentTestActor>();
 
@@ -142,7 +142,7 @@ async fn test_act_on_concurrent_readonly() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_concurrent_readonly_state_safety() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let mut actor_builder = runtime.new_actor::<ConcurrentTestActor>();
 
@@ -197,7 +197,7 @@ pub struct AddData(i32);
 #[acton_test]
 async fn test_readonly_complex_data_access() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let mut actor_builder = runtime.new_actor::<DataActor>();
 
@@ -261,7 +261,7 @@ async fn test_readonly_complex_data_access() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_concurrent_performance() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let mut actor_builder = runtime.new_actor::<PerformanceActor>();
     actor_builder.model.start_time = Some(std::time::Instant::now());
@@ -306,7 +306,7 @@ async fn test_concurrent_performance() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let mut actor_builder = runtime.new_actor::<ConcurrencyActor>();
     actor_builder.model.start_time = Some(std::time::Instant::now());
@@ -376,7 +376,7 @@ async fn test_concurrent_execution_verification() -> anyhow::Result<()> {
 #[acton_test]
 async fn test_mixed_handlers() -> anyhow::Result<()> {
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let mut actor_builder = runtime.new_actor::<MixedActor>();
 

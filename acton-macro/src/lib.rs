@@ -57,7 +57,7 @@
 //!
 //! #[acton_main]
 //! async fn main() {
-//!     let app = ActonApp::launch();
+//!     let mut app = ActonApp::launch_async().await;
 //!     // ... your application logic
 //!     app.shutdown_all().await;
 //! }
@@ -365,7 +365,7 @@ pub fn acton_actor(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// #[acton_main]
 /// async fn main() {
-///     let app = ActonApp::launch();
+///     let mut app = ActonApp::launch_async().await;
 ///     // ... your application logic
 ///     app.shutdown_all().await;
 /// }

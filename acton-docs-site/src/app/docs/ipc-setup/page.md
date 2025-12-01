@@ -91,7 +91,7 @@ use acton_reactive::prelude::*;
 #[acton_main]
 async fn main() -> anyhow::Result<()> {
     // 1. Launch runtime
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // 2. Get IPC type registry
     let registry = runtime.ipc_registry();

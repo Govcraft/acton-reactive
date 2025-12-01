@@ -23,7 +23,7 @@ struct SendGreeting(String);
 
 #[tokio::test]
 async fn test_actor_communication() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let (tx, mut rx) = mpsc::channel::<String>(10);
 
@@ -70,7 +70,7 @@ async fn test_actor_communication() {
 ```rust
 #[tokio::test]
 async fn test_supervision_hierarchy() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let mut parent = runtime.new_actor::<ParentState>();
     let parent_handle = parent.start().await;
@@ -100,7 +100,7 @@ async fn test_supervision_hierarchy() {
 ```rust
 #[tokio::test]
 async fn test_cascading_shutdown() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let (tx, mut rx) = mpsc::channel::<String>(10);
 
@@ -152,7 +152,7 @@ async fn test_cascading_shutdown() {
 #[cfg(feature = "ipc")]
 #[tokio::test]
 async fn test_type_registration() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let registry = runtime.ipc_registry();
 
     // Register types
@@ -178,7 +178,7 @@ async fn test_type_registration() {
 #[cfg(feature = "ipc")]
 #[tokio::test]
 async fn test_ipc_exposure() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let actor = runtime.new_actor::<TestState>().start().await;
 
@@ -208,7 +208,7 @@ async fn test_ipc_round_trip() {
     // Clean up any existing socket
     let _ = std::fs::remove_file(socket_path);
 
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let registry = runtime.ipc_registry();
 
     // Setup
@@ -320,7 +320,7 @@ fn unique_socket_path() -> String {
 ```rust
 #[tokio::test]
 async fn test_with_timeout() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // ... setup
 
@@ -344,7 +344,7 @@ async fn test_with_timeout() {
 ```rust
 #[tokio::test]
 async fn test_concurrent_access() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let (tx, mut rx) = mpsc::channel::<u32>(100);
 
     let mut actor = runtime.new_actor::<CounterState>();
@@ -393,7 +393,7 @@ async fn test_concurrent_access() {
 ```rust
 #[tokio::test]
 async fn test_large_payload() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let (tx, mut rx) = mpsc::channel::<usize>(1);
 
     let mut actor = runtime.new_actor::<TestState>();

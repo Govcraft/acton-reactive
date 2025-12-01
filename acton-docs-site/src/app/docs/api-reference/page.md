@@ -64,14 +64,33 @@ Entry point for initializing the actor system.
 pub struct ActonApp;
 
 impl ActonApp {
-    /// Initialize the actor runtime
+    /// Initialize the actor runtime asynchronously.
+    /// Use this when already in an async context (e.g., inside #[tokio::main] or #[acton_main]).
+    pub async fn launch_async() -> ActorRuntime;
+
+    /// Initialize the actor runtime synchronously.
+    /// Panics if called from within an existing Tokio runtime.
+    /// Use launch_async() instead when in an async context.
+    #[must_use]
     pub fn launch() -> ActorRuntime;
 }
 ```
 
-**Example:**
+**Example (async context - preferred):**
 ```rust
-let runtime = ActonApp::launch();
+#[acton_main]
+async fn main() {
+    let mut runtime = ActonApp::launch_async().await;
+    // ... use runtime
+}
+```
+
+**Example (sync context):**
+```rust
+fn main() {
+    let runtime = ActonApp::launch();
+    // Enter async context with the runtime...
+}
 ```
 
 ---
@@ -110,7 +129,7 @@ impl ActorRuntime {
 
 **Example:**
 ```rust
-let mut runtime = ActonApp::launch();
+let mut runtime = ActonApp::launch_async().await;
 let mut actor = runtime.new_actor::<MyState>();
 // ... configure and start actor
 runtime.shutdown_all().await?;

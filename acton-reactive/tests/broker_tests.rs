@@ -52,7 +52,7 @@ mod setup;
 async fn test_broker() -> anyhow::Result<()> {
     initialize_tracing();
     // Launch the runtime environment.
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     // Get a handle to the central message broker.
     let broker_handle = runtime.broker();
 
@@ -148,7 +148,7 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
     /// - `Pong` broadcast is received by `Counter` (count=1).
     /// - `Counter`'s `after_stop` handler asserts `count == 1`.
     initialize_tracing();
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let broker_handle = runtime.broker();
 
     // --- Comedian Actor ---

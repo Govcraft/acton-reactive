@@ -36,7 +36,7 @@ mod tests {
     #[tokio::test]
     async fn test_actor_behavior() {
         // 1. Setup
-        let mut runtime = ActonApp::launch();
+        let mut runtime = ActonApp::launch_async().await;
 
         // 2. Create and configure actor
         let mut actor = runtime.new_actor::<TestState>();
@@ -73,7 +73,7 @@ struct CounterState {
 
 #[tokio::test]
 async fn test_initial_state() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let mut counter = runtime.new_actor::<CounterState>();
 
@@ -96,7 +96,7 @@ struct Increment(u32);
 
 #[tokio::test]
 async fn test_increment_handler() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let mut counter = runtime.new_actor::<CounterState>();
 
@@ -135,7 +135,7 @@ use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn test_with_channel_verification() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Create channel for test verification
     let (tx, mut rx) = mpsc::channel::<u32>(10);
@@ -176,7 +176,7 @@ use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn test_lifecycle_order() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let (tx, mut rx) = mpsc::channel::<&'static str>(10);
 
     let mut actor = runtime.new_actor::<TestState>();
@@ -233,14 +233,14 @@ Each test should have its own runtime:
 ```rust
 #[tokio::test]
 async fn test_a() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     // ... test
     runtime.shutdown_all().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_b() {
-    let mut runtime = ActonApp::launch(); // Fresh runtime
+    let mut runtime = ActonApp::launch_async().await; // Fresh runtime
     // ... test
     runtime.shutdown_all().await.unwrap();
 }
@@ -257,7 +257,7 @@ mod test_helpers {
     use super::*;
 
     pub async fn setup_test_runtime() -> ActorRuntime {
-        ActonApp::launch()
+        ActonApp::launch_async().await
     }
 
     pub async fn create_echo_actor(runtime: &mut ActorRuntime) -> ActorHandle {

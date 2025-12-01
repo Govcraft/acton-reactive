@@ -59,7 +59,7 @@ pub(crate) struct ShoppingCart {
 async fn test_reply() -> anyhow::Result<()> {
     initialize_tracing();
     // Launch the runtime environment.
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Create and start the PriceService actor. The `new` function returns a context struct holding the handle.
     let price_service_context = PriceService::new(&mut runtime).await;

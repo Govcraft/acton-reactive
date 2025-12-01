@@ -40,7 +40,7 @@ mod setup;
 async fn test_actor_lifecycle_events() -> anyhow::Result<()> {
     initialize_tracing();
     // Launch the runtime environment.
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     // Create an actor builder for the PoolItem state.
     let mut pool_item_actor_builder = runtime.new_actor::<PoolItem>();
 

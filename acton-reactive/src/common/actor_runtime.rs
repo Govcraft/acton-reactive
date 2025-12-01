@@ -19,20 +19,17 @@ use std::future::Future;
 use std::pin::Pin;
 
 use acton_ern::Ern;
-use dashmap::DashMap;
 use futures::future::join_all;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, trace}; // Added error import
+use tracing::{error, trace};
 
 use crate::actor::{ActorConfig, Idle, ManagedActor};
 use crate::common::acton_inner::ActonInner;
-use crate::common::{ActonApp, ActonConfig, ActorHandle, Broker, BrokerRef};
+use crate::common::{ActorHandle, BrokerRef};
 use crate::traits::ActorHandleInterface;
 
 /// Represents the initialized and active Acton actor system runtime.
 ///
-/// This struct is obtained after successfully launching the system via [`ActonApp::launch()`].
+/// This struct is obtained after successfully launching the system via [`ActonApp::launch_async().await`].
 /// It holds the internal state of the running system, including a reference to the
 /// central message broker and a registry of top-level actors.
 ///
@@ -196,7 +193,7 @@ impl ActorRuntime {
     ///     price: f64,
     /// }
     ///
-    /// let mut runtime = ActonApp::launch();
+    /// let mut runtime = ActonApp::launch_async().await;
     ///
     /// // Register the message type with a stable name
     /// runtime.ipc_registry().register::<PriceUpdate>("PriceUpdate");
@@ -225,7 +222,7 @@ impl ActorRuntime {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mut runtime = ActonApp::launch();
+    /// let mut runtime = ActonApp::launch_async().await;
     /// let actor = runtime.new_actor_with_name::<PriceServiceState>("price_service".to_string());
     /// let handle = actor.start().await;
     ///
@@ -316,7 +313,7 @@ impl ActorRuntime {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mut runtime = ActonApp::launch();
+    /// let mut runtime = ActonApp::launch_async().await;
     ///
     /// // Register message types and expose actors first
     /// runtime.ipc_registry().register::<MyMessage>("MyMessage");
@@ -536,74 +533,3 @@ impl ActorRuntime {
     }
 }
 
-/// Converts an [`ActonApp`] marker into an initialized `ActorRuntime`.
-///
-/// This implementation defines the system bootstrap process triggered by [`ActonApp::launch()`].
-/// It performs the following steps:
-/// 1. Loads configuration from XDG-compliant locations using [`ActonConfig::load()`].
-/// 2. Spawns a background Tokio task dedicated to initializing the [`Broker`].
-/// 3. Uses a `oneshot` channel to receive the `ActorHandle` of the initialized broker
-///    back from the background task.
-/// 4. **Blocks the current thread** using `tokio::task::block_in_place` while waiting
-///    for the broker initialization to complete. This ensures that `ActonApp::launch()`
-///    does not return until the core system components (like the broker) are ready.
-/// 5. Constructs the `ActorRuntime` using the received broker handle and loaded configuration.
-///
-/// **Warning**: The use of `block_in_place` means this conversion should typically
-/// only happen once at the very start of the application within the main thread
-/// or a dedicated initialization thread, before the main asynchronous workload begins.
-/// Calling this from within an existing Tokio runtime task could lead to deadlocks
-/// or performance issues.
-impl From<ActonApp> for ActorRuntime {
-    fn from(_acton: ActonApp) -> Self {
-        trace!("Starting Acton system initialization (From<ActonApp>)");
-
-        // Load configuration from XDG-compliant locations
-        let config = ActonConfig::load();
-        trace!("Configuration loaded: {:?}", config);
-
-        let (sender, receiver) = oneshot::channel();
-
-        // Create runtime with loaded configuration
-        let mut runtime = Self(ActonInner {
-            broker: ActorHandle::default(),
-            roots: DashMap::default(),
-            cancellation_token: CancellationToken::new(),
-            config,
-            #[cfg(feature = "ipc")]
-            ipc_type_registry: std::sync::Arc::new(crate::common::ipc::IpcTypeRegistry::new()),
-            #[cfg(feature = "ipc")]
-            ipc_actor_registry: std::sync::Arc::new(DashMap::new()),
-            #[cfg(feature = "ipc")]
-            ipc_subscription_manager: std::sync::Arc::new(parking_lot::RwLock::new(None)),
-        });
-
-        // Spawn broker initialization in a separate task
-        let runtime_clone = runtime.clone();
-
-        // Assert that the cancellation_token is present in the clone before broker initialization
-        assert!(
-            !runtime_clone.0.cancellation_token.is_cancelled(),
-            "ActonInner cancellation_token must be present and active before Broker initialization"
-        );
-
-        tokio::spawn(async move {
-            trace!("Broker initialization task started.");
-            let broker = Broker::initialize(runtime_clone).await;
-            trace!("Broker initialization task finished, sending handle.");
-            let _ = sender.send(broker); // Send broker handle back
-        });
-
-        trace!("Blocking current thread to wait for broker initialization...");
-        // Block until the broker handle is received
-        let broker = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { receiver.await.expect("Broker initialization failed") })
-        });
-        trace!("Broker handle received, constructing ActorRuntime.");
-        runtime.0.broker = broker;
-
-        // Create the runtime with the initialized broker and configuration
-        runtime
-    }
-}

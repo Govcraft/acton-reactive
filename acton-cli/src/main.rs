@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     let mut stdout = stdout();
     execute!(stdout, cursor::Hide, Clear(ClearType::All), cursor::MoveTo(PADLEFT, PADTOP))?;
 
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
     let view_manager = ViewManager::create(&mut app).await?;
     let scaffold_actor = ScaffoldActor::create(&mut app).await;
 

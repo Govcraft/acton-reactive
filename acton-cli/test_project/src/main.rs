@@ -13,7 +13,7 @@ tracing_subscriber::fmt()
 .with_writer(std::fs::File::create("logs/app.log")?)
 .init();
 
-let mut app = ActonApp::launch();
+let mut app = ActonApp::launch_async().await;
 
 // Example actor setup
 let my_actor = app.new_actor::<MyActor>();

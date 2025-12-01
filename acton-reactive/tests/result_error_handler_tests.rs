@@ -46,7 +46,7 @@ impl std::error::Error for TestErr2 {}
 
 #[acton_test]
 async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let actor_config = ActorConfig::new(Ern::with_root("error_handler_demo").unwrap(), None, None)?;
 
@@ -96,7 +96,7 @@ async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
 
 #[acton_test]
 async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
-    let mut runtime: ActorRuntime = ActonApp::launch();
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let actor_config =
         ActorConfig::new(Ern::with_root("fallible_return_demo").unwrap(), None, None)?;

@@ -44,7 +44,7 @@ struct Ping;
 
 #[acton_main]
 async fn main() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     let mut actor = runtime.new_actor::<TestActor>();
 

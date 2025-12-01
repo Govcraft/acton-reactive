@@ -30,7 +30,7 @@ struct Increment(u32);
 #[acton_main]
 async fn main() {
     // Start the "office" (runtime)
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Hire a counter actor
     let mut counter = runtime.new_actor::<CounterState>();
@@ -91,7 +91,7 @@ Messages are how actors communicate. The `#[acton_message]` macro derives `Debug
 ### 3. Create the Runtime
 
 ```rust
-let mut runtime = ActonApp::launch();
+let mut runtime = ActonApp::launch_async().await;
 ```
 
 The runtime manages all your actors. Think of it as the "office building" where all your actors work.
@@ -171,7 +171,7 @@ struct CountResponse(u32);
 
 #[acton_main]
 async fn main() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     let mut counter = runtime.new_actor::<CounterState>();
 
     // Handler for mutations

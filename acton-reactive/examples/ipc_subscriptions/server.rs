@@ -257,7 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("====================================================================");
     println!();
 
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
     // Register IPC message types for subscription forwarding
     let registry = runtime.ipc_registry();

@@ -75,7 +75,7 @@ use acton_reactive::prelude::*;
 
 #[acton_main]  // This sets up the async runtime for you!
 async fn main() {
-    let mut runtime = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     // ...
 }
 ```
