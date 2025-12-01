@@ -6,25 +6,37 @@ nextjs:
     description: Build fast, concurrent Rust applications without threading headaches. No locks. No race conditions. Just simple message-passing between independent workers.
 ---
 
-Build fast, concurrent Rust apps without threading headaches. {% .lead %}
+Build concurrent Rust apps without locks, race conditions, or shared state nightmares. {% .lead %}
 
-No locks. No race conditions. No shared mutable state nightmares. Just independent workers passing messages to each other.
+Acton gives you independent workers that own their state privately and communicate through messages. If you can write async Rust, you can write actors—and your concurrent code will be correct by construction.
 
 {% quick-links %}
 
-{% quick-link title="Your First Actor" icon="installation" href="/docs/your-first-actor" description="Build a working actor in 60 seconds." /%}
+{% quick-link title="Quick Start" icon="installation" href="/docs/quick-start/installation" description="Get running in 5 minutes." /%}
 
-{% quick-link title="Core Concepts" icon="presets" href="/docs/actors-and-state" description="Understand actors, messages, and handlers." /%}
+{% quick-link title="Core Concepts" icon="presets" href="/docs/core-concepts/what-are-actors" description="Understand actors, messages, and handlers." /%}
 
-{% quick-link title="Examples" icon="plugins" href="/docs/examples" description="Learn from real, working code." /%}
+{% quick-link title="Building Apps" icon="plugins" href="/docs/building-apps/parent-child-actors" description="Practical patterns for real applications." /%}
 
-{% quick-link title="API Reference" icon="theming" href="/docs/api-reference" description="Complete type and trait documentation." /%}
+{% quick-link title="API Reference" icon="theming" href="/docs/reference/api-overview" description="Quick reference for types and traits." /%}
 
 {% /quick-links %}
 
 ---
 
-## What Problem Does This Solve?
+## Choose your path
+
+{% callout type="note" title="New to concurrent programming?" %}
+Start with [What are Actors?](/docs/core-concepts/what-are-actors) to understand the concepts, then work through the [Quick Start](/docs/quick-start/installation).
+{% /callout %}
+
+{% callout type="note" title="Experienced with actors?" %}
+Jump straight to [Installation](/docs/quick-start/installation) and [Your First Actor](/docs/quick-start/your-first-actor). Check the [Cheatsheet](/docs/reference/cheatsheet) for quick patterns.
+{% /callout %}
+
+---
+
+## Actors eliminate data races by making isolation the default
 
 Traditional concurrent Rust requires careful lock management:
 
@@ -42,131 +54,112 @@ let handle = thread::spawn(move || {
 // Hope you got all the Arc<Mutex<...>> right...
 ```
 
-**Problems:** Lock contention, deadlocks, shared state bugs, complex error handling.
+**The problems:** Lock contention, deadlocks, shared state bugs, and subtle race conditions that only appear in production.
 
-**The Acton approach:**
+**Acton's solution:** Each actor owns its data privately. No locks needed.
 
 ```rust
-// Each actor owns its data. No locks needed.
 #[acton_actor]
-struct Counter { count: u32 }
+struct Counter { count: i32 }
 
 #[acton_message]
-struct Increment(u32);
+struct Increment;
 
-counter.mutate_on::<Increment>(|actor, ctx| {
-    actor.model.count += ctx.message().0;
+builder.mutate_on::<Increment>(|actor, _msg| {
+    actor.model.count += 1;
     Reply::ready()
 });
 
-handle.send(Increment(1)).await;
+handle.send(Increment).await;
 ```
 
-**Benefits:** No locks, isolated failures, guaranteed ordering, compile-time safety.
+**What you get:** No locks, isolated failures, guaranteed message ordering, and compile-time safety. Data races become impossible because actors never share mutable state.
 
 ---
 
-## Think of It Like an Office
-
-| Office Concept | Acton Concept | What It Does |
-|----------------|---------------|--------------|
-| **Employee** | Actor | A worker with their own desk and files |
-| **Memo/Email** | Message | How workers communicate |
-| **Job Description** | Handler | "When you get X, do Y" |
-| **Employee Badge** | ActorHandle | How to reach a specific worker |
-| **Bulletin Board** | Broker | Announcements everyone can see |
-| **HR** | Runtime | Hires, manages, and retires workers |
-
-An **actor** is just a worker at their desk. They have their own stuff (state) and nobody else can touch it. When they need something from another worker, they send a **message**. No two workers share a desk. No fighting over resources.
-
----
-
-## Quick Example
+## A complete example in 20 lines
 
 ```rust
 use acton_reactive::prelude::*;
 
 #[acton_actor]
-struct CounterState { count: u32 }
+struct Counter { count: i32 }
 
 #[acton_message]
-struct Increment(u32);
+struct Increment;
 
 #[acton_main]
 async fn main() {
-    let mut runtime = ActonApp::launch_async().await;
-    let mut counter = runtime.new_actor::<CounterState>();
+    let mut app = ActonApp::launch();
 
-    counter.mutate_on::<Increment>(|actor, ctx| {
-        actor.model.count += ctx.message().0;
-        println!("Count: {}", actor.model.count);
-        Reply::ready()
-    });
+    let handle = app
+        .new_actor::<Counter>()
+        .mutate_on::<Increment>(|actor, _| {
+            actor.model.count += 1;
+            println!("Count: {}", actor.model.count);
+            Reply::ready()
+        })
+        .start()
+        .await;
 
-    let handle = counter.start().await;
+    handle.send(Increment).await.ok();
+    handle.send(Increment).await.ok();
+    handle.send(Increment).await.ok();
 
-    handle.send(Increment(1)).await;
-    handle.send(Increment(2)).await;
-    handle.send(Increment(3)).await;
-
-    runtime.shutdown_all().await.expect("Shutdown failed");
+    app.shutdown_all().await.ok();
 }
 ```
 
 **Output:**
 ```text
 Count: 1
+Count: 2
 Count: 3
-Count: 6
 ```
 
-Ready to build? Start with [Your First Actor](/docs/your-first-actor).
+Each message is processed in order. The actor's state is never accessed concurrently. Ready to build? Start with [Installation](/docs/quick-start/installation).
 
 ---
 
-## Handler Types at a Glance
+## Two handler types cover every use case
 
 | If you need to... | Use this | Why |
 |-------------------|----------|-----|
-| **Change** the actor's data | `mutate_on` | Exclusive access, one at a time |
-| **Read** the actor's data | `act_on` | Can run many at once (concurrent) |
+| **Modify** the actor's data | `mutate_on` | Exclusive access, one message at a time |
+| **Read** the actor's data | `act_on` | Multiple reads can run concurrently |
 
 ```rust
-// For changes
-counter.mutate_on::<Increment>(|actor, ctx| {
-    actor.model.count += ctx.message().0;
+// For mutations - one at a time, exclusive access
+builder.mutate_on::<Increment>(|actor, _| {
+    actor.model.count += 1;
     Reply::ready()
 });
 
-// For queries
-counter.act_on::<GetCount>(|actor, ctx| {
-    let count = actor.model.count;
-    let reply = ctx.reply_envelope();
-    Reply::pending(async move {
-        reply.send(CountResponse(count)).await;
-    })
+// For queries - can run concurrently with other reads
+builder.act_on::<GetCount>(|actor, _| {
+    Reply::with(actor.model.count)
 });
 ```
 
 {% callout type="note" title="When in doubt, use mutate_on" %}
-It's safer because it processes one message at a time. Optimize to `act_on` later.
+It's safer because it processes one message at a time. Optimize to `act_on` when you're sure the handler only reads.
 {% /callout %}
 
-See [Handler Types](/docs/handler-types) for the full picture.
+See [Messages & Handlers](/docs/core-concepts/messages-and-handlers) for the complete picture.
 
 ---
 
-## Status
+## Current status
 
 {% callout type="warning" title="Pre-1.0 Software" %}
-`acton-reactive` is under active development. The API is stabilizing but may change before 1.0. Breaking changes bump the minor version.
+`acton-reactive` is under active development. The API is stabilizing but may change before 1.0. Breaking changes bump the minor version (e.g., 0.7 → 0.8).
 {% /callout %}
 
 ---
 
-## Next Steps
+## Start building now
 
-- [Installation](/docs/installation) - Add acton-reactive to your project
-- [Your First Actor](/docs/your-first-actor) - Hands-on tutorial
-- [Actors & State](/docs/actors-and-state) - Understand the actor model
-- [Examples](/docs/examples) - See complete applications
+- **[Installation](/docs/quick-start/installation)** — Add acton-reactive to your project
+- **[Your First Actor](/docs/quick-start/your-first-actor)** — Hands-on tutorial with working code
+- **[What are Actors?](/docs/core-concepts/what-are-actors)** — Understand the actor model
+- **[Cheatsheet](/docs/reference/cheatsheet)** — Copy-paste patterns for common tasks

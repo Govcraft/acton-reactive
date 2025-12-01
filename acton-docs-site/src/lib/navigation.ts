@@ -1,66 +1,47 @@
 export const navigation = [
   {
-    title: 'Getting Started',
+    title: 'Quick Start',
     links: [
-      { title: 'Introduction', href: '/' },
-      { title: 'Installation', href: '/docs/installation' },
-      { title: 'Your first actor', href: '/docs/your-first-actor' },
-      { title: 'Project structure', href: '/docs/project-structure' },
+      { title: 'Installation', href: '/docs/quick-start/installation' },
+      { title: 'Your first actor', href: '/docs/quick-start/your-first-actor' },
+      { title: 'Sending messages', href: '/docs/quick-start/sending-messages' },
+      { title: 'Next steps', href: '/docs/quick-start/next-steps' },
     ],
   },
   {
-    title: 'Understanding Actors',
+    title: 'Core Concepts',
     links: [
-      { title: 'Actors & state', href: '/docs/actors-and-state' },
-      { title: 'Messages & handlers', href: '/docs/messages-and-handlers' },
-      { title: 'Actor lifecycle', href: '/docs/actor-lifecycle' },
+      { title: 'What are actors?', href: '/docs/core-concepts/what-are-actors' },
+      { title: 'Messages & handlers', href: '/docs/core-concepts/messages-and-handlers' },
+      { title: 'The actor system', href: '/docs/core-concepts/the-actor-system' },
+      { title: 'Supervision basics', href: '/docs/core-concepts/supervision-basics' },
     ],
   },
   {
-    title: 'Message Patterns',
+    title: 'Building Apps',
     links: [
-      { title: 'Handler types', href: '/docs/handler-types' },
-      { title: 'Replies & context', href: '/docs/replies-and-context' },
-      { title: 'Error handling', href: '/docs/error-handling' },
-      { title: 'Request-response', href: '/docs/request-response' },
+      { title: 'Parent-child actors', href: '/docs/building-apps/parent-child-actors' },
+      { title: 'Request-response', href: '/docs/building-apps/request-response' },
+      { title: 'Error handling', href: '/docs/building-apps/error-handling' },
+      { title: 'Testing actors', href: '/docs/building-apps/testing-actors' },
     ],
   },
   {
-    title: 'Building Systems',
+    title: 'Advanced',
     links: [
-      { title: 'Supervision & children', href: '/docs/supervision' },
-      { title: 'Pub/Sub broadcasting', href: '/docs/pub-sub' },
-    ],
-  },
-  {
-    title: 'IPC Communication',
-    links: [
-      { title: 'IPC setup', href: '/docs/ipc-setup' },
-      { title: 'IPC protocol', href: '/docs/ipc-protocol' },
-      { title: 'IPC patterns', href: '/docs/ipc-patterns' },
-    ],
-  },
-  {
-    title: 'Testing',
-    links: [
-      { title: 'Testing basics', href: '/docs/testing-basics' },
-      { title: 'Testing patterns', href: '/docs/testing-patterns' },
-      { title: 'Testing integration', href: '/docs/testing-integration' },
-    ],
-  },
-  {
-    title: 'Guides',
-    links: [
-      { title: 'Configuration', href: '/docs/configuration' },
-      { title: 'Examples', href: '/docs/examples' },
+      { title: 'Inter-process communication', href: '/docs/advanced/ipc' },
+      { title: 'Custom supervision', href: '/docs/advanced/custom-supervision' },
+      { title: 'Performance', href: '/docs/advanced/performance' },
+      { title: 'Integration', href: '/docs/advanced/integration' },
     ],
   },
   {
     title: 'Reference',
     links: [
-      { title: 'API reference', href: '/docs/api-reference' },
-      { title: 'Troubleshooting', href: '/docs/troubleshooting' },
-      { title: 'FAQ', href: '/docs/faq' },
+      { title: 'API overview', href: '/docs/reference/api-overview' },
+      { title: 'Cheatsheet', href: '/docs/reference/cheatsheet' },
+      { title: 'Troubleshooting', href: '/docs/reference/troubleshooting' },
+      { title: 'Migration guide', href: '/docs/reference/migration-guide' },
     ],
   },
 ]
