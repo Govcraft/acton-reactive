@@ -27,7 +27,7 @@ use std::time::Duration;
 use acton_ern::prelude::*;
 use dashmap::DashMap;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
@@ -50,7 +50,7 @@ use crate::message::MessageAddress;
 use crate::traits::{ActonMessage, ActorHandleInterface};
 
 /// Statistics for the IPC listener.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IpcListenerStats {
     /// Total connections accepted.
     pub connections_accepted: AtomicUsize,
@@ -74,6 +74,28 @@ pub struct IpcListenerStats {
     pub subscriptions_processed: AtomicUsize,
     /// Total push notifications sent to IPC clients.
     pub push_notifications_sent: AtomicUsize,
+    /// Notifier for when all in-flight requests have drained.
+    /// This is signaled when `in_flight_requests` reaches zero after being non-zero.
+    drain_complete: Notify,
+}
+
+impl Default for IpcListenerStats {
+    fn default() -> Self {
+        Self {
+            connections_accepted: AtomicUsize::new(0),
+            connections_active: AtomicUsize::new(0),
+            messages_received: AtomicUsize::new(0),
+            messages_routed: AtomicUsize::new(0),
+            errors: AtomicUsize::new(0),
+            rate_limited: AtomicUsize::new(0),
+            backpressure_rejections: AtomicUsize::new(0),
+            shutdown_rejections: AtomicUsize::new(0),
+            in_flight_requests: AtomicUsize::new(0),
+            subscriptions_processed: AtomicUsize::new(0),
+            push_notifications_sent: AtomicUsize::new(0),
+            drain_complete: Notify::new(),
+        }
+    }
 }
 
 /// Shutdown state for graceful shutdown coordination.
@@ -197,8 +219,51 @@ impl IpcListenerStats {
     }
 
     /// Decrement the in-flight request counter.
+    ///
+    /// If the counter reaches zero, this notifies all waiters that the
+    /// drain is complete. This enables efficient notification-based waiting
+    /// instead of polling during graceful shutdown.
     fn decrement_in_flight(&self) {
-        self.in_flight_requests.fetch_sub(1, Ordering::SeqCst);
+        let prev = self.in_flight_requests.fetch_sub(1, Ordering::SeqCst);
+        // If we just decremented from 1 to 0, notify waiters
+        if prev == 1 {
+            self.drain_complete.notify_waiters();
+        }
+    }
+
+    /// Wait until all in-flight requests have completed.
+    ///
+    /// This is more efficient than polling as it uses `tokio::sync::Notify`
+    /// to wake up immediately when the last request completes.
+    ///
+    /// Returns immediately if there are no in-flight requests.
+    pub async fn wait_for_drain(&self) {
+        // Fast path: if already drained, return immediately
+        if self.in_flight_requests() == 0 {
+            return;
+        }
+
+        // Wait for notification that drain is complete.
+        // We loop because we might get spurious wakeups or race conditions
+        // where a new request starts after we checked but before we wait.
+        loop {
+            // Set up the notification before checking the count to avoid
+            // the race where count goes to zero between check and wait
+            let notified = self.drain_complete.notified();
+
+            // Check again after setting up notification
+            if self.in_flight_requests() == 0 {
+                return;
+            }
+
+            // Wait for notification
+            notified.await;
+
+            // Re-check after waking up (handles spurious wakeups and races)
+            if self.in_flight_requests() == 0 {
+                return;
+            }
+        }
     }
 }
 
@@ -327,13 +392,8 @@ impl IpcListenerHandle {
         }
 
         // Wait for in-flight requests to complete (with timeout)
-        let drain_result = tokio::time::timeout(drain_timeout, async {
-            // Poll until all in-flight requests complete
-            while self.stats.in_flight_requests() > 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
+        // Uses Notify-based signaling for efficient wake-up instead of polling
+        let drain_result = tokio::time::timeout(drain_timeout, self.stats.wait_for_drain()).await;
 
         let drained_gracefully = drain_result.is_ok();
         let remaining = self.stats.in_flight_requests();
