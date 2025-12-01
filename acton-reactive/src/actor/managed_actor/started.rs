@@ -23,7 +23,7 @@ use tracing::{instrument, trace}; // Removed unused error import
 
 use crate::actor::ManagedActor;
 use crate::common::config::CONFIG;
-use crate::common::{Envelope, OutboundEnvelope, ReactorItem, ReactorMap};
+use crate::common::{Envelope, FutureBoxReadOnly, OutboundEnvelope, ReactorItem, ReactorMap};
 use crate::message::{BrokerRequestEnvelope, MessageAddress, SystemSignal};
 use crate::traits::ActorHandleInterface;
 
@@ -123,24 +123,26 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         }
     }
 
-    /// Spawns a read-only handler as a concurrent task
-    fn spawn_read_only_handler(
+    /// Enqueues a read-only handler as a future for concurrent execution.
+    ///
+    /// Instead of spawning a separate task for each handler, this pushes the future
+    /// directly to `FuturesUnordered` for more efficient execution of lightweight handlers.
+    /// This avoids the overhead of task creation and `JoinHandle` management.
+    fn enqueue_read_only_handler(
         &self,
         reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
-        read_only_futures: &FuturesUnordered<tokio::task::JoinHandle<()>>,
+        read_only_futures: &FuturesUnordered<FutureBoxReadOnly>,
     ) {
         match reactor {
             ReactorItem::ReadOnly(fut) => {
-                let fut = fut(self, envelope);
-                read_only_futures.push(tokio::spawn(async move {
-                    fut.await;
-                }));
+                read_only_futures.push(fut(self, envelope));
             }
             ReactorItem::ReadOnlyFallible(fut) => {
-                let fut = fut(self, envelope);
-                read_only_futures.push(tokio::spawn(async move {
-                    if let Err((err, _)) = fut.await {
+                let future = fut(self, envelope);
+                // Wrap fallible handler to log errors and normalize to `()`
+                read_only_futures.push(Box::pin(async move {
+                    if let Err((err, _)) = future.await {
                         tracing::error!(
                             "Unhandled error from read-only message handler: {:?}",
                             err
@@ -170,7 +172,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let cancel_token = self.cancellation_token.clone().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
 
-        let mut read_only_futures = FuturesUnordered::new();
+        let mut read_only_futures: FuturesUnordered<FutureBoxReadOnly> = FuturesUnordered::new();
         let high_water_mark = CONFIG.limits.concurrent_handlers_high_water_mark;
         let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
         let mut last_flush_time = Instant::now();
@@ -211,7 +213,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                         last_flush_time = Instant::now();
                         self.dispatch_mutable_handler(reactor.value(), &mut envelope).await;
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
-                        self.spawn_read_only_handler(reactor.value(), &mut envelope, &read_only_futures);
+                        self.enqueue_read_only_handler(reactor.value(), &mut envelope, &read_only_futures);
                         if read_only_futures.len() >= high_water_mark {
                             while read_only_futures.next().await.is_some() {}
                             last_flush_time = Instant::now();
