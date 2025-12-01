@@ -54,11 +54,12 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
     ///   If `None`, the envelope is created without a specific recipient.
     fn create_envelope(&self, recipient_address: Option<MessageAddress>) -> OutboundEnvelope;
 
-    /// Returns a clone of the map containing handles to the actor's direct children.
+    /// Returns a reference to the map containing handles to the actor's direct children.
     ///
-    /// Provides a snapshot of the currently supervised children. Modifications to the
-    /// returned map do not affect the actor's actual children list.
-    fn children(&self) -> DashMap<String, ActorHandle>;
+    /// Provides read-only access to the currently supervised children. Use methods like
+    /// `.len()`, `.iter()`, `.get()`, or `.contains_key()` to query children without
+    /// incurring the cost of cloning the entire map.
+    fn children(&self) -> &DashMap<String, ActorHandle>;
 
     /// Attempts to find a direct child actor supervised by this actor, identified by its `Ern`.
     ///

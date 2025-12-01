@@ -223,13 +223,14 @@ impl ActorHandleInterface for ActorHandle {
         }
     }
 
-    /// Returns a clone of the internal map containing handles to the actor's direct children.
+    /// Returns a reference to the internal map containing handles to the actor's direct children.
     ///
-    /// Provides a snapshot of the currently supervised children. Modifications to the
-    /// returned map will not affect the actor's actual children list.
+    /// Provides read-only access to the currently supervised children. Use methods like
+    /// `.len()`, `.iter()`, `.get()`, or `.contains_key()` to query children without
+    /// incurring the cost of cloning the entire map.
     #[inline]
-    fn children(&self) -> DashMap<String, ActorHandle> {
-        self.children.clone()
+    fn children(&self) -> &DashMap<String, ActorHandle> {
+        &self.children
     }
 
     /// Searches for a direct child actor by its unique identifier (`Ern`).
