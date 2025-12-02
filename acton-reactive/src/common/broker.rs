@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use acton_ern::Ern;
 use dashmap::DashMap;
-use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::{instrument, trace};
 
 use crate::actor::{ActorConfig, Idle, ManagedActor};
@@ -175,8 +175,14 @@ impl Broker {
     /// Broadcasts a message contained within a [`BrokerRequest`] to all relevant subscribers.
     ///
     /// This static method performs the core broadcast logic. It looks up the message type's `TypeId`
-    /// in the provided `subscribers` map and asynchronously sends a [`BrokerRequestEnvelope`]
-    /// containing the original message payload to each registered subscriber's handle.
+    /// in the provided `subscribers` map and sends a [`BrokerRequestEnvelope`] containing the
+    /// original message payload to each registered subscriber's handle in parallel.
+    ///
+    /// # Performance
+    ///
+    /// This method uses `FuturesUnordered` to execute send operations in parallel rather than
+    /// sequentially. The envelope is created once and cloned (cheaply via `Arc`) for each
+    /// subscriber, reducing allocation overhead for high subscriber counts.
     ///
     /// # Arguments
     ///
@@ -195,21 +201,30 @@ impl Broker {
             let num_subscribers = subscribers_set.len();
             trace!(count = num_subscribers, message_type = ?message_type_id, "Found subscribers");
 
-            // Create futures to send the message to each subscriber concurrently.
-            let send_futures = subscribers_set.value().iter().map(|(_, subscriber_handle)| {
-                let handle = subscriber_handle.clone();
-                // Wrap the original message payload in a BrokerRequestEnvelope for sending.
-                let envelope_to_send: BrokerRequestEnvelope = request.clone().into();
-                async move {
-                    trace!(subscriber = %handle.id(), message_type = ?message_type_id, "Sending broadcast");
-                    // Send the envelope to the subscriber's handle.
-                    // Ignore potential send errors (e.g., closed channel).
-                    let () = handle.send(envelope_to_send).await;
-                }
-            });
+            // Create the envelope once and share it across all subscribers.
+            // BrokerRequestEnvelope contains Arc<dyn ActonMessage>, so cloning is cheap.
+            let shared_envelope: BrokerRequestEnvelope = request.into();
 
-            // Wait for all send operations to complete.
-            join_all(send_futures).await;
+            // Use FuturesUnordered to execute sends in parallel rather than sequentially.
+            // This allows the Tokio runtime to poll all futures concurrently.
+            let mut futures: FuturesUnordered<_> = subscribers_set
+                .value()
+                .iter()
+                .map(|(_, subscriber_handle)| {
+                    let handle = subscriber_handle.clone();
+                    let envelope_to_send = shared_envelope.clone();
+                    async move {
+                        trace!(subscriber = %handle.id(), message_type = ?message_type_id, "Sending broadcast");
+                        // Send the envelope to the subscriber's handle.
+                        // Ignore potential send errors (e.g., closed channel).
+                        handle.send(envelope_to_send).await;
+                    }
+                })
+                .collect();
+
+            // Drive all futures to completion in parallel.
+            while futures.next().await.is_some() {}
+
             trace!(count = num_subscribers, message_type = ?message_type_id, "Broadcast sends completed");
         } else {
             trace!(message_type = ?message_type_id, "No subscribers found for message type");
