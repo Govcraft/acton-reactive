@@ -1,198 +1,220 @@
 ---
 title: Sending Messages
-description: Learn how actors communicate - fire-and-forget with send, request-response with ask.
+description: Learn how actors communicate — fire-and-forget with send, request-response with reply envelopes.
 ---
 
-Actors communicate exclusively through messages. No shared memory, no direct function calls - just messages. This is what makes concurrent programming so much simpler with actors.
+Actors communicate exclusively through messages. No shared memory, no direct function calls — just messages. This constraint is what makes concurrent programming simpler with actors.
 
-You'll learn the two ways to send messages: **send** (fire and forget) and **ask** (request and response).
-
-## Two Ways to Communicate
-
-| Method | Use When | Returns | Waits? |
-|--------|----------|---------|--------|
-| `send` | You don't need a response | Nothing | No |
-| `ask` | You need data back | A value | Yes |
-
----
-
-## Send: Fire and Forget
+## Fire-and-Forget with Send
 
 You've already used `send` in the previous example:
 
 ```rust
-counter.send(Increment).await;
+handle.send(Increment).await;
 ```
 
 `send` delivers the message to the actor's mailbox and returns immediately. You're saying: "Here's a message. Handle it when you can. I don't need to know what happens."
 
 ### When to Use Send
 
-- You're triggering an action that doesn't return data
-- You want maximum throughput
-- You're doing "fire and forget" operations
+- Triggering actions that don't return data
+- Maximum throughput scenarios
+- Fire-and-forget operations
 
 ---
 
-## Ask: Request and Response
+## Request-Response with Reply Envelopes
 
-Sometimes you need data back from an actor. That's what `ask` is for.
+Sometimes you need data back from an actor. Acton Reactive uses the **reply envelope pattern** — the sender provides a return address, and the receiver sends a response back to it.
 
-Let's extend our counter to support queries:
+This pattern requires two actors: one that sends a request and one that responds.
+
+### A Complete Example
 
 ```rust
 use acton_reactive::prelude::*;
 
+// The service actor that responds to queries
 #[acton_actor]
 struct Counter {
     count: i32,
 }
 
+// The client actor that requests data
+#[acton_actor]
+#[derive(Default)]
+struct Client {
+    counter: Option<ActorHandle>,
+}
+
+// Messages
 #[acton_message]
 struct Increment;
 
 #[acton_message]
 struct GetCount;
 
+#[acton_message]
+struct CountResponse(i32);
+
+#[acton_message]
+struct RequestCount;
+
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
-    let mut builder = app.new_actor::<Counter>();
+    let mut runtime = ActonApp::launch_async().await;
 
-    builder
-        .mutate_on::<Increment>(|actor, _msg| {
+    // Create the counter service
+    let mut counter = runtime.new_actor::<Counter>();
+
+    counter
+        .mutate_on::<Increment>(|actor, _envelope| {
             actor.model.count += 1;
             Reply::ready()
         })
-        .act_on::<GetCount>(|actor, _msg| {
-            Reply::with(actor.model.count)
+        .act_on::<GetCount>(|actor, envelope| {
+            let count = actor.model.count;
+            let reply_envelope = envelope.reply_envelope();
+
+            Reply::pending(async move {
+                reply_envelope.send(CountResponse(count)).await;
+            })
         });
 
-    let counter = builder.start().await;
+    let counter_handle = counter.start().await;
 
-    // Send some increments (fire and forget)
-    counter.send(Increment).await;
-    counter.send(Increment).await;
-    counter.send(Increment).await;
+    // Create the client that will request data
+    let mut client = runtime.new_actor::<Client>();
+    client.model.counter = Some(counter_handle.clone());
 
-    // Ask for the current count (wait for response)
-    let result: i32 = counter.ask(GetCount).await;
-    println!("The count is: {}", result);
+    client
+        .mutate_on::<RequestCount>(|actor, envelope| {
+            let counter = actor.model.counter.clone().unwrap();
+            let request_envelope = envelope.new_envelope(&counter.reply_address());
 
-    app.shutdown_all().await.ok();
+            Reply::pending(async move {
+                request_envelope.send(GetCount).await;
+            })
+        })
+        .act_on::<CountResponse>(|_actor, envelope| {
+            let count = envelope.message().0;
+            println!("Received count: {}", count);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Increment the counter a few times
+    counter_handle.send(Increment).await;
+    counter_handle.send(Increment).await;
+    counter_handle.send(Increment).await;
+
+    // Ask for the count via the client
+    client_handle.send(RequestCount).await;
+
+    // Give time for async messages to process
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    runtime.shutdown_all().await.ok();
 }
 ```
 
 Output:
 
 ```
-The count is: 3
+Received count: 3
 ```
 
-### How Ask Works
+### Understanding the Pattern
+
+The key insight is that every message arrives in an **envelope** that knows where it came from:
 
 ```rust
-let result: i32 = counter.ask(GetCount).await;
-```
+.act_on::<GetCount>(|actor, envelope| {
+    let count = actor.model.count;
+    let reply_envelope = envelope.reply_envelope();
 
-`ask` does three things:
-
-1. Sends the message to the actor
-2. Waits for the actor to process it
-3. Returns the response
-
-### Returning Values with Reply::with
-
-In the handler:
-
-```rust
-.act_on::<GetCount>(|actor, _msg| {
-    Reply::with(actor.model.count)
+    Reply::pending(async move {
+        reply_envelope.send(CountResponse(count)).await;
+    })
 })
 ```
 
-`Reply::with(value)` wraps your return value. The type is inferred from how you use the result.
+1. **`envelope.reply_envelope()`** — Creates a new envelope addressed back to whoever sent this message
+2. **`Reply::pending(async move { ... })`** — Returns a future that sends the response asynchronously
+3. **`reply_envelope.send(CountResponse(count)).await`** — Sends the response back to the sender
 
-### When to Use Ask
+### Accessing Message Data
 
-- You need data back from the actor
-- You need to wait for an operation to complete
-- You're implementing request/response patterns
-
----
-
-## Complete Example: Task Manager
-
-Here's a more complete example showing both patterns:
+When your message contains data, access it through the envelope:
 
 ```rust
-use acton_reactive::prelude::*;
-
-#[acton_actor]
-#[derive(Default)]
-struct TaskManager {
-    tasks: Vec<String>,
-}
-
 #[acton_message]
-struct AddTask {
-    description: String,
+struct IncrementBy {
+    amount: i32,
 }
 
-#[acton_message]
-struct GetTaskCount;
-
-#[acton_main]
-async fn main() {
-    let mut app = ActonApp::launch();
-    let mut builder = app.new_actor::<TaskManager>();
-
-    builder
-        .mutate_on::<AddTask>(|actor, msg| {
-            actor.model.tasks.push(msg.description.clone());
-            println!("Added: {}", msg.description);
-            Reply::ready()
-        })
-        .act_on::<GetTaskCount>(|actor, _msg| {
-            Reply::with(actor.model.tasks.len())
-        });
-
-    let manager = builder.start().await;
-
-    // Add tasks (fire and forget)
-    manager.send(AddTask { description: "Learn Acton".into() }).await;
-    manager.send(AddTask { description: "Build something cool".into() }).await;
-
-    // Query the count (we need this data)
-    let count: usize = manager.ask(GetTaskCount).await;
-    println!("You have {} tasks", count);
-
-    app.shutdown_all().await.ok();
-}
+// In handler:
+.mutate_on::<IncrementBy>(|actor, envelope| {
+    let amount = envelope.message().amount;
+    actor.model.count += amount;
+    Reply::ready()
+})
 ```
 
-Output:
-
-```
-Added: Learn Acton
-Added: Build something cool
-You have 2 tasks
-```
+Use `envelope.message()` to get a reference to the message.
 
 ---
 
-## Choosing Between Send and Ask
+## Reply Types
 
-**Use `send` by default.** It's faster and keeps your code non-blocking.
+### Reply::ready()
 
-**Use `ask` when you genuinely need the response** before you can proceed.
+Use when processing completes synchronously:
+
+```rust
+.mutate_on::<Increment>(|actor, _envelope| {
+    actor.model.count += 1;
+    Reply::ready()
+})
+```
+
+### Reply::pending(future)
+
+Use when you need to do async work:
+
+```rust
+.act_on::<GetCount>(|actor, envelope| {
+    let count = actor.model.count;
+    let reply_envelope = envelope.reply_envelope();
+
+    Reply::pending(async move {
+        // Async work here
+        reply_envelope.send(CountResponse(count)).await;
+    })
+})
+```
+
+The future runs to completion before the next `mutate_on` message is processed.
+
+---
+
+## Choosing Your Pattern
+
+**Use `send` (fire-and-forget) when:**
+- You don't need a response
+- You want maximum throughput
+- The operation is one-way
+
+**Use reply envelopes when:**
+- You need data back from another actor
+- You're building request-response services
+- Actors need to coordinate their work
 
 {% callout title="A Mental Model" %}
-Think of `send` like dropping a letter in a mailbox - you walk away immediately.
+Think of `send` like dropping a letter in a mailbox — you walk away immediately.
 
-Think of `ask` like a phone call - you wait on the line for an answer.
-
-Both are useful. Choose based on whether you need that answer.
+Think of reply envelopes like including a self-addressed stamped envelope with your letter — you're asking for a response to be sent back to you.
 {% /callout %}
 
 ---
@@ -200,9 +222,10 @@ Both are useful. Choose based on whether you need that answer.
 ## What You've Learned
 
 - **`send`** queues a message and returns immediately
-- **`ask`** sends a message and waits for a response
-- Use `Reply::ready()` when no response is needed
-- Use `Reply::with(value)` to return data from a handler
+- **`envelope.message()`** accesses the message data in a handler
+- **`envelope.reply_envelope()`** creates an envelope addressed back to the sender
+- **`Reply::ready()`** signals synchronous completion
+- **`Reply::pending(future)`** handles async operations
 
 ---
 
@@ -210,4 +233,4 @@ Both are useful. Choose based on whether you need that answer.
 
 You now know the fundamentals: creating actors, defining messages, and communication patterns.
 
-[Next Steps](/docs/quick-start/next-steps) - Where to go from here.
+[Next Steps](/docs/quick-start/next-steps) — Where to go from here.
