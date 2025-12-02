@@ -118,7 +118,7 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             concurrent_handlers_high_water_mark: 100,
-            actor_inbox_capacity: 255,
+            actor_inbox_capacity: 512,
             dummy_channel_size: 1,
         }
     }
