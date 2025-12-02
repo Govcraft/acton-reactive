@@ -1,33 +1,34 @@
 ---
 title: Request-Response
-description: Using ask for complex communication patterns.
+description: Using reply envelopes for request-response communication patterns.
 ---
 
-While `send` is great for fire-and-forget, many scenarios require waiting for a response. The `ask` pattern enables request-response communication.
+While `send` is great for fire-and-forget, many scenarios require getting data back from an actor. Acton uses the **reply envelope pattern** for request-response communication.
 
-## Basic Ask Pattern
+## The Reply Envelope Pattern
+
+Every message arrives in an envelope that knows where it came from. Use `envelope.reply_envelope()` to send a response back:
 
 ```rust
-// Send and wait for response
-let count: i32 = counter.ask(GetCount).await;
+// Actor that responds to queries
+builder.act_on::<GetCount>(|actor, envelope| {
+    let count = actor.model.count;
+    let reply_envelope = envelope.reply_envelope();
+
+    Reply::pending(async move {
+        reply_envelope.send(CountResponse(count)).await;
+    })
+});
 ```
 
-The caller blocks until the actor processes the message and returns a value.
-
----
-
-## Returning Values
-
-Use `Reply::with()` to return data:
+The sender must have a handler for the response message:
 
 ```rust
-builder.act_on::<GetCount>(|actor, _msg| {
-    Reply::with(actor.model.count)
-});
-
-builder.act_on::<GetUser>(|actor, msg| {
-    let user = actor.model.users.get(&msg.id).cloned();
-    Reply::with(user)  // Returns Option<User>
+// Requesting actor handles the response
+requester.mutate_on::<CountResponse>(|actor, envelope| {
+    let count = envelope.message().0;
+    println!("Received count: {}", count);
+    Reply::ready()
 });
 ```
 
@@ -45,87 +46,133 @@ struct KVStore {
     data: HashMap<String, String>,
 }
 
+#[acton_actor]
+#[derive(Default)]
+struct Client;
+
 #[acton_message]
 struct Set { key: String, value: String }
 
 #[acton_message]
 struct Get { key: String }
 
+#[acton_message]
+struct GetResponse(Option<String>);
+
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
-    let mut builder = app.new_actor::<KVStore>();
+    let mut runtime = ActonApp::launch_async().await;
 
-    builder
-        .mutate_on::<Set>(|actor, msg| {
+    // Create the store
+    let mut store = runtime.new_actor::<KVStore>();
+
+    store
+        .mutate_on::<Set>(|actor, envelope| {
+            let msg = envelope.message();
             actor.model.data.insert(msg.key.clone(), msg.value.clone());
             Reply::ready()
         })
-        .act_on::<Get>(|actor, msg| {
-            let value = actor.model.data.get(&msg.key).cloned();
-            Reply::with(value)
+        .act_on::<Get>(|actor, envelope| {
+            let key = &envelope.message().key;
+            let value = actor.model.data.get(key).cloned();
+            let reply_envelope = envelope.reply_envelope();
+
+            Reply::pending(async move {
+                reply_envelope.send(GetResponse(value)).await;
+            })
         });
 
-    let store = builder.start().await;
+    let store_handle = store.start().await;
 
-    store.send(Set {
+    // Create a client that queries the store
+    let mut client = runtime.new_actor::<Client>();
+
+    client.mutate_on::<GetResponse>(|_actor, envelope| {
+        let value = &envelope.message().0;
+        println!("Got: {:?}", value);
+        Reply::ready()
+    });
+
+    let client_handle = client.start().await;
+
+    // Store some data
+    store_handle.send(Set {
         key: "name".into(),
         value: "Acton".into()
     }).await;
 
-    let value: Option<String> = store.ask(Get { key: "name".into() }).await;
-    println!("Got: {:?}", value);  // Got: Some("Acton")
+    // Query using an envelope addressed to the store, with reply going to client
+    let query_envelope = client_handle.create_envelope(
+        Some(store_handle.reply_address())
+    );
+    query_envelope.send(Get { key: "name".into() }).await;
 
-    app.shutdown_all().await.ok();
+    // Give time for async processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    runtime.shutdown_all().await.ok();
 }
+```
+
+Output:
+
+```
+Got: Some("Acton")
 ```
 
 ---
 
-## When to Use Ask vs Send
+## When to Use Each Pattern
 
-| Use `send` | Use `ask` |
-|-----------|-----------|
+| Use `send` (fire-and-forget) | Use reply envelopes |
+|------------------------------|---------------------|
 | Commands (do something) | Queries (get something) |
-| Notifications | Confirmations |
-| High throughput needed | Response required to continue |
+| Notifications | Data requests |
+| High throughput needed | Coordination required |
 | Don't care about result | Need the result |
 
-{% callout type="note" title="Performance Consideration" %}
-`ask` blocks the caller until the response arrives. If you don't need the response, use `send` for better throughput.
+{% callout type="note" title="Fire-and-Forget Default" %}
+`send` is Acton's primary pattern. Use reply envelopes when you specifically need response data. This keeps your system decoupled and performant.
 {% /callout %}
 
 ---
 
-## Chaining Requests
+## Handling Missing Data
 
-Sometimes you need data from multiple actors:
+Return meaningful responses when data might not exist:
 
 ```rust
-// Sequential
-let user: User = user_store.ask(GetUser { id }).await;
-let orders: Vec<Order> = order_store.ask(GetOrders { user_id: id }).await;
+builder.act_on::<FindUser>(|actor, envelope| {
+    let user_id = &envelope.message().id;
+    let user = actor.model.users.get(user_id).cloned();
+    let reply_envelope = envelope.reply_envelope();
 
-// The second request uses data from the first
+    Reply::pending(async move {
+        match user {
+            Some(u) => reply_envelope.send(UserFound(u)).await,
+            None => reply_envelope.send(UserNotFound).await,
+        }
+    })
+});
 ```
 
----
-
-## Error Handling
-
-When an actor might fail to produce a value, return `Option` or `Result`:
+The requesting actor handles both cases:
 
 ```rust
-builder.act_on::<FindUser>(|actor, msg| {
-    match actor.model.users.get(&msg.id) {
-        Some(user) => Reply::with(Ok(user.clone())),
-        None => Reply::with(Err("User not found")),
-    }
-});
+requester
+    .mutate_on::<UserFound>(|_actor, envelope| {
+        let user = &envelope.message().0;
+        println!("Found user: {}", user.name);
+        Reply::ready()
+    })
+    .mutate_on::<UserNotFound>(|_actor, _envelope| {
+        println!("User not found");
+        Reply::ready()
+    });
 ```
 
 ---
 
 ## Next
 
-[Error Handling](/docs/building-apps/error-handling) - Building resilient systems
+[Error Handling](/docs/building-apps/error-handling) — Building resilient systems

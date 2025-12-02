@@ -10,8 +10,9 @@ Errors happen. Actor systems are designed to handle them gracefully through isol
 Handle expected errors within your handlers:
 
 ```rust
-builder.mutate_on::<ProcessOrder>(|actor, msg| {
-    match validate_order(&msg) {
+builder.mutate_on::<ProcessOrder>(|actor, envelope| {
+    let msg = envelope.message();
+    match validate_order(msg) {
         Ok(order) => {
             actor.model.orders.push(order);
             Reply::ready()
@@ -26,29 +27,55 @@ builder.mutate_on::<ProcessOrder>(|actor, msg| {
 
 ---
 
-## Returning Errors to Callers
+## Signaling Errors to Other Actors
 
-When using `ask`, return errors explicitly:
+When another actor needs to know about failures, send error response messages:
 
 ```rust
 #[acton_message]
 struct ProcessPayment { amount: u64 }
 
-builder.mutate_on::<ProcessPayment>(|actor, msg| {
+#[acton_message]
+struct PaymentSuccess { amount: u64 }
+
+#[acton_message]
+struct PaymentFailed { reason: String }
+
+builder.mutate_on::<ProcessPayment>(|actor, envelope| {
+    let msg = envelope.message();
+    let reply_envelope = envelope.reply_envelope();
+
     if msg.amount > actor.model.balance {
-        Reply::with(Err("Insufficient funds"))
+        Reply::pending(async move {
+            reply_envelope.send(PaymentFailed {
+                reason: "Insufficient funds".into()
+            }).await;
+        })
     } else {
         actor.model.balance -= msg.amount;
-        Reply::with(Ok(msg.amount))
+        Reply::pending(async move {
+            reply_envelope.send(PaymentSuccess {
+                amount: msg.amount
+            }).await;
+        })
     }
 });
+```
 
-// Caller handles the result
-let result: Result<u64, &str> = account.ask(ProcessPayment { amount: 100 }).await;
-match result {
-    Ok(amount) => println!("Processed ${}", amount),
-    Err(e) => println!("Failed: {}", e),
-}
+The requesting actor handles both outcomes:
+
+```rust
+requester
+    .mutate_on::<PaymentSuccess>(|_actor, envelope| {
+        let amount = envelope.message().amount;
+        println!("Processed ${}", amount);
+        Reply::ready()
+    })
+    .mutate_on::<PaymentFailed>(|_actor, envelope| {
+        let reason = &envelope.message().reason;
+        println!("Payment failed: {}", reason);
+        Reply::ready()
+    });
 ```
 
 ---
@@ -73,29 +100,30 @@ worker_3.send(SafeTask).await;  // Still works
 Don't retry configuration or startup errors:
 
 ```rust
-builder.after_start(|actor| async move {
+builder.before_start(|actor| async move {
     let config = load_config().expect("Config required");
-    actor.model.config = config;
+    // Store in actor state via initialization pattern
 });
 ```
 
 ### Graceful Degradation
 
-Handle missing actors:
+Log and continue when non-critical operations fail:
 
 ```rust
-match worker.send(Task).await {
-    Ok(_) => {},
-    Err(_) => {
-        tracing::warn!("Worker unavailable, queuing task");
-        queue.push(task);
+builder.mutate_on::<OptionalTask>(|actor, envelope| {
+    let msg = envelope.message();
+    match perform_optional_work(msg) {
+        Ok(_) => tracing::info!("Optional work completed"),
+        Err(e) => tracing::warn!("Optional work failed, continuing: {}", e),
     }
-}
+    Reply::ready()
+});
 ```
 
 ### Circuit Breaker
 
-Track failures and stop sending to failing actors:
+Track failures and stop sending to failing services:
 
 ```rust
 #[acton_actor]
@@ -104,22 +132,44 @@ struct Caller {
     circuit_open: bool,
 }
 
-builder.mutate_on::<CallService>(|actor, msg| {
+#[acton_message]
+struct CallService { data: String }
+
+#[acton_message]
+struct ServiceSuccess;
+
+#[acton_message]
+struct ServiceFailed { reason: String }
+
+builder.mutate_on::<CallService>(|actor, envelope| {
+    let reply_envelope = envelope.reply_envelope();
+
     if actor.model.circuit_open {
-        return Reply::with(Err("Circuit open"));
+        return Reply::pending(async move {
+            reply_envelope.send(ServiceFailed {
+                reason: "Circuit open".into()
+            }).await;
+        });
     }
 
+    let msg = envelope.message().clone();
     match call_external_service(&msg) {
-        Ok(result) => {
+        Ok(_) => {
             actor.model.failures = 0;
-            Reply::with(Ok(result))
+            Reply::pending(async move {
+                reply_envelope.send(ServiceSuccess).await;
+            })
         }
         Err(e) => {
             actor.model.failures += 1;
             if actor.model.failures >= 5 {
                 actor.model.circuit_open = true;
             }
-            Reply::with(Err(e))
+            Reply::pending(async move {
+                reply_envelope.send(ServiceFailed {
+                    reason: e.to_string()
+                }).await;
+            })
         }
     }
 });
@@ -132,17 +182,18 @@ builder.mutate_on::<CallService>(|actor, msg| {
 Always log before failures for debugging:
 
 ```rust
-builder.mutate_on::<RiskyOperation>(|actor, msg| {
+builder.mutate_on::<RiskyOperation>(|actor, envelope| {
+    let msg = envelope.message();
     tracing::info!(operation = %msg.id, "Starting risky operation");
 
-    match perform_operation(&msg) {
-        Ok(result) => {
+    match perform_operation(msg) {
+        Ok(_) => {
             tracing::info!(operation = %msg.id, "Operation succeeded");
-            Reply::with(Ok(result))
+            Reply::ready()
         }
         Err(e) => {
             tracing::error!(operation = %msg.id, error = %e, "Operation failed");
-            Reply::with(Err(e))
+            Reply::ready()
         }
     }
 });
@@ -152,8 +203,8 @@ builder.mutate_on::<RiskyOperation>(|actor, msg| {
 
 ## Summary
 
-- Handle expected errors in handlers
-- Return `Result` or `Option` from `ask` handlers
+- Handle expected errors within handlers
+- Send explicit success/failure response messages
 - Rely on actor isolation for fault tolerance
 - Log errors for debugging
 - Consider patterns like circuit breakers for external services
@@ -162,4 +213,4 @@ builder.mutate_on::<RiskyOperation>(|actor, msg| {
 
 ## Next
 
-[Testing Actors](/docs/building-apps/testing-actors) - Strategies for testing
+[Testing Actors](/docs/building-apps/testing-actors) — Strategies for testing

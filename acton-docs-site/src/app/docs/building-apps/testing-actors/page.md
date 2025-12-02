@@ -3,52 +3,105 @@ title: Testing Actors
 description: Strategies for testing actor-based code.
 ---
 
-Actors are inherently testable. Their message-based interface makes it clear what inputs you can send and what outputs to expect.
+Actors are inherently testable. Their message-based interface makes it clear what inputs you can send and what behaviors to verify.
 
 ## Basic Test Setup
 
-Each test creates its own `ActonApp`:
+Each test creates its own runtime:
 
 ```rust
 #[tokio::test]
 async fn test_counter_increments() {
-    let mut app = ActonApp::launch();
-    let mut builder = app.new_actor::<Counter>();
+    let mut runtime = ActonApp::launch_async().await;
+    let mut counter = runtime.new_actor::<Counter>();
 
-    builder
+    counter
         .mutate_on::<Increment>(handle_increment)
-        .act_on::<GetCount>(handle_get);
+        .act_on::<PrintCount>(handle_print);
 
-    let counter = builder.start().await;
+    let handle = counter.start().await;
 
-    counter.send(Increment).await;
-    counter.send(Increment).await;
+    handle.send(Increment).await;
+    handle.send(Increment).await;
+    handle.send(PrintCount).await;
 
-    let count: i32 = counter.ask(GetCount).await;
-    assert_eq!(count, 2);
+    // Give time for async processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-    app.shutdown_all().await.ok();
+    runtime.shutdown_all().await.ok();
 }
 ```
 
 ---
 
-## Testing State Changes
+## Testing with Response Actors
 
-Send messages, then query state:
+Create a "probe" actor to receive and verify responses:
 
 ```rust
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
+
+#[acton_actor]
+struct Probe {
+    received_count: Arc<AtomicI32>,
+}
+
+#[acton_message]
+struct CountResponse(i32);
+
 #[tokio::test]
-async fn test_add_item() {
-    let mut app = ActonApp::launch();
-    let store = setup_store(&mut app).await;
+async fn test_get_count() {
+    let mut runtime = ActonApp::launch_async().await;
 
-    store.send(AddItem { name: "widget".into() }).await;
+    // Create the actor under test
+    let mut counter = runtime.new_actor::<Counter>();
+    counter
+        .mutate_on::<Increment>(|actor, _env| {
+            actor.model.count += 1;
+            Reply::ready()
+        })
+        .act_on::<GetCount>(|actor, env| {
+            let count = actor.model.count;
+            let reply = env.reply_envelope();
+            Reply::pending(async move {
+                reply.send(CountResponse(count)).await;
+            })
+        });
 
-    let items: Vec<String> = store.ask(GetItems).await;
-    assert_eq!(items, vec!["widget"]);
+    let counter_handle = counter.start().await;
 
-    app.shutdown_all().await.ok();
+    // Create probe to receive response
+    let received = Arc::new(AtomicI32::new(-1));
+    let received_clone = received.clone();
+
+    let mut probe = runtime.new_actor::<Probe>();
+    probe.model.received_count = received_clone.clone();
+
+    probe.mutate_on::<CountResponse>(|actor, env| {
+        let count = env.message().0;
+        actor.model.received_count.store(count, Ordering::SeqCst);
+        Reply::ready()
+    });
+
+    let probe_handle = probe.start().await;
+
+    // Increment counter
+    counter_handle.send(Increment).await;
+    counter_handle.send(Increment).await;
+
+    // Query count with probe as recipient
+    let query = probe_handle.create_envelope(
+        Some(counter_handle.reply_address())
+    );
+    query.send(GetCount).await;
+
+    // Wait for response
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    assert_eq!(received.load(Ordering::SeqCst), 2);
+
+    runtime.shutdown_all().await.ok();
 }
 ```
 
@@ -61,39 +114,45 @@ Create multiple actors and test their interactions:
 ```rust
 #[tokio::test]
 async fn test_producer_consumer() {
-    let mut app = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
-    let consumer = setup_consumer(&mut app).await;
-    let producer = setup_producer(&mut app, consumer.clone()).await;
+    let received = Arc::new(AtomicUsize::new(0));
+    let received_clone = received.clone();
 
-    producer.send(Produce { count: 5 }).await;
+    // Consumer tracks received items
+    let mut consumer = runtime.new_actor::<Consumer>();
+    consumer.model.received = received_clone;
+    consumer.mutate_on::<Item>(|actor, _env| {
+        actor.model.received.fetch_add(1, Ordering::SeqCst);
+        Reply::ready()
+    });
 
-    // Give time for async processing
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let consumer_handle = consumer.start().await;
 
-    let received: usize = consumer.ask(GetReceived).await;
-    assert_eq!(received, 5);
+    // Producer sends to consumer
+    let mut producer = runtime.new_actor::<Producer>();
+    producer.model.consumer = Some(consumer_handle.clone());
+    producer.mutate_on::<Produce>(|actor, env| {
+        let count = env.message().count;
+        let consumer = actor.model.consumer.clone().unwrap();
 
-    app.shutdown_all().await.ok();
-}
-```
+        Reply::pending(async move {
+            for _ in 0..count {
+                consumer.send(Item).await;
+            }
+        })
+    });
 
----
+    let producer_handle = producer.start().await;
 
-## Testing Error Conditions
+    producer_handle.send(Produce { count: 5 }).await;
 
-```rust
-#[tokio::test]
-async fn test_insufficient_funds() {
-    let mut app = ActonApp::launch();
-    let account = setup_account(&mut app, 50).await;  // Starting balance: 50
+    // Wait for async processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    let result: Result<u64, &str> = account.ask(Withdraw { amount: 100 }).await;
+    assert_eq!(received.load(Ordering::SeqCst), 5);
 
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Insufficient funds");
-
-    app.shutdown_all().await.ok();
+    runtime.shutdown_all().await.ok();
 }
 ```
 
@@ -104,22 +163,65 @@ async fn test_insufficient_funds() {
 Create helper functions for common setup:
 
 ```rust
-async fn setup_counter(app: &mut ActonApp) -> AgentHandle {
-    let mut builder = app.new_actor::<Counter>();
-    builder
+async fn setup_counter(runtime: &mut ActorRuntime) -> ActorHandle {
+    let mut counter = runtime.new_actor::<Counter>();
+    counter
         .mutate_on::<Increment>(handle_increment)
         .act_on::<GetCount>(handle_get);
-    builder.start().await
+    counter.start().await
 }
 
 #[tokio::test]
 async fn test_with_helper() {
-    let mut app = ActonApp::launch();
-    let counter = setup_counter(&mut app).await;
+    let mut runtime = ActonApp::launch_async().await;
+    let counter = setup_counter(&mut runtime).await;
 
+    counter.send(Increment).await;
     // Test logic here
 
-    app.shutdown_all().await.ok();
+    runtime.shutdown_all().await.ok();
+}
+```
+
+---
+
+## Testing Pub/Sub
+
+Test broker-based messaging:
+
+```rust
+#[tokio::test]
+async fn test_broadcast() {
+    let mut runtime = ActonApp::launch_async().await;
+    let broker = runtime.broker();
+
+    let received = Arc::new(AtomicUsize::new(0));
+
+    // Create subscribers
+    for _ in 0..3 {
+        let received_clone = received.clone();
+        let mut subscriber = runtime.new_actor::<Subscriber>();
+        subscriber.model.counter = received_clone;
+
+        subscriber.mutate_on::<Event>(|actor, _env| {
+            actor.model.counter.fetch_add(1, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+        // Subscribe before starting
+        subscriber.handle().subscribe::<Event>().await;
+        subscriber.start().await;
+    }
+
+    // Broadcast event
+    broker.broadcast(Event).await;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // All 3 subscribers should have received the event
+    assert_eq!(received.load(Ordering::SeqCst), 3);
+
+    runtime.shutdown_all().await.ok();
 }
 ```
 
@@ -127,35 +229,38 @@ async fn test_with_helper() {
 
 ## Avoiding Flaky Tests
 
-### Don't rely on timing
+### Use atomic counters for verification
 
 ```rust
-// BAD: Flaky
-handle.send(Start).await;
-tokio::time::sleep(Duration::from_millis(100)).await;
-let result = check_result();
+// GOOD: Use atomics for cross-actor state verification
+let count = Arc::new(AtomicI32::new(0));
+// ... share with probe actor ...
+assert_eq!(count.load(Ordering::SeqCst), expected);
+```
 
-// GOOD: Use ask for synchronization
-handle.send(Start).await;
-let result: Result = handle.ask(GetResult).await;
+### Allow time for async processing
+
+```rust
+// Give messages time to be processed
+tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 ```
 
 ### Isolate each test
 
 ```rust
-// Each test gets its own ActonApp
+// Each test gets its own runtime
 #[tokio::test]
 async fn test_one() {
-    let mut app = ActonApp::launch();  // Isolated
+    let mut runtime = ActonApp::launch_async().await;  // Isolated
     // ...
-    app.shutdown_all().await.ok();
+    runtime.shutdown_all().await.ok();
 }
 
 #[tokio::test]
 async fn test_two() {
-    let mut app = ActonApp::launch();  // Isolated
+    let mut runtime = ActonApp::launch_async().await;  // Isolated
     // ...
-    app.shutdown_all().await.ok();
+    runtime.shutdown_all().await.ok();
 }
 ```
 
@@ -164,9 +269,10 @@ async fn test_two() {
 ## Summary
 
 - Use `#[tokio::test]` for async tests
-- Each test creates its own `ActonApp`
-- Use `ask` for synchronization instead of sleep
+- Each test creates its own `ActorRuntime`
+- Use probe actors with atomic counters to verify responses
 - Create helper functions for common setup
+- Allow time for async message processing
 - Clean up with `shutdown_all()`
 
 ---
