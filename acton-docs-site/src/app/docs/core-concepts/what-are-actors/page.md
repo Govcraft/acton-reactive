@@ -1,6 +1,6 @@
 ---
 title: What Are Actors?
-description: Understand the actor model - a simpler way to think about concurrent code.
+description: Understand the actor model — a simpler way to think about concurrent code.
 ---
 
 Actors are independent workers that communicate through messages. Instead of sharing memory and coordinating access with locks, each actor owns its data and interacts only by sending and receiving messages.
@@ -61,7 +61,7 @@ With actors, this complexity vanishes:
 
 ```rust
 // Actor model - messages processed one at a time
-builder.mutate_on::<Increment>(|actor, _msg| {
+counter.mutate_on::<Increment>(|actor, _envelope| {
     actor.model.count += 1;  // Always safe
     Reply::ready()
 });
@@ -78,8 +78,10 @@ Unlike operating system threads, actors are cheap. They're Rust structs with a m
 You can create thousands:
 
 ```rust
-for user_id in 0..10_000 {
-    app.spawn(UserSession::new(user_id)).await;
+for i in 0..10_000 {
+    let mut actor = runtime.new_actor_with_name::<Session>(format!("session-{}", i));
+    actor.mutate_on::<Request>(handle_request);
+    actor.start().await;
 }
 ```
 
@@ -90,24 +92,24 @@ for user_id in 0..10_000 {
 Each actor runs independently. If one encounters an error, others continue normally. The supervision system handles failures gracefully.
 
 This means:
-- **Failures are contained** - one broken actor doesn't crash your system
-- **State is protected** - no actor can corrupt another's data
-- **Testing is simpler** - test actors in isolation
+- **Failures are contained** — one broken actor doesn't crash your system
+- **State is protected** — no actor can corrupt another's data
+- **Testing is simpler** — test actors in isolation
 
 ---
 
 {% callout title="For Experienced Developers" %}
 If you've used Actix or other actor frameworks, Acton's approach will feel familiar with key differences:
 
-- **No async_trait boilerplate** - Handlers use `mutate_on` and `act_on` attributes
-- **Compile-time message routing** - The type system ensures valid message sends
-- **Tokio-native** - Built directly on Tokio, not a separate runtime
+- **No async_trait boilerplate** — Handlers use `mutate_on` and `act_on` methods
+- **Envelope-based messaging** — Handlers receive envelopes, not raw messages
+- **Tokio-native** — Built directly on Tokio, not a separate runtime
 
-The `mutate_on` vs `act_on` distinction is key - it determines sequential vs concurrent handler execution.
+The `mutate_on` vs `act_on` distinction is key — it determines sequential vs concurrent handler execution.
 {% /callout %}
 
 ---
 
 ## Next
 
-[Messages and Handlers](/docs/core-concepts/messages-and-handlers) - The crucial difference between `mutate_on` and `act_on`
+[Messages and Handlers](/docs/core-concepts/messages-and-handlers) — The crucial difference between `mutate_on` and `act_on`

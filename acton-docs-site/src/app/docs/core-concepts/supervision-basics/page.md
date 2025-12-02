@@ -7,7 +7,7 @@ When actors fail, supervision ensures your system keeps running. Instead of lett
 
 ## The Problem Supervision Solves
 
-In traditional programs, an unhandled error often crashes the whole process. With actors, failures are isolated - if one actor fails, others continue normally.
+In traditional programs, an unhandled error often crashes the whole process. With actors, failures are isolated — if one actor fails, others continue normally.
 
 Supervision adds organized recovery on top of this isolation.
 
@@ -15,17 +15,30 @@ Supervision adds organized recovery on top of this isolation.
 
 ## Parent-Child Relationships
 
-When one actor spawns another, they form a parent-child relationship:
+When one actor creates another, they form a parent-child relationship. The parent supervises its children.
+
+### Creating Child Actors
+
+Use `create_child()` to create a child actor, then `supervise()` to start and register it:
 
 ```rust
 // Inside a parent actor's handler
-let child = actor.spawn_child::<Worker>()
-    .mutate_on::<Task>(handle_task)
-    .start()
-    .await;
+let mut child = actor.create_child("worker".to_string())?;
+
+child.mutate_on::<Task>(|child_actor, envelope| {
+    // Handle task
+    Reply::ready()
+});
+
+// Start and register the child
+let child_handle = actor.handle().supervise(child).await?;
 ```
 
-When a child fails, the parent can decide what to do.
+The two-step process:
+1. **`create_child(name)`** — Creates a child actor builder with hierarchical naming
+2. **`supervise(child)`** — Starts the child and registers it under the parent
+
+Children inherit their parent's broker and have hierarchical identifiers (e.g., `parent/worker`).
 
 ---
 
@@ -33,7 +46,7 @@ When a child fails, the parent can decide what to do.
 
 1. **The actor stops** processing messages
 2. **The parent is notified**
-3. **A supervision strategy is applied**
+3. **Children are stopped** when their parent stops
 
 ---
 
@@ -59,7 +72,7 @@ Never rely on actor memory for data that must survive failures. Use:
 - Event sourcing for recovery
 - External state stores
 
-Supervision restarts actors fresh - any in-memory state is lost.
+Supervision restarts actors fresh — any in-memory state is lost.
 {% /callout %}
 
 ---
@@ -68,10 +81,11 @@ Supervision restarts actors fresh - any in-memory state is lost.
 
 ### Return Errors, Don't Panic
 
-Handlers should return `Result` for expected failures:
+Handlers should handle expected failures gracefully:
 
 ```rust
-builder.mutate_on::<ProcessOrder>(|actor, msg| {
+builder.mutate_on::<ProcessOrder>(|actor, envelope| {
+    let msg = envelope.message();
     match process(&msg) {
         Ok(_) => Reply::ready(),
         Err(e) => {
@@ -84,15 +98,15 @@ builder.mutate_on::<ProcessOrder>(|actor, msg| {
 
 ### Design for Restart
 
-Assume your actor might restart at any time. Keep minimal state - restore from external sources when needed.
+Assume your actor might restart at any time. Keep minimal state — restore from external sources when needed.
 
 ---
 
 ## Summary
 
-- Parent actors supervise children
+- Parent actors supervise children created with `create_child()` and `supervise()`
 - Failures are isolated to individual actors
-- Supervision strategies determine recovery behavior
+- Children stop when their parent stops
 - Critical state should be persisted externally
 
 ---

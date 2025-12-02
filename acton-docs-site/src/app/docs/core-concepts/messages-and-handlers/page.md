@@ -37,7 +37,8 @@ This is the most important concept in Acton.
 Use `mutate_on` when your handler needs to **modify the actor's state**:
 
 ```rust
-builder.mutate_on::<AddItem>(|actor, msg| {
+builder.mutate_on::<AddItem>(|actor, envelope| {
+    let msg = envelope.message();
     actor.model.items.push(msg.name.clone());
     actor.model.total += msg.quantity;
     Reply::ready()
@@ -46,7 +47,7 @@ builder.mutate_on::<AddItem>(|actor, msg| {
 
 Handlers with `mutate_on`:
 - Get `&mut` access to actor state
-- Run **sequentially** - only one runs at a time
+- Run **sequentially** — only one runs at a time
 - Are guaranteed no concurrent state modifications
 
 ### act_on: Concurrent Read-Only Operations
@@ -54,8 +55,13 @@ Handlers with `mutate_on`:
 Use `act_on` when your handler only needs to **read state**:
 
 ```rust
-builder.act_on::<GetTotal>(|actor, _msg| {
-    Reply::with(actor.model.total)
+builder.act_on::<GetTotal>(|actor, envelope| {
+    let total = actor.model.total;
+    let reply_envelope = envelope.reply_envelope();
+
+    Reply::pending(async move {
+        reply_envelope.send(TotalResponse(total)).await;
+    })
 });
 ```
 
@@ -70,13 +76,13 @@ Handlers with `act_on`:
 
 ```rust
 // WRONG: Using act_on when you need to mutate
-builder.act_on::<Increment>(|actor, _msg| {
+builder.act_on::<Increment>(|actor, _envelope| {
     actor.model.counter += 1;  // Compile error!
     Reply::ready()
 });
 
 // CORRECT: Use mutate_on for mutations
-builder.mutate_on::<Increment>(|actor, _msg| {
+builder.mutate_on::<Increment>(|actor, _envelope| {
     actor.model.counter += 1;  // Works
     Reply::ready()
 });
@@ -96,42 +102,60 @@ builder.mutate_on::<Increment>(|actor, _msg| {
 
 ---
 
+## Working with Message Data
+
+Handlers receive an **envelope**, not the raw message. Access the message through `envelope.message()`:
+
+```rust
+builder.mutate_on::<AddItem>(|actor, envelope| {
+    let msg = envelope.message();  // Get &AddItem
+    actor.model.items.push(msg.name.clone());
+    Reply::ready()
+});
+```
+
+For messages without data, you can ignore the envelope:
+
+```rust
+builder.mutate_on::<Increment>(|actor, _envelope| {
+    actor.model.count += 1;
+    Reply::ready()
+});
+```
+
+---
+
 ## Replying to Messages
 
 ### No Response Needed
 
 ```rust
-builder.mutate_on::<LogEvent>(|actor, msg| {
+builder.mutate_on::<LogEvent>(|actor, envelope| {
+    let msg = envelope.message();
     actor.model.events.push(msg.clone());
     Reply::ready()  // Done, no response
 });
 ```
 
-### Return a Value
+### Sending a Response
+
+Use the reply envelope pattern to send data back:
 
 ```rust
-builder.act_on::<GetCount>(|actor, _msg| {
-    Reply::with(actor.model.count)  // Return the value
+builder.act_on::<GetCount>(|actor, envelope| {
+    let count = actor.model.count;
+    let reply_envelope = envelope.reply_envelope();
+
+    Reply::pending(async move {
+        reply_envelope.send(CountResponse(count)).await;
+    })
 });
 ```
 
----
-
-## Type Safety
-
-If you try to send a message an actor doesn't handle, you get a compile error:
-
-```rust
-// If Counter only handles Increment and GetCount...
-counter.send(Reset).await;  // Compile error: no handler for Reset
-```
-
-This means:
-- **No runtime "message not handled" errors**
-- **Refactoring is safe** - change a message type and the compiler finds all uses
+The receiving actor must have a handler for `CountResponse`.
 
 ---
 
 ## Next
 
-[The Actor System](/docs/core-concepts/the-actor-system) - Managing actors with ActonApp
+[The Actor System](/docs/core-concepts/the-actor-system) — Managing actors with ActonApp

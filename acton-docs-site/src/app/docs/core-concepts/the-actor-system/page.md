@@ -1,41 +1,41 @@
 ---
 title: The Actor System
-description: How ActonApp manages your actors - spawning, handles, and the broker.
+description: How the runtime manages your actors — spawning, handles, and the broker.
 ---
 
-The `ActonApp` is the runtime that brings your actors to life. It spawns actors, manages their lifecycles, provides handles for communication, and coordinates shutdown.
+The actor runtime brings your actors to life. It spawns actors, manages their lifecycles, provides handles for communication, and coordinates shutdown.
 
-## Creating an ActonApp
+## Creating the Runtime
 
-Every Acton application starts by creating an app:
+Every Acton application starts by launching the runtime:
 
 ```rust
 use acton_reactive::prelude::*;
 
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
 
-    // Spawn actors, send messages...
+    // Create actors, send messages...
 
-    app.shutdown_all().await.ok();
+    runtime.shutdown_all().await.ok();
 }
 ```
 
 ---
 
-## Spawning Actors
+## Creating Actors
 
-Once you have an app, spawn actors:
+Once you have a runtime, create actors:
 
 ```rust
-let mut builder = app.new_actor::<Counter>();
+let mut counter = runtime.new_actor::<Counter>();
 
-builder
+counter
     .mutate_on::<Increment>(handle_increment)
     .act_on::<GetCount>(handle_get);
 
-let handle = builder.start().await;
+let handle = counter.start().await;
 ```
 
 The `start()` method:
@@ -44,6 +44,14 @@ The `start()` method:
 3. Starts it running on the async runtime
 4. Returns a handle for sending messages
 
+### Named Actors
+
+Give actors meaningful names for easier debugging:
+
+```rust
+let mut counter = runtime.new_actor_with_name::<Counter>("user-counter".to_string());
+```
+
 ---
 
 ## Working with Handles
@@ -51,13 +59,10 @@ The `start()` method:
 A handle is your interface to an actor:
 
 ```rust
-let handle = builder.start().await;
+let handle = counter.start().await;
 
 // Fire and forget
 handle.send(Increment).await;
-
-// Request-response
-let count: i32 = handle.ask(GetCount).await;
 ```
 
 Handles are cheap to clone:
@@ -73,11 +78,15 @@ let handle_for_background = handle.clone();
 
 Not all communication is point-to-point. The Broker provides publish/subscribe messaging.
 
+### Getting the Broker
+
+```rust
+let broker = runtime.broker();
+```
+
 ### Publishing Events
 
 ```rust
-let broker = app.get_broker();
-
 #[acton_message]
 struct UserLoggedIn { user_id: u64 }
 
@@ -86,20 +95,33 @@ broker.broadcast(UserLoggedIn { user_id: 123 }).await;
 
 ### Subscribing to Events
 
+Subscribe actors **before** starting them:
+
 ```rust
-handle.subscribe::<UserLoggedIn>().await;
+let mut listener = runtime.new_actor::<EventListener>();
+
+listener.mutate_on::<UserLoggedIn>(|actor, envelope| {
+    let msg = envelope.message();
+    println!("User {} logged in", msg.user_id);
+    Reply::ready()
+});
+
+// Subscribe before starting
+listener.handle().subscribe::<UserLoggedIn>().await;
+
+let handle = listener.start().await;
 ```
 
-Now the actor receives all `UserLoggedIn` events.
+Now the actor receives all `UserLoggedIn` events broadcast through the broker.
 
 {% callout type="note" title="Broker vs Direct Messaging" %}
 **Use handles when:**
 - You know exactly which actor should receive the message
-- You need a response
+- You're doing point-to-point communication
 
 **Use the broker when:**
 - Multiple actors should react to an event
-- The sender doesn't know who should receive it
+- The sender doesn't know (or care) who receives it
 {% /callout %}
 
 ---
@@ -109,7 +131,7 @@ Now the actor receives all `UserLoggedIn` events.
 Proper shutdown ensures messages aren't lost:
 
 ```rust
-app.shutdown_all().await.ok();
+runtime.shutdown_all().await.ok();
 ```
 
 For signal handling:
@@ -119,11 +141,11 @@ use tokio::signal;
 
 // Wait for Ctrl+C
 signal::ctrl_c().await.expect("Failed to listen");
-app.shutdown_all().await.ok();
+runtime.shutdown_all().await.ok();
 ```
 
 ---
 
 ## Next
 
-[Supervision Basics](/docs/core-concepts/supervision-basics) - Handling failures gracefully
+[Supervision Basics](/docs/core-concepts/supervision-basics) — Handling failures gracefully
