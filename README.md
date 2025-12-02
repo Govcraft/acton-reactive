@@ -1,245 +1,202 @@
-# Acton Reactive: Build Fast, Concurrent Rust Apps Easily
+# Acton Reactive
 
-Welcome to Acton Reactive! This framework helps you build fast, concurrent Rust applications without getting tangled in complex threading or locking code.
+[![Crates.io](https://img.shields.io/crates/v/acton-reactive.svg)](https://crates.io/crates/acton-reactive)
+[![Documentation](https://docs.rs/acton-reactive/badge.svg)](https://docs.rs/acton-reactive)
+[![License](https://img.shields.io/crates/l/acton-reactive.svg)](LICENSE-MIT)
 
-Think of your application's logic broken down into independent workers called **Actors**. Each actor manages its own state and communicates with others by sending **Messages**. Acton Reactive handles the tricky parts of making these actors run concurrently and talk to each other efficiently, letting you focus on your application's features. It's built on top of [Tokio](https://tokio.rs/), Rust's powerful asynchronous runtime.
+**Concurrent Rust made simple.** Build fast, responsive applications using actors—independent workers that manage their own state and communicate through messages.
 
-## Why Acton Reactive?
-
-*   **Simplified Concurrency:** Forget manual thread management and complex locking. Actors run independently, managing their own data. Acton ensures messages are processed safely, making concurrent programming more approachable.
-*   **Asynchronous & Performant:** Leverages Rust's `async/await` and Tokio for high-performance, non-blocking operations. Your application stays responsive, even under load.
-*   **Organized & Maintainable Code:** Encourages breaking down complex problems into smaller, self-contained actors. This makes your codebase easier to understand, test, and maintain.
-*   **Type-Safe Communication:** Define clear message types. Rust's compiler helps ensure you're sending and receiving the right kinds of messages, catching errors before runtime.
-*   **Built-in Observability:** Integrates with the `tracing` crate, providing insights into your application's behavior for easier debugging and performance monitoring.
-
-## Core Concepts Explained Simply
-
-Before diving into code, let's understand the main building blocks:
-
-1.  **Actor:** The fundamental unit. It's a Rust struct (that implements `Default` and `Debug`) which holds some internal state (its `model`) and reacts to incoming messages. Think of it as an independent worker or service.
-2.  **Message:** A simple Rust struct (that implements `Debug` and `Clone`) used for communication. Actors send messages to other actors (or themselves) to trigger actions or share information. The `#[acton_message]` macro helps derive the required traits easily.
-3.  **Handler:** A piece of code you define for an actor that specifies *how* it should react when it receives a particular type of message. There are two types:
-    *   **`mutate_on`**: For operations that need to modify the actor's internal state (`&mut actor.model`). These run sequentially to ensure state consistency.
-    *   **`act_on`**: For read-only operations that only need to inspect the actor's state (`&actor.model`). These run concurrently for better performance.
-    Both types return an `Reply`.
-4.  **Handle (`ActorHandle`):** An inexpensive, cloneable reference to an actor. You use an actor's handle to send messages *to* it from outside, or from other actors.
-5.  **Runtime (`ActonApp` / `ActorRuntime`):** The Acton system environment. You launch it using `ActonApp::launch()`. It manages the actors, their communication channels, and the central message broker.
-
-## Version 5.0 API Changes
-
-**Acton Reactive v5.0 introduces breaking changes** to better support concurrent operations while maintaining state safety:
-
-- **`act_on` is now for read-only concurrent handlers** - operates on `&actor.model` (immutable)
-- **`mutate_on` is now for mutable sequential handlers** - operates on `&mut actor.model` (mutable)
-
-### Migration Guide from v4.x
-
-**Before (v4.x):**
 ```rust
-builder.act_on::<MyMessage>(|actor, _| {
-    actor.model.value += 1;  // mutation
-    Reply::ready()
-});
+use acton_reactive::prelude::*;
+
+#[acton_actor]
+struct Counter { count: i32 }
+
+#[acton_message]
+struct Increment;
+
+#[acton_main]
+async fn main() {
+    let mut app = ActonApp::launch_async().await;
+    let mut counter = app.new_actor::<Counter>();
+
+    counter.mutate_on::<Increment>(|actor, _| {
+        actor.model.count += 1;
+        println!("Count: {}", actor.model.count);
+        Reply::ready()
+    });
+
+    let handle = counter.start().await;
+    handle.send(Increment).await;
+
+    app.shutdown_all().await.unwrap();
+}
 ```
 
-**After (v5.0):**
-```rust
-// For mutations
-builder.mutate_on::<MyMessage>(|actor, _| {
-    actor.model.value += 1;  // mutation
-    Reply::ready()
-});
+No locks. No shared state. No data races.
 
-// For read-only operations
-builder.act_on::<QueryMessage>(|actor, _| {
-    let value = actor.model.value;  // read-only
-    Reply::ready()
-});
+---
+
+## Why Actors?
+
+Concurrent Rust is powerful but demanding. The actor model offers a simpler mental model:
+
+- **Isolated state** — Each actor owns its data exclusively. No `Arc<Mutex<T>>`, no data races.
+- **Message passing** — Actors communicate by sending messages. The framework handles delivery and ordering.
+- **Natural concurrency** — Actors run independently. Scale by adding more actors, not by managing threads.
+
+Acton Reactive makes this pattern accessible with derive macros that eliminate boilerplate while Rust's type system enforces safety at compile time.
+
+---
+
+## Features
+
+- **Derive macros** — `#[acton_actor]` and `#[acton_message]` generate the required trait implementations
+- **Two handler types** — `mutate_on` for state changes (sequential), `act_on` for reads (concurrent)
+- **Async-native** — Built on Tokio for efficient, non-blocking operations
+- **Lifecycle hooks** — `before_start`, `after_stop` and more for resource management
+- **Pub/sub messaging** — Actors can subscribe to message types and receive broadcasts
+- **Request/reply** — Send a message and get a response using reply envelopes
+- **Supervision** — Parent actors can manage child actors for fault tolerance
+
+---
+
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+acton-reactive = "0.7"
+tokio = { version = "1", features = ["full"] }
 ```
 
-## Getting Started: A Basic Example
+---
 
-Let's build a simple counter actor.
+## Getting Started
 
-1.  **Add Acton Reactive to your `Cargo.toml`:**
+Here's a complete example showing the core patterns:
 
-    ```toml
-    [dependencies]
-    acton_reactive = { version = "1.1.0-beta.1" } # Use the latest version
-    tokio = { version = "1", features = ["full"] } # Acton requires a Tokio runtime
-    anyhow = "1" # Useful for error handling in main
-    ```
+```rust
+use acton_reactive::prelude::*;
 
-2.  **Write the code (`src/main.rs`):**
+// Define actor state with the macro
+#[acton_actor]
+struct Greeter {
+    greet_count: usize,
+}
 
-    ```rust
-    use acton_reactive::prelude::*;
-    use std::time::Duration;
-    use anyhow::Result;
+// Define messages with the macro
+#[acton_message]
+struct Greet { name: String }
 
-    // 1. Define the Actor's state (must be Default + Debug)
-    #[derive(Debug, Default)]
-    struct CounterActor {
-        count: i32,
-    }
+#[acton_message]
+struct GetCount;
 
-    // 2. Define Messages (must be Debug + Clone)
-    // Use the macro for convenience!
-    #[acton_message]
-    struct IncrementMsg;
+#[acton_main]
+async fn main() {
+    // Launch the runtime
+    let mut app = ActonApp::launch_async().await;
 
-    #[acton_message]
-    struct PrintMsg;
+    // Create and configure the actor
+    let mut greeter = app.new_actor::<Greeter>();
 
-    // 3. The main async function (requires a Tokio runtime)
-    #[tokio::main]
-    async fn main() -> Result<()> {
-        println!("Launching Acton application...");
+    greeter
+        // mutate_on: for handlers that modify state (runs sequentially)
+        .mutate_on::<Greet>(|actor, envelope| {
+            actor.model.greet_count += 1;
+            println!("Hello, {}! (greeting #{})",
+                envelope.message.name,
+                actor.model.greet_count);
+            Reply::ready()
+        })
+        // act_on: for read-only handlers (can run concurrently)
+        .act_on::<GetCount>(|actor, _| {
+            println!("Total greetings: {}", actor.model.greet_count);
+            Reply::ready()
+        });
 
-        // 4. Launch the Acton Runtime
-        let mut app = ActonApp::launch();
+    // Start the actor and get a handle for sending messages
+    let handle = greeter.start().await;
 
-        // 5. Create an Actor Builder
-        // This prepares an actor but doesn't start its processing loop yet.
-        let mut counter_builder = app.new_actor::<CounterActor>();
-        println!("Created actor builder for: {}", counter_builder.id());
+    // Send messages
+    handle.send(Greet { name: "World".into() }).await;
+    handle.send(Greet { name: "Rust".into() }).await;
+    handle.send(GetCount).await;
 
-        // 6. Define Message Handlers
-        // For state mutations, use mutate_on (sequential execution)
-        counter_builder
-            .mutate_on::<IncrementMsg>(|actor, _context| {
-                // This code runs when the actor receives an IncrementMsg.
-                // We can safely mutate the actor's internal state (`model`).
-                actor.model.count += 1;
-                println!("Actor {}: Incremented count to {}", actor.id(), actor.model.count);
-                // No async work needed here, return immediately.
-                Reply::ready()
-            })
-            // For read-only operations, use act_on (concurrent execution)
-            .act_on::<PrintMsg>(|actor, _context| {
-                // This code runs when the actor receives a PrintMsg.
-                // This is a read-only operation - we only read the state
-                println!("Actor {}: Current count is {}", actor.id(), actor.model.count);
-                // We can also perform async operations within a handler.
-                Reply::pending(async move {
-                    // Example: Simulate some async work
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    println!("Actor {}: Finished async work in PrintMsg handler.", actor.id());
-                    // No need to explicitly send anything back here for this example.
-                })
-            })
-            // Optional: Define lifecycle hooks
-            .after_stop(|actor| {
-                 println!("Actor {}: Final count is {}. Stopping.", actor.id(), actor.model.count);
-                 Reply::ready()
-            });
+    // Clean shutdown
+    app.shutdown_all().await.expect("shutdown failed");
+}
+```
 
-        // 7. Start the Actor
-        // This spawns the actor's task and returns a handle for sending messages.
-        let counter_handle = counter_builder.start().await;
-        println!("Started actor: {}", counter_handle.id());
+**Output:**
+```
+Hello, World! (greeting #1)
+Hello, Rust! (greeting #2)
+Total greetings: 2
+```
 
-        // 8. Send Messages using the Handle
-        println!("Sending IncrementMsg...");
-        counter_handle.send(IncrementMsg).await;
+---
 
-        println!("Sending PrintMsg...");
-        counter_handle.send(PrintMsg).await;
+## Core Concepts
 
-        println!("Sending another IncrementMsg...");
-        counter_handle.send(IncrementMsg).await;
+| Concept | Description |
+|---------|-------------|
+| **Actor** | A struct decorated with `#[acton_actor]` that holds state (`model`) and responds to messages |
+| **Message** | A struct decorated with `#[acton_message]` that actors send to communicate |
+| **Handler** | Code that runs when an actor receives a specific message type |
+| **Handle** | A lightweight, cloneable reference used to send messages to an actor |
+| **Runtime** | The `ActonApp` that manages actors and their communication |
 
-        // Give the actor a moment to process the last message and its async handler
-        tokio::time::sleep(Duration::from_millis(100)).await;
+### Handler Types
 
-        // 9. Shut down the application gracefully
-        // This stops all actors and waits for them to finish.
-        println!("Shutting down application...");
-        app.shutdown_all().await?;
-        println!("Application shut down.");
+- **`mutate_on<M>`** — Use when the handler needs to modify `actor.model`. Runs sequentially to ensure state consistency.
+- **`act_on<M>`** — Use for read-only operations on `actor.model`. Can run concurrently for better performance.
 
-        Ok(())
-    }
-    ```
+---
 
-3.  **Run it:** `cargo run`
+## When to Use Acton
 
-You should see output showing the actor being created, handling messages, incrementing its count, and finally stopping.
+**Good fit:**
+- Stateful services with complex internal logic
+- Event-driven systems with clear component boundaries
+- Applications modeling entities (users, sessions, devices, game objects)
+- Systems needing fault isolation between components
 
-## Common Patterns
+**Consider alternatives:**
+- Pure computation without state → async functions
+- Simple shared counters → `Arc<AtomicUsize>`
+- Request-response without state → direct function calls
 
-While the example above covers the basics, Acton Reactive supports more patterns:
+---
 
-*   **Replying to Messages:** Inside a handler, use `context.reply_envelope()` to get an envelope addressed back to the original sender, then use `.send(YourReplyMessage).await`.
-*   **Sending to Specific Actors:** If an actor has the `ActorHandle` of another actor, it can create a new envelope using `context.new_envelope(&target_handle.reply_address())` and then `.send(YourMessage).await`.
-*   **Asynchronous Operations:** As shown in the `PrintMsg` handler, use `Reply::pending(async move { ... })` to perform non-blocking tasks (like I/O) within your handlers.
-*   **Lifecycle Hooks:** Use `.before_start()`, `.after_start()`, `.before_stop()`, and `.after_stop()` on the actor builder to run code during actor initialization or shutdown.
-*   **Publish/Subscribe (Broadcasting):** Actors can subscribe to specific message types using `actor_handle.subscribe::<MyMessageType>().await`. Anyone (often the central `ActorBroker` obtained via `app.broker()` or `actor.broker()`) can then `broadcast(MyMessageType)` to notify all subscribers. This is great for system-wide events.
-*   **Supervision (Parent/Child Actors):** Actors can create and manage child actors using `actor_handle.supervise(child_builder).await`. Stopping the parent will automatically stop its children.
+## Learn More
 
-## Configuration
+- **[API Documentation](https://docs.rs/acton-reactive)** — Complete reference
+- **[Examples](acton-reactive/examples/)** — Working code for common patterns
+- **[Configuration Guide](docs/CONFIGURATION.md)** — Customize timeouts, limits, and tracing
 
-Acton Reactive supports configuration via TOML files using the XDG Base Directory Specification:
-
-- **Linux**: `~/.config/acton/config.toml`
-- **macOS**: `~/Library/Application Support/acton/config.toml`
-- **Windows**: `%APPDATA%\acton\config.toml`
-
-### Quick Configuration Setup
-
-1. **Copy example configuration**:
-   ```bash
-   cp examples/config.toml ~/.config/acton/config.toml
-   ```
-
-2. **Customize settings**:
-   ```toml
-   [timeouts]
-   actor_shutdown = 5000
-   system_shutdown = 15000
-
-   [limits]
-   actor_inbox_capacity = 512
-   concurrent_handlers_high_water_mark = 50
-
-   [tracing]
-   debug = "info"
-   ```
-
-3. **Verify configuration**:
-   ```bash
-   cargo run --example configuration
-   ```
-
-### Configuration Categories
-
-- **Timeouts**: Actor and system shutdown timeouts
-- **Limits**: Buffer sizes and capacity limits
-- **Defaults**: Default actor names and identifiers
-- **Tracing**: Logging levels and configuration
-- **Paths**: Custom directory locations
-- **Behavior**: Feature toggles and settings
-
-See `docs/CONFIGURATION.md` for the complete configuration guide.
-
-## Explore More Examples
-
-For more detailed examples demonstrating patterns like broadcasting, replies, actor lifecycles, and configuration usage, check out the `acton-reactive/examples/` directory in this repository.
+---
 
 ## Contributing
 
-Contributions are welcome! Feel free to submit issues, fork the repository, and send pull requests. Let's make Acton Reactive even better together!
+Contributions welcome! Open an issue to discuss changes, then submit a pull request.
 
-## License
+---
 
-This project is licensed under either of:
-
-*   Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-*   MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
 ## Sponsor
 
 Govcraft is a one-person shop—no corporate backing, no investors, just me building useful tools. If this project helps you, [sponsoring](https://github.com/sponsors/Govcraft) keeps the work going.
 
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2?logo=GitHub)](https://github.com/sponsors/Govcraft)
+
+---
+
+## License
+
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
