@@ -68,17 +68,34 @@ pub struct ActorHandle {
     pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
 }
 
-impl Default for ActorHandle {
-    /// Creates a default, placeholder `ActorHandle`.
+impl ActorHandle {
+    /// Creates a new `ActorHandle` with the provided components.
     ///
-    /// This handle is typically initialized with a default `Ern`, a closed channel,
-    /// and no parent, broker, or children. It's primarily used as a starting point
-    /// before being properly configured when a `ManagedActor` is created.
-    fn default() -> Self {
+    /// This constructor is more efficient than `Default::default()` as it accepts
+    /// the channel sender directly instead of creating a throwaway channel.
+    #[inline]
+    pub(crate) fn new(id: Ern, outbox: ActorSender) -> Self {
+        Self {
+            id,
+            outbox,
+            tracker: TaskTracker::new(),
+            parent: None,
+            broker: Box::new(None),
+            children: DashMap::new(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    /// Creates a placeholder `ActorHandle` for use as a default broker reference.
+    ///
+    /// This is a minimal allocation for actors that don't have an assigned broker yet.
+    /// The handle is not usable for messaging until a real broker is assigned.
+    #[inline]
+    pub(crate) fn placeholder() -> Self {
         use crate::common::config::CONFIG;
 
         let dummy_channel_size = CONFIG.limits.dummy_channel_size;
-        let (outbox, _) = mpsc::channel(dummy_channel_size); // Create a dummy channel
+        let (outbox, _) = mpsc::channel(dummy_channel_size);
         Self {
             id: Ern::default(),
             outbox,
@@ -88,6 +105,17 @@ impl Default for ActorHandle {
             children: DashMap::new(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
         }
+    }
+}
+
+impl Default for ActorHandle {
+    /// Creates a default, placeholder `ActorHandle`.
+    ///
+    /// This handle is typically initialized with a default `Ern`, a closed channel,
+    /// and no parent, broker, or children. It's primarily used as a starting point
+    /// before being properly configured when a `ManagedActor` is created.
+    fn default() -> Self {
+        Self::placeholder()
     }
 }
 

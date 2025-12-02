@@ -519,7 +519,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.after_start = Box::new(move |actor| Box::pin(f(actor)));
+        self.after_start = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
     }
 
@@ -541,7 +541,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.before_start = Box::new(move |actor| Box::pin(f(actor)));
+        self.before_start = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
     }
 
@@ -563,7 +563,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.after_stop = Box::new(move |actor| Box::pin(f(actor)));
+        self.after_stop = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
     }
 
@@ -585,7 +585,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + Sync + 'static,
     {
-        self.before_stop = Box::new(move |actor| Box::pin(f(actor)));
+        self.before_stop = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
     }
 
@@ -670,11 +670,8 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         );
         let runtime = runtime.unwrap().clone();
         managed_actor.runtime = runtime;
-        managed_actor
-            .runtime
-            .0
-            .roots
-            .insert(managed_actor.handle.id(), managed_actor.handle.clone());
+        // Note: root registration is handled by ActorRuntime methods (new_actor_with_name, etc.)
+        // to avoid double insertions into the roots DashMap
 
         managed_actor.id = managed_actor.handle.id();
 
@@ -708,8 +705,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         // Convert the actor to the Started state.
         let mut active_actor: ManagedActor<Started, State> = self.into();
 
-        trace!("Executing before_start hook for actor: {}", active_actor.id());
-        (active_actor.before_start)(&active_actor).await; // Execute before_start hook.
+        // Execute before_start hook if registered.
+        if let Some(ref hook) = active_actor.before_start {
+            trace!("Executing before_start hook for actor: {}", active_actor.id());
+            hook(&active_actor).await;
+        }
 
         trace!("Spawning main task (wake) for actor: {}", active_actor.id());
         // Move ownership of the actor into the spawned task.
@@ -756,7 +756,7 @@ pub fn downcast_message<T: ActonMessage + 'static>(msg: &dyn ActonMessage) -> Op
 }
 
 // --- Internal Implementations ---
-// (Default, From, default_handler remain internal and undocumented)
+// (Default, From remain internal and undocumented)
 
 impl<State: Default + Send + Debug + 'static> From<ManagedActor<Idle, State>>
     for ManagedActor<Started, State>
@@ -799,21 +799,22 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
         let capacity = CONFIG.limits.actor_inbox_capacity;
         let (outbox, inbox) = channel(capacity);
         let id = Ern::default();
-        let mut handle = ActorHandle::default();
-        handle.id = id.clone();
-        handle.outbox = outbox;
+        // Use efficient constructor that avoids creating a throwaway channel
+        let handle = ActorHandle::new(id.clone(), outbox);
 
         Self {
             handle,
             id,
             inbox,
-            // Initialize lifecycle hooks with default no-op handlers.
-            before_start: Box::new(|_| default_handler()),
-            after_start: Box::new(|_| default_handler()),
-            before_stop: Box::new(|_| default_handler()),
-            after_stop: Box::new(|_| default_handler()),
+            // Lifecycle hooks are None by default to avoid allocation.
+            // Only allocate when user registers a hook via before_start(), etc.
+            before_start: None,
+            after_start: None,
+            before_stop: None,
+            after_stop: None,
             model: State::default(),
-            broker: ActorHandle::default(),
+            // Use placeholder for broker - will be set later in new() if runtime is provided
+            broker: ActorHandle::placeholder(),
             error_handler_map: std::collections::HashMap::new(),
             parent: Option::default(),
             runtime: ActorRuntime::default(),
@@ -829,7 +830,3 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
     }
 }
 
-// Default no-op async handler for lifecycle events.
-fn default_handler() -> FutureBox {
-    Box::pin(async {})
-}

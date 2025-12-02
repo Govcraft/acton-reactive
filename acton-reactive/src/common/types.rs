@@ -143,8 +143,9 @@ pub type ActorSender = Sender<Envelope>;
 pub type HaltSignal = AtomicBool;
 
 /// Crate-internal: Type alias for the function signature of an asynchronous lifecycle hook.
+/// Wrapped in `Option` to avoid allocation for actors that don't use lifecycle hooks.
 pub type AsyncLifecycleHandler<ManagedEntity> =
-    Box<dyn Fn(&ManagedActor<Started, ManagedEntity>) -> FutureBox + Send + Sync + 'static>;
+    Option<Box<dyn Fn(&ManagedActor<Started, ManagedEntity>) -> FutureBox + Send + Sync + 'static>>;
 
 // --- Public Type Aliases ---
 

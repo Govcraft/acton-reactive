@@ -103,19 +103,22 @@ fn log_lifecycle_panic(actor_id: &acton_ern::Ern, panic_payload: &Box<dyn Any + 
 
 /// Runs a lifecycle hook with panic protection and logs any panics.
 /// This macro avoids borrowing issues that would occur with a function.
+/// Lifecycle hooks are now Option<Box<...>> to avoid allocation for actors that don't use them.
 macro_rules! run_lifecycle_hook {
     ($self:expr, $hook:ident, $hook_name:literal) => {{
-        let hook_result = std::panic::catch_unwind(AssertUnwindSafe(|| ($self.$hook)($self)));
-        match hook_result {
-            Ok(future) => {
-                if let Err(ref panic_payload) = AssertUnwindSafe(future).catch_unwind().await {
-                    log_lifecycle_panic($self.id(), panic_payload,
-                        concat!("Panic in ", $hook_name, " lifecycle hook (during await)"));
+        if let Some(ref hook) = $self.$hook {
+            let hook_result = std::panic::catch_unwind(AssertUnwindSafe(|| hook($self)));
+            match hook_result {
+                Ok(future) => {
+                    if let Err(ref panic_payload) = AssertUnwindSafe(future).catch_unwind().await {
+                        log_lifecycle_panic($self.id(), panic_payload,
+                            concat!("Panic in ", $hook_name, " lifecycle hook (during await)"));
+                    }
                 }
-            }
-            Err(ref panic_payload) => {
-                log_lifecycle_panic($self.id(), panic_payload,
-                    concat!("Panic in ", $hook_name, " lifecycle hook (during closure invocation)"));
+                Err(ref panic_payload) => {
+                    log_lifecycle_panic($self.id(), panic_payload,
+                        concat!("Panic in ", $hook_name, " lifecycle hook (during closure invocation)"));
+                }
             }
         }
     }};
