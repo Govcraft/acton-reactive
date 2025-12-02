@@ -103,7 +103,7 @@ async fn test_ern_hierarchy() -> anyhow::Result<()> {
     let service_handle = service.start().await;
     let child_handle = service_handle.supervise(child).await?;
 
-    // Verify names - Ern transforms the name (removes hyphens, adds unique suffix)
+    // Verify names - `Ern` transforms the name (removes hyphens, adds unique suffix)
     // so we check that the name starts with the expected prefix
     assert!(service_handle.name().starts_with("paymentservice"));
     assert!(child_handle.name().starts_with("worker"));
@@ -184,7 +184,7 @@ async fn test_worker_pool_pattern() -> anyhow::Result<()> {
     for i in 0..3 {
         let counter = total_tasks.clone();
         let config =
-            ActorConfig::new(Ern::with_root(&format!("worker-{}", i)).unwrap(), None, None)?;
+            ActorConfig::new(Ern::with_root(format!("worker-{i}")).unwrap(), None, None)?;
 
         let mut worker = runtime.new_actor_with_config::<Worker>(config);
 

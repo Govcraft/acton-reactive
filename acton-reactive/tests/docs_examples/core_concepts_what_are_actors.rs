@@ -90,7 +90,7 @@ async fn test_actors_are_lightweight() -> anyhow::Result<()> {
     let mut handles = Vec::new();
 
     for i in 0..actor_count {
-        let mut actor = runtime.new_actor_with_name::<Session>(format!("session-{}", i));
+        let mut actor = runtime.new_actor_with_name::<Session>(format!("session-{i}"));
         actor.model.id = i;
         actor.mutate_on::<Request>(|actor, _ctx| {
             let _ = actor.model.id; // Use the id
@@ -174,14 +174,21 @@ async fn test_actors_are_isolated() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests mutate_on vs act_on distinction.
+/// Tests `mutate_on` vs `act_on` distinction.
 ///
-/// From: docs/core-concepts/what-are-actors/page.md - "mutate_on vs act_on distinction"
+/// From: docs/core-concepts/what-are-actors/page.md - "`mutate_on` vs `act_on` distinction"
+///
+/// Note: Request-reply requires using `ctx.new_envelope()` with a trigger pattern.
 #[acton_test]
 async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
     #[acton_actor]
     struct DataStore {
         data: String,
+    }
+
+    #[acton_actor]
+    struct QueryClient {
+        store_handle: Option<ActorHandle>,
     }
 
     #[acton_message]
@@ -195,25 +202,20 @@ async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
     #[acton_message]
     struct QueryResponse(String);
 
+    #[acton_message]
+    struct QueryStore;
+
     let query_response = Arc::new(std::sync::Mutex::new(String::new()));
     let response_clone = query_response.clone();
 
     let mut runtime = ActonApp::launch_async().await;
-
-    // Create receiver for query responses
-    let mut receiver = runtime.new_actor::<DataStore>();
-    receiver.mutate_on::<QueryResponse>(move |_actor, ctx| {
-        *response_clone.lock().unwrap() = ctx.message().0.clone();
-        Reply::ready()
-    });
-    let receiver_handle = receiver.start().await;
 
     // Create data store
     let mut store = runtime.new_actor::<DataStore>();
 
     // mutate_on for handlers that change state (sequential)
     store.mutate_on::<Update>(|actor, ctx| {
-        actor.model.data = ctx.message().new_data.clone();
+        actor.model.data.clone_from(&ctx.message().new_data);
         Reply::ready()
     });
 
@@ -229,6 +231,28 @@ async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
 
     let store_handle = store.start().await;
 
+    // Create client that will query the store using proper reply chain
+    let mut client = runtime.new_actor::<QueryClient>();
+    client.model.store_handle = Some(store_handle.clone());
+
+    client
+        .mutate_on::<QueryStore>(|actor, ctx| {
+            let target = actor.model.store_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+            Reply::pending(async move {
+                request_envelope.send(Query).await;
+            })
+        })
+        .mutate_on::<QueryResponse>(move |_actor, ctx| {
+            response_clone
+                .lock()
+                .unwrap()
+                .clone_from(&ctx.message().0);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
     // Update then query
     store_handle
         .send(Update {
@@ -236,8 +260,11 @@ async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
         })
         .await;
 
-    let envelope = store_handle.create_envelope(Some(receiver_handle.reply_address()));
-    envelope.send(Query).await;
+    // Allow update to process
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Query store via client trigger
+    client_handle.send(QueryStore).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;

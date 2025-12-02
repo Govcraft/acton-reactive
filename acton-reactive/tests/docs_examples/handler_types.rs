@@ -26,9 +26,9 @@ use std::time::{Duration, Instant};
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
-/// Tests mutate_on handler - exclusive mutable access.
+/// Tests `mutate_on` handler - exclusive mutable access.
 ///
-/// From: docs/handler-types/page.md - "mutate_on"
+/// From: docs/handler-types/page.md - "`mutate_on`"
 #[acton_test]
 async fn test_mutate_on_handler() -> anyhow::Result<()> {
     #[acton_actor]
@@ -75,15 +75,26 @@ async fn test_mutate_on_handler() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests act_on handler - shared read-only access.
+/// Tests `act_on` handler - shared read-only access.
 ///
-/// From: docs/handler-types/page.md - "act_on"
+/// From: docs/handler-types/page.md - "`act_on`"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_act_on_handler() -> anyhow::Result<()> {
     #[acton_actor]
     struct StatusHolder {
         status: String,
     }
+
+    #[acton_actor]
+    struct StatusClient {
+        holder_handle: Option<ActorHandle>,
+    }
+
+    #[acton_message]
+    struct QueryStatus;
 
     #[acton_message]
     struct GetStatus;
@@ -96,15 +107,7 @@ async fn test_act_on_handler() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create receiver
-    let mut receiver = runtime.new_actor::<StatusHolder>();
-    receiver.mutate_on::<StatusResponse>(move |_actor, ctx| {
-        *received_clone.lock().unwrap() = ctx.message().0.clone();
-        Reply::ready()
-    });
-    let receiver_handle = receiver.start().await;
-
-    // Create status holder
+    // Create status holder (responder)
     let mut holder = runtime.new_actor::<StatusHolder>();
     holder.model.status = "healthy".to_string();
 
@@ -120,9 +123,31 @@ async fn test_act_on_handler() -> anyhow::Result<()> {
 
     let holder_handle = holder.start().await;
 
-    // Request status
-    let envelope = holder_handle.create_envelope(Some(receiver_handle.reply_address()));
-    envelope.send(GetStatus).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<StatusClient>();
+    client.model.holder_handle = Some(holder_handle);
+
+    client
+        .mutate_on::<QueryStatus>(|actor, ctx| {
+            let target = actor.model.holder_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(GetStatus).await;
+            })
+        })
+        .mutate_on::<StatusResponse>(move |_actor, ctx| {
+            received_clone
+                .lock()
+                .unwrap()
+                .clone_from(&ctx.message().0);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger request via client
+    client_handle.send(QueryStatus).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
@@ -132,9 +157,9 @@ async fn test_act_on_handler() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests try_mutate_on handler - mutable access with error handling.
+/// Tests `try_mutate_on` handler - mutable access with error handling.
 ///
-/// From: docs/handler-types/page.md - "try_mutate_on"
+/// From: docs/handler-types/page.md - "`try_mutate_on`"
 #[acton_test]
 async fn test_try_mutate_on_handler() -> anyhow::Result<()> {
     #[acton_actor]
@@ -203,7 +228,10 @@ async fn test_try_mutate_on_handler() -> anyhow::Result<()> {
             Box::pin(async {})
         })
         .after_stop(move |actor| {
-            final_balance_clone.store(actor.model.balance as u32, Ordering::SeqCst);
+            final_balance_clone.store(
+                u32::try_from(actor.model.balance).unwrap_or(u32::MAX),
+                Ordering::SeqCst,
+            );
             Reply::ready()
         });
 
@@ -226,9 +254,9 @@ async fn test_try_mutate_on_handler() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests try_act_on handler - read-only access with error handling.
+/// Tests `try_act_on` handler - read-only access with error handling.
 ///
-/// From: docs/handler-types/page.md - "try_act_on"
+/// From: docs/handler-types/page.md - "`try_act_on`"
 #[acton_test]
 async fn test_try_act_on_handler() -> anyhow::Result<()> {
     use std::collections::HashMap;

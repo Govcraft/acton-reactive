@@ -57,7 +57,7 @@ async fn test_accessing_message() -> anyhow::Result<()> {
         })
         .after_stop(move |actor| {
             if let Some(id) = &actor.model.last_order_id {
-                *last_id_clone.lock().unwrap() = id.clone();
+                last_id_clone.lock().unwrap().clone_from(id);
             }
             Reply::ready()
         });
@@ -189,7 +189,10 @@ async fn test_no_reply_pattern() -> anyhow::Result<()> {
             Reply::ready()
         })
         .after_stop(move |actor| {
-            count_clone.store(actor.model.events.len() as u32, Ordering::SeqCst);
+            count_clone.store(
+                u32::try_from(actor.model.events.len()).unwrap_or(u32::MAX),
+                Ordering::SeqCst,
+            );
             Reply::ready()
         });
 
@@ -217,6 +220,9 @@ async fn test_no_reply_pattern() -> anyhow::Result<()> {
 /// Tests multiple replies (streaming) pattern.
 ///
 /// From: docs/replies-and-context/page.md - "Multiple Replies (Streaming)"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_streaming_replies() -> anyhow::Result<()> {
     #[acton_actor]
@@ -225,10 +231,14 @@ async fn test_streaming_replies() -> anyhow::Result<()> {
     }
 
     #[acton_actor]
-    struct Receiver {
+    struct StreamClient {
+        source_handle: Option<ActorHandle>,
         received_items: Vec<String>,
         complete: bool,
     }
+
+    #[acton_message]
+    struct StartStream;
 
     #[acton_message]
     struct StreamRequest;
@@ -249,22 +259,7 @@ async fn test_streaming_replies() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create receiver
-    let mut receiver = runtime.new_actor::<Receiver>();
-    receiver
-        .mutate_on::<StreamItem>(move |actor, ctx| {
-            actor.model.received_items.push(ctx.message().data.clone());
-            items_clone.fetch_add(1, Ordering::SeqCst);
-            Reply::ready()
-        })
-        .mutate_on::<StreamComplete>(move |actor, _ctx| {
-            actor.model.complete = true;
-            completed_clone.store(true, Ordering::SeqCst);
-            Reply::ready()
-        });
-    let receiver_handle = receiver.start().await;
-
-    // Create data source
+    // Create data source (responder)
     let mut source = runtime.new_actor::<DataSource>();
     source.model.items = vec![
         "item1".to_string(),
@@ -292,9 +287,34 @@ async fn test_streaming_replies() -> anyhow::Result<()> {
 
     let source_handle = source.start().await;
 
-    // Send request with receiver's address
-    let envelope = source_handle.create_envelope(Some(receiver_handle.reply_address()));
-    envelope.send(StreamRequest).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<StreamClient>();
+    client.model.source_handle = Some(source_handle);
+
+    client
+        .mutate_on::<StartStream>(|actor, ctx| {
+            let target = actor.model.source_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(StreamRequest).await;
+            })
+        })
+        .mutate_on::<StreamItem>(move |actor, ctx| {
+            actor.model.received_items.push(ctx.message().data.clone());
+            items_clone.fetch_add(1, Ordering::SeqCst);
+            Reply::ready()
+        })
+        .mutate_on::<StreamComplete>(move |actor, _ctx| {
+            actor.model.complete = true;
+            completed_clone.store(true, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger stream via client
+    client_handle.send(StartStream).await;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     runtime.shutdown_all().await?;
@@ -308,6 +328,9 @@ async fn test_streaming_replies() -> anyhow::Result<()> {
 /// Tests deferred reply pattern.
 ///
 /// From: docs/replies-and-context/page.md - "Deferred Reply"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_deferred_reply() -> anyhow::Result<()> {
     #[acton_actor]
@@ -317,10 +340,14 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
     }
 
     #[acton_actor]
-    struct Client {
+    struct TaskClient {
+        processor_handle: Option<ActorHandle>,
         accepted_task: Option<u32>,
         task_result: Option<String>,
     }
+
+    #[acton_message]
+    struct SubmitTask;
 
     #[acton_message]
     struct LongRunningTask;
@@ -348,22 +375,7 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create client
-    let mut client = runtime.new_actor::<Client>();
-    client
-        .mutate_on::<TaskAccepted>(move |actor, ctx| {
-            actor.model.accepted_task = Some(ctx.message().task_id);
-            task_accepted_clone.store(ctx.message().task_id, Ordering::SeqCst);
-            Reply::ready()
-        })
-        .mutate_on::<TaskResult>(move |actor, ctx| {
-            actor.model.task_result = Some(ctx.message().result.clone());
-            *result_clone.lock().unwrap() = ctx.message().result.clone();
-            Reply::ready()
-        });
-    let client_handle = client.start().await;
-
-    // Create processor
+    // Create processor (responder)
     let mut processor = runtime.new_actor::<TaskProcessor>();
     processor.model.next_task_id = 1;
 
@@ -372,7 +384,7 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
             let task_id = actor.model.next_task_id;
             actor.model.next_task_id += 1;
 
-            let reply = ctx.reply_envelope().clone();
+            let reply = ctx.reply_envelope();
 
             // Store the reply channel for later
             actor.model.pending_replies.insert(task_id, reply.clone());
@@ -397,9 +409,37 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
 
     let processor_handle = processor.start().await;
 
-    // Submit task with client's reply address
-    let envelope = processor_handle.create_envelope(Some(client_handle.reply_address()));
-    envelope.send(LongRunningTask).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<TaskClient>();
+    client.model.processor_handle = Some(processor_handle.clone());
+
+    client
+        .mutate_on::<SubmitTask>(|actor, ctx| {
+            let target = actor.model.processor_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(LongRunningTask).await;
+            })
+        })
+        .mutate_on::<TaskAccepted>(move |actor, ctx| {
+            actor.model.accepted_task = Some(ctx.message().task_id);
+            task_accepted_clone.store(ctx.message().task_id, Ordering::SeqCst);
+            Reply::ready()
+        })
+        .mutate_on::<TaskResult>(move |actor, ctx| {
+            actor.model.task_result = Some(ctx.message().result.clone());
+            result_clone
+                .lock()
+                .unwrap()
+                .clone_from(&ctx.message().result);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger task submission via client
+    client_handle.send(SubmitTask).await;
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -426,6 +466,9 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
 /// Tests request-reply with timeout.
 ///
 /// From: docs/replies-and-context/page.md - "Request-Reply with Timeout"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_request_reply_with_timeout() -> anyhow::Result<()> {
     #[acton_actor]
@@ -434,10 +477,14 @@ async fn test_request_reply_with_timeout() -> anyhow::Result<()> {
     }
 
     #[acton_actor]
-    struct Client {
+    struct TimeoutClient {
+        service_handle: Option<ActorHandle>,
         success: bool,
         timeout: bool,
     }
+
+    #[acton_message]
+    struct SendQuery;
 
     #[acton_message]
     struct Query;
@@ -455,22 +502,7 @@ async fn test_request_reply_with_timeout() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create client
-    let mut client = runtime.new_actor::<Client>();
-    client
-        .mutate_on::<QuerySuccess>(move |actor, _ctx| {
-            actor.model.success = true;
-            success_clone.store(true, Ordering::SeqCst);
-            Reply::ready()
-        })
-        .mutate_on::<QueryTimeout>(move |actor, _ctx| {
-            actor.model.timeout = true;
-            timeout_clone.store(true, Ordering::SeqCst);
-            Reply::ready()
-        });
-    let client_handle = client.start().await;
-
-    // Create fast service (will succeed)
+    // Create fast service (responder - will succeed)
     let mut fast_service = runtime.new_actor::<SlowService>();
     fast_service.model.delay_ms = 10;
 
@@ -493,9 +525,34 @@ async fn test_request_reply_with_timeout() -> anyhow::Result<()> {
 
     let fast_handle = fast_service.start().await;
 
-    // Send query to fast service
-    let envelope = fast_handle.create_envelope(Some(client_handle.reply_address()));
-    envelope.send(Query).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<TimeoutClient>();
+    client.model.service_handle = Some(fast_handle);
+
+    client
+        .mutate_on::<SendQuery>(|actor, ctx| {
+            let target = actor.model.service_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(Query).await;
+            })
+        })
+        .mutate_on::<QuerySuccess>(move |actor, _ctx| {
+            actor.model.success = true;
+            success_clone.store(true, Ordering::SeqCst);
+            Reply::ready()
+        })
+        .mutate_on::<QueryTimeout>(move |actor, _ctx| {
+            actor.model.timeout = true;
+            timeout_clone.store(true, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger query via client
+    client_handle.send(SendQuery).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
@@ -509,6 +566,9 @@ async fn test_request_reply_with_timeout() -> anyhow::Result<()> {
 /// Tests acknowledgment pattern.
 ///
 /// From: docs/replies-and-context/page.md - "Acknowledgment Pattern"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_acknowledgment_pattern() -> anyhow::Result<()> {
     #[acton_actor]
@@ -517,9 +577,13 @@ async fn test_acknowledgment_pattern() -> anyhow::Result<()> {
     }
 
     #[acton_actor]
-    struct Client {
+    struct AckClient {
+        processor_handle: Option<ActorHandle>,
         ack_received: bool,
     }
+
+    #[acton_message]
+    struct SendMessage;
 
     #[acton_message]
     struct ImportantMessage {
@@ -534,16 +598,7 @@ async fn test_acknowledgment_pattern() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create client
-    let mut client = runtime.new_actor::<Client>();
-    client.mutate_on::<Ack>(move |actor, _ctx| {
-        actor.model.ack_received = true;
-        ack_clone.store(true, Ordering::SeqCst);
-        Reply::ready()
-    });
-    let client_handle = client.start().await;
-
-    // Create processor
+    // Create processor (responder)
     let mut processor = runtime.new_actor::<Processor>();
 
     processor.mutate_on::<ImportantMessage>(|actor, ctx| {
@@ -560,13 +615,33 @@ async fn test_acknowledgment_pattern() -> anyhow::Result<()> {
 
     let processor_handle = processor.start().await;
 
-    // Send message with client's reply address
-    let envelope = processor_handle.create_envelope(Some(client_handle.reply_address()));
-    envelope
-        .send(ImportantMessage {
-            data: "test".to_string(),
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<AckClient>();
+    client.model.processor_handle = Some(processor_handle);
+
+    client
+        .mutate_on::<SendMessage>(|actor, ctx| {
+            let target = actor.model.processor_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope
+                    .send(ImportantMessage {
+                        data: "test".to_string(),
+                    })
+                    .await;
+            })
         })
-        .await;
+        .mutate_on::<Ack>(move |actor, _ctx| {
+            actor.model.ack_received = true;
+            ack_clone.store(true, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger message via client
+    client_handle.send(SendMessage).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
@@ -579,6 +654,9 @@ async fn test_acknowledgment_pattern() -> anyhow::Result<()> {
 /// Tests convenience reply method.
 ///
 /// From: docs/replies-and-context/page.md - "Convenience Reply"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_convenience_reply() -> anyhow::Result<()> {
     #[acton_actor]
@@ -587,7 +665,12 @@ async fn test_convenience_reply() -> anyhow::Result<()> {
     }
 
     #[acton_actor]
-    struct Client;
+    struct QueryClient {
+        service_handle: Option<ActorHandle>,
+    }
+
+    #[acton_message]
+    struct SendQuery;
 
     #[acton_message]
     struct Query;
@@ -602,15 +685,7 @@ async fn test_convenience_reply() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create client
-    let mut client = runtime.new_actor::<Client>();
-    client.mutate_on::<QueryResponse>(move |_actor, ctx| {
-        received_clone.store(ctx.message().value, Ordering::SeqCst);
-        Reply::ready()
-    });
-    let client_handle = client.start().await;
-
-    // Create service
+    // Create service (responder)
     let mut service = runtime.new_actor::<Service>();
     service.model.value = 42;
 
@@ -625,9 +700,28 @@ async fn test_convenience_reply() -> anyhow::Result<()> {
 
     let service_handle = service.start().await;
 
-    // Send query
-    let envelope = service_handle.create_envelope(Some(client_handle.reply_address()));
-    envelope.send(Query).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<QueryClient>();
+    client.model.service_handle = Some(service_handle);
+
+    client
+        .mutate_on::<SendQuery>(|actor, ctx| {
+            let target = actor.model.service_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(Query).await;
+            })
+        })
+        .mutate_on::<QueryResponse>(move |_actor, ctx| {
+            received_clone.store(ctx.message().value, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger query via client
+    client_handle.send(SendQuery).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;

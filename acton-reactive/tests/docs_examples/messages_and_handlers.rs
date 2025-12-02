@@ -65,6 +65,7 @@ async fn test_message_types() -> anyhow::Result<()> {
         customer: Customer,
     }
 
+    #[allow(clippy::struct_excessive_bools)]
     #[acton_actor]
     struct TestActor {
         received_ping: bool,
@@ -159,8 +160,8 @@ async fn test_handler_anatomy() -> anyhow::Result<()> {
             // `actor` - the ManagedActor with state access
             // `ctx` - MessageContext with the message and reply tools
 
-            // Access the actor's state
-            let _value = actor.model.count;
+            // Access the actor's state (use black_box to prevent optimization)
+            std::hint::black_box(actor.model.count);
 
             // Access the incoming message
             let message = ctx.message();
@@ -248,7 +249,7 @@ async fn test_actor_parameter() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests Reply types - ready() and pending().
+/// Tests Reply types - `ready()` and `pending()`.
 ///
 /// From: docs/messages-and-handlers/page.md - "Reply Types"
 #[acton_test]
@@ -378,12 +379,23 @@ async fn test_self_messaging() -> anyhow::Result<()> {
 /// Tests request-reply pattern.
 ///
 /// From: docs/messages-and-handlers/page.md - "Request-Reply"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_request_reply_pattern() -> anyhow::Result<()> {
     #[acton_actor]
     struct Account {
         balance: f64,
     }
+
+    #[acton_actor]
+    struct BalanceClient {
+        account_handle: Option<ActorHandle>,
+    }
+
+    #[acton_message]
+    struct QueryBalance;
 
     #[acton_message]
     struct GetBalance;
@@ -396,15 +408,7 @@ async fn test_request_reply_pattern() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create receiver
-    let mut receiver = runtime.new_actor::<Account>();
-    receiver.mutate_on::<BalanceResponse>(move |_actor, ctx| {
-        received_clone.store(ctx.message().0.to_bits(), Ordering::SeqCst);
-        Reply::ready()
-    });
-    let receiver_handle = receiver.start().await;
-
-    // Create account
+    // Create account (responder)
     let mut account = runtime.new_actor::<Account>();
     account.model.balance = 1000.0;
 
@@ -419,9 +423,28 @@ async fn test_request_reply_pattern() -> anyhow::Result<()> {
 
     let account_handle = account.start().await;
 
-    // Send request with receiver's address
-    let envelope = account_handle.create_envelope(Some(receiver_handle.reply_address()));
-    envelope.send(GetBalance).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<BalanceClient>();
+    client.model.account_handle = Some(account_handle);
+
+    client
+        .mutate_on::<QueryBalance>(|actor, ctx| {
+            let target = actor.model.account_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(GetBalance).await;
+            })
+        })
+        .mutate_on::<BalanceResponse>(move |_actor, ctx| {
+            received_clone.store(ctx.message().0.to_bits(), Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger request via client
+    client_handle.send(QueryBalance).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;

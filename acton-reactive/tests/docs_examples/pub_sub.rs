@@ -117,7 +117,10 @@ async fn test_price_feed_example() -> anyhow::Result<()> {
             Reply::ready()
         })
         .after_stop(move |actor| {
-            logger_clone.store(actor.model.history.len() as u32, Ordering::SeqCst);
+            logger_clone.store(
+                u32::try_from(actor.model.history.len()).unwrap_or(u32::MAX),
+                Ordering::SeqCst,
+            );
             Reply::ready()
         });
     logger.handle().subscribe::<PriceUpdate>().await;
@@ -149,10 +152,10 @@ async fn test_price_feed_example() -> anyhow::Result<()> {
 
 /// Tests unsubscribing from messages.
 ///
-/// From: docs/pub-sub/page.md - "Unsubscribing"
+/// From: docs/pub-sub/page.md - "`Unsubscribing`"
 ///
 /// NOTE: This test is ignored because the unsubscribe feature is not fully
-/// implemented in acton-reactive. The UnsubscribeBroker message has all its
+/// implemented in acton-reactive. The `UnsubscribeBroker` message has all its
 /// fields commented out. See: acton-reactive/src/message/unsubscribe_broker.rs
 #[acton_test]
 #[ignore = "unsubscribe feature not fully implemented"]
@@ -278,6 +281,7 @@ async fn test_multiple_message_types() -> anyhow::Result<()> {
     assert_eq!(counts.0, 2); // price updates
     assert_eq!(counts.1, 1); // volume updates
     assert_eq!(counts.2, 3); // trade events
+    drop(counts);
 
     Ok(())
 }
@@ -335,7 +339,7 @@ async fn test_filtering_broadcasts() -> anyhow::Result<()> {
             Reply::ready()
         })
         .after_stop(move |actor| {
-            *final_clone.lock().unwrap() = actor.model.prices.clone();
+            final_clone.lock().unwrap().clone_from(&actor.model.prices);
             Reply::ready()
         });
 
@@ -370,6 +374,7 @@ async fn test_filtering_broadcasts() -> anyhow::Result<()> {
     assert!(prices.contains_key("ACME"));
     assert!(prices.contains_key("TECH"));
     assert!(!prices.contains_key("OTHER"));
+    drop(prices);
 
     Ok(())
 }
@@ -469,6 +474,7 @@ async fn test_event_bus_pattern() -> anyhow::Result<()> {
     let counts = analytics_counts.lock().unwrap();
     assert_eq!(counts.0, 2); // login count
     assert_eq!(counts.1, 1); // order count
+    drop(counts);
     assert_eq!(notification_count.load(Ordering::SeqCst), 1);
 
     Ok(())
@@ -534,6 +540,7 @@ async fn test_system_alerts_pattern() -> anyhow::Result<()> {
 
     let state = final_state.lock().unwrap();
     assert!(state.1); // in_maintenance should be true
+    drop(state);
 
     Ok(())
 }

@@ -260,7 +260,7 @@ async fn test_multiple_subscribers() -> anyhow::Result<()> {
     let mut runtime = ActonApp::launch_async().await;
     let broker = runtime.broker();
 
-    // Create multiple listeners
+    // Create multiple listeners (handles kept alive to prevent early actor termination)
     let mut handles = Vec::new();
     for _ in 0..3 {
         let counter = total_received.clone();
@@ -278,6 +278,9 @@ async fn test_multiple_subscribers() -> anyhow::Result<()> {
 
     // Broadcast reaches all subscribers
     broker.broadcast(Event).await;
+
+    // Keep handles alive until after broadcast processing
+    std::hint::black_box(&handles);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;

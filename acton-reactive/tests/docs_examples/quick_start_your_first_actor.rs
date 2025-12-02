@@ -89,7 +89,7 @@ async fn test_complete_counter_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests message with data - the IncrementBy example from the docs.
+/// Tests message with data - the `IncrementBy` example from the docs.
 ///
 /// From: docs/quick-start/your-first-actor/page.md - "Messages can also include fields"
 #[acton_test]
@@ -133,9 +133,9 @@ async fn test_message_with_data() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests the mutate_on vs act_on distinction from the docs.
+/// Tests the `mutate_on` vs `act_on` distinction from the docs.
 ///
-/// From: docs/quick-start/your-first-actor/page.md - "mutate_on vs act_on"
+/// From: docs/quick-start/your-first-actor/page.md - "`mutate_on` vs `act_on`"
 #[acton_test]
 async fn test_mutate_on_vs_act_on() -> anyhow::Result<()> {
     #[acton_actor]
@@ -163,8 +163,8 @@ async fn test_mutate_on_vs_act_on() -> anyhow::Result<()> {
         })
         // act_on for messages that only read the state
         .act_on::<GetCount>(|actor, _envelope| {
-            // Verify count is readable
-            let _count = actor.model.count;
+            // Verify count is readable (use black_box to prevent optimization)
+            std::hint::black_box(actor.model.count);
             Reply::ready()
         })
         .after_stop(move |actor| {

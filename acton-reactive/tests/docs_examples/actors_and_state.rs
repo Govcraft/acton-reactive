@@ -85,13 +85,13 @@ async fn test_complex_actor_state() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests using no_default for custom initialization.
+/// Tests using `no_default` for custom initialization.
 ///
 /// From: docs/actors-and-state/page.md - "Custom Default for Complex State"
 #[acton_test]
 async fn test_custom_default_actor() -> anyhow::Result<()> {
     // Note: We can't test Stdout directly, so we use a simpler example
-    // that demonstrates the no_default pattern
+    // that demonstrates the `no_default` pattern
 
     #[acton_actor(no_default)]
     struct ConfiguredActor {
@@ -166,8 +166,8 @@ async fn test_accessing_state_in_handlers() -> anyhow::Result<()> {
 
     actor
         .mutate_on::<UpdateBalance>(|actor, ctx| {
-            // Read state
-            let _current = actor.model.balance;
+            // Read state (use black_box to prevent optimization)
+            std::hint::black_box(actor.model.balance);
 
             // Modify state
             actor.model.balance += ctx.message().amount;
@@ -199,7 +199,7 @@ async fn test_accessing_state_in_handlers() -> anyhow::Result<()> {
 ///
 /// From: docs/actors-and-state/page.md - "Mutable vs Read-Only Access"
 ///
-/// Note: Request-reply requires using ctx.new_envelope() with a trigger pattern.
+/// Note: Request-reply requires using `ctx.new_envelope()` with a trigger pattern.
 #[acton_test]
 async fn test_mutable_vs_readonly_access() -> anyhow::Result<()> {
     #[acton_actor]
@@ -332,8 +332,8 @@ async fn test_multiple_actors() -> anyhow::Result<()> {
 
     // Send to specific workers
     for (i, handle) in &handles {
-        handle.send(Task { id: *i as u32 }).await;
-        handle.send(Task { id: *i as u32 + 10 }).await;
+        handle.send(Task { id: u32::try_from(*i).unwrap() }).await;
+        handle.send(Task { id: u32::try_from(*i).unwrap() + 10 }).await;
     }
 
     tokio::time::sleep(Duration::from_millis(50)).await;

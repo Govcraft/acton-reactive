@@ -80,9 +80,12 @@ async fn test_counter_state_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests adding a query handler with act_on.
+/// Tests adding a query handler with `act_on`.
 ///
 /// From: docs/your-first-actor/page.md - "Adding a Query Handler"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_query_handler_example() -> anyhow::Result<()> {
     #[acton_actor]
@@ -90,8 +93,16 @@ async fn test_query_handler_example() -> anyhow::Result<()> {
         count: u32,
     }
 
+    #[acton_actor]
+    struct CountClient {
+        counter_handle: Option<ActorHandle>,
+    }
+
     #[acton_message]
     struct Increment(u32);
+
+    #[acton_message]
+    struct QueryCount;
 
     #[acton_message]
     struct GetCount;
@@ -104,15 +115,7 @@ async fn test_query_handler_example() -> anyhow::Result<()> {
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create a receiver actor to get the response
-    let mut receiver = runtime.new_actor::<CounterState>();
-    receiver.mutate_on::<CountResponse>(move |_actor, ctx| {
-        received_clone.store(ctx.message().0, Ordering::SeqCst);
-        Reply::ready()
-    });
-    let receiver_handle = receiver.start().await;
-
-    // Create the main counter
+    // Create the main counter (responder)
     let mut counter = runtime.new_actor::<CounterState>();
 
     // Handler for mutations
@@ -131,14 +134,34 @@ async fn test_query_handler_example() -> anyhow::Result<()> {
         })
     });
 
-    let handle = counter.start().await;
+    let counter_handle = counter.start().await;
 
-    handle.send(Increment(5)).await;
-    handle.send(Increment(3)).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<CountClient>();
+    client.model.counter_handle = Some(counter_handle.clone());
 
-    // Send GetCount with receiver's address as reply destination
-    let envelope = handle.create_envelope(Some(receiver_handle.reply_address()));
-    envelope.send(GetCount).await;
+    client
+        .mutate_on::<QueryCount>(|actor, ctx| {
+            let target = actor.model.counter_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(GetCount).await;
+            })
+        })
+        .mutate_on::<CountResponse>(move |_actor, ctx| {
+            received_clone.store(ctx.message().0, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Increment counter
+    counter_handle.send(Increment(5)).await;
+    counter_handle.send(Increment(3)).await;
+
+    // Trigger query via client
+    client_handle.send(QueryCount).await;
 
     // Give time for the reply to process
     tokio::time::sleep(Duration::from_millis(100)).await;

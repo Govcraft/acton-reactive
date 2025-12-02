@@ -88,13 +88,14 @@ async fn test_lifecycle_hooks() -> anyhow::Result<()> {
     assert_eq!(order[1], "after_start");
     assert_eq!(order[2], "before_stop");
     assert_eq!(order[3], "after_stop");
+    drop(order);
 
     Ok(())
 }
 
-/// Tests before_start hook.
+/// Tests `before_start` hook.
 ///
-/// From: docs/actor-lifecycle/page.md - "before_start"
+/// From: docs/actor-lifecycle/page.md - "`before_start`"
 #[acton_test]
 async fn test_before_start_hook() -> anyhow::Result<()> {
     #[acton_actor]
@@ -126,9 +127,9 @@ async fn test_before_start_hook() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests after_start hook with self-messaging.
+/// Tests `after_start` hook with self-messaging.
 ///
-/// From: docs/actor-lifecycle/page.md - "after_start"
+/// From: docs/actor-lifecycle/page.md - "`after_start`"
 #[acton_test]
 async fn test_after_start_hook() -> anyhow::Result<()> {
     #[acton_actor]
@@ -169,9 +170,9 @@ async fn test_after_start_hook() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests before_stop hook for cleanup.
+/// Tests `before_stop` hook for cleanup.
 ///
-/// From: docs/actor-lifecycle/page.md - "before_stop"
+/// From: docs/actor-lifecycle/page.md - "`before_stop`"
 #[acton_test]
 async fn test_before_stop_hook() -> anyhow::Result<()> {
     #[acton_actor]
@@ -201,9 +202,9 @@ async fn test_before_stop_hook() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests after_stop hook for final assertions.
+/// Tests `after_stop` hook for final assertions.
 ///
-/// From: docs/actor-lifecycle/page.md - "after_stop"
+/// From: docs/actor-lifecycle/page.md - "`after_stop`"
 #[acton_test]
 async fn test_after_stop_hook() -> anyhow::Result<()> {
     #[acton_actor]
@@ -246,7 +247,7 @@ async fn test_after_stop_hook() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests async initialization pattern with after_start.
+/// Tests async initialization pattern with `after_start`.
 ///
 /// From: docs/actor-lifecycle/page.md - "Async Initialization Pattern"
 #[acton_test]

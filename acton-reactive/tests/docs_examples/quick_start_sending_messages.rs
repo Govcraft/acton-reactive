@@ -174,9 +174,9 @@ async fn test_accessing_message_data() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests Reply::ready() for synchronous completion.
+/// Tests `Reply::ready()` for synchronous completion.
 ///
-/// From: docs/quick-start/sending-messages/page.md - "Reply::ready()"
+/// From: docs/quick-start/sending-messages/page.md - "`Reply::ready()`"
 #[acton_test]
 async fn test_reply_ready() -> anyhow::Result<()> {
     #[acton_actor]
@@ -216,9 +216,12 @@ async fn test_reply_ready() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests Reply::pending() for async operations.
+/// Tests `Reply::pending()` for async operations.
 ///
-/// From: docs/quick-start/sending-messages/page.md - "Reply::pending(future)"
+/// From: docs/quick-start/sending-messages/page.md - "`Reply::pending(future)`"
+///
+/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
+/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_reply_pending() -> anyhow::Result<()> {
     #[acton_actor]
@@ -226,34 +229,32 @@ async fn test_reply_pending() -> anyhow::Result<()> {
         count: i32,
     }
 
+    #[acton_actor]
+    struct CountClient {
+        counter_handle: Option<ActorHandle>,
+    }
+
+    #[acton_message]
+    struct QueryCount;
+
     #[acton_message]
     struct GetCount;
 
     #[acton_message]
     struct CountResponse(i32);
 
-    let mut runtime = ActonApp::launch_async().await;
-
-    // Create a counter to receive responses
-    let mut receiver = runtime.new_actor::<Counter>();
     let received = Arc::new(AtomicI32::new(-1));
     let received_clone = received.clone();
 
-    receiver
-        .mutate_on::<CountResponse>(move |_actor, envelope| {
-            received_clone.store(envelope.message().0, Ordering::SeqCst);
-            Reply::ready()
-        });
+    let mut runtime = ActonApp::launch_async().await;
 
-    let receiver_handle = receiver.start().await;
-
-    // Create the counter service
+    // Create the counter service (responder)
     let mut counter = runtime.new_actor::<Counter>();
     counter.model.count = 42;
 
-    counter.act_on::<GetCount>(|actor, envelope| {
+    counter.act_on::<GetCount>(|actor, ctx| {
         let count = actor.model.count;
-        let reply_envelope = envelope.reply_envelope();
+        let reply_envelope = ctx.reply_envelope();
 
         // Reply::pending for async work
         Reply::pending(async move {
@@ -263,9 +264,28 @@ async fn test_reply_pending() -> anyhow::Result<()> {
 
     let counter_handle = counter.start().await;
 
-    // Create envelope to send GetCount with reply address pointing to receiver
-    let request_envelope = counter_handle.create_envelope(Some(receiver_handle.reply_address()));
-    request_envelope.send(GetCount).await;
+    // Create client (requester) that uses trigger pattern
+    let mut client = runtime.new_actor::<CountClient>();
+    client.model.counter_handle = Some(counter_handle);
+
+    client
+        .mutate_on::<QueryCount>(|actor, ctx| {
+            let target = actor.model.counter_handle.clone().unwrap();
+            let request_envelope = ctx.new_envelope(&target.reply_address());
+
+            Reply::pending(async move {
+                request_envelope.send(GetCount).await;
+            })
+        })
+        .mutate_on::<CountResponse>(move |_actor, ctx| {
+            received_clone.store(ctx.message().0, Ordering::SeqCst);
+            Reply::ready()
+        });
+
+    let client_handle = client.start().await;
+
+    // Trigger request via client
+    client_handle.send(QueryCount).await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
