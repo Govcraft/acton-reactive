@@ -42,7 +42,7 @@ pub use broker_request::BrokerRequest;
 pub use broker_request_envelope::BrokerRequestEnvelope;
 pub use message_address::MessageAddress;
 pub use outbound_envelope::OutboundEnvelope;
-pub use signal::SystemSignal;
+pub use signal::{ChildTerminated, SystemSignal};
 
 // --- Crate-Internal Re-exports ---
 pub use envelope::Envelope;

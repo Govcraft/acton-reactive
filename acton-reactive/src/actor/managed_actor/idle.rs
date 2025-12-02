@@ -27,7 +27,7 @@ use tokio::sync::mpsc::channel;
 use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace};
 
-use crate::actor::{ActorConfig, ManagedActor, Started};
+use crate::actor::{ActorConfig, ManagedActor, RestartPolicy, Started, SupervisionStrategy};
 use crate::common::{
     ActorHandle, ActorRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
 };
@@ -650,6 +650,10 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                 managed_actor.handle.outbox = outbox;
                 managed_actor.inbox = inbox;
             }
+            // Apply restart policy
+            managed_actor.restart_policy = config.restart_policy();
+            // Apply supervision strategy
+            managed_actor.supervision_strategy = config.supervision_strategy();
         }
 
         debug_assert!(
@@ -782,6 +786,8 @@ impl<State: Default + Send + Debug + 'static> From<ManagedActor<Idle, State>>
             read_only_handlers: value.read_only_handlers,
             error_handler_map: value.error_handler_map, // transfer error handlers
             cancellation_token: value.cancellation_token,
+            restart_policy: value.restart_policy,
+            supervision_strategy: value.supervision_strategy,
             _actor_state: PhantomData,
         }
     }
@@ -816,6 +822,8 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
             cancellation_token: Option::default(),
             message_handlers: DashMap::default(),
             read_only_handlers: DashMap::default(),
+            restart_policy: RestartPolicy::default(),
+            supervision_strategy: SupervisionStrategy::default(),
             _actor_state: PhantomData,
         }
     }

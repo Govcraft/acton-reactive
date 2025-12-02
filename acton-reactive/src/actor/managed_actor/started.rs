@@ -14,17 +14,20 @@
  * limitations under that License.
  */
 
+use std::any::Any;
 use std::fmt::Debug;
+use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
-use tracing::{instrument, trace}; // Removed unused error import
+use futures::FutureExt;
+use tracing::{error, instrument, trace};
 
-use crate::actor::ManagedActor;
+use crate::actor::{ManagedActor, TerminationReason};
 use crate::common::config::CONFIG;
 use crate::common::{Envelope, FutureBoxReadOnly, OutboundEnvelope, ReactorItem, ReactorMap};
-use crate::message::{BrokerRequestEnvelope, MessageAddress, SystemSignal};
+use crate::message::{BrokerRequestEnvelope, ChildTerminated, MessageAddress, SystemSignal};
 use crate::traits::ActorHandleInterface;
 
 /// Type-state marker for a [`ManagedActor`] that is actively running and processing messages.
@@ -38,6 +41,85 @@ use crate::traits::ActorHandleInterface;
 /// [`ActorHandle`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Started;
+
+/// Extracts a human-readable message from a panic payload.
+///
+/// Handles the common cases where the panic was created with `panic!("message")` (produces `&str`)
+/// or `panic!("{}", formatted)` (produces `String`). For other payload types, returns a debug
+/// representation of the type.
+fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map_or_else(
+            || {
+                payload.downcast_ref::<String>().map_or_else(
+                    || format!("Panic with payload type: {:?}", (**payload).type_id()),
+                    Clone::clone,
+                )
+            },
+            |s| (*s).to_string(),
+        )
+}
+
+/// Logs a panic that occurred in a handler.
+fn log_handler_panic(
+    actor_id: &acton_ern::Ern,
+    message_type_id: std::any::TypeId,
+    panic_payload: &Box<dyn Any + Send>,
+    context: &str,
+) {
+    let panic_msg = extract_panic_message(panic_payload);
+    error!(
+        actor_id = %actor_id,
+        message_type = ?message_type_id,
+        panic_message = %panic_msg,
+        "{context}"
+    );
+}
+
+/// Logs a panic that occurred in an error handler.
+fn log_error_handler_panic(
+    actor_id: &acton_ern::Ern,
+    message_type_id: std::any::TypeId,
+    error_type_id: std::any::TypeId,
+    panic_payload: &Box<dyn Any + Send>,
+    context: &str,
+) {
+    let panic_msg = extract_panic_message(panic_payload);
+    error!(
+        actor_id = %actor_id,
+        message_type = ?message_type_id,
+        error_type = ?error_type_id,
+        panic_message = %panic_msg,
+        "{context}"
+    );
+}
+
+/// Logs a panic that occurred in a lifecycle hook.
+fn log_lifecycle_panic(actor_id: &acton_ern::Ern, panic_payload: &Box<dyn Any + Send>, context: &str) {
+    let panic_msg = extract_panic_message(panic_payload);
+    error!(actor_id = %actor_id, panic_message = %panic_msg, "{context}");
+}
+
+/// Runs a lifecycle hook with panic protection and logs any panics.
+/// This macro avoids borrowing issues that would occur with a function.
+macro_rules! run_lifecycle_hook {
+    ($self:expr, $hook:ident, $hook_name:literal) => {{
+        let hook_result = std::panic::catch_unwind(AssertUnwindSafe(|| ($self.$hook)($self)));
+        match hook_result {
+            Ok(future) => {
+                if let Err(ref panic_payload) = AssertUnwindSafe(future).catch_unwind().await {
+                    log_lifecycle_panic($self.id(), panic_payload,
+                        concat!("Panic in ", $hook_name, " lifecycle hook (during await)"));
+                }
+            }
+            Err(ref panic_payload) => {
+                log_lifecycle_panic($self.id(), panic_payload,
+                    concat!("Panic in ", $hook_name, " lifecycle hook (during closure invocation)"));
+            }
+        }
+    }};
+}
 
 /// Implements methods specific to a `ManagedActor` in the `Started` state.
 impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
@@ -87,39 +169,114 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         })
     }
 
-    /// Handles dispatching a mutable reactor with error handling
+    /// Handles dispatching a mutable reactor with error and panic handling.
+    ///
+    /// Panics in message handlers are caught and logged, allowing the actor to continue
+    /// processing subsequent messages. This provides fault isolation.
     async fn dispatch_mutable_handler(
         &mut self,
         reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
     ) {
+        let message_type_id = envelope.message.as_any().type_id();
+
         match reactor {
             ReactorItem::Mutable(fut) => {
-                fut(self, envelope).await;
+                self.dispatch_mutable_infallible(fut, envelope, message_type_id).await;
             }
             ReactorItem::MutableFallible(fut) => {
-                let result = fut(self, envelope).await;
-                if let Err((err, error_type_id)) = result {
-                    let message_type_id = envelope.message.as_any().type_id();
-                    if let Some(handler) = self
-                        .error_handler_map
-                        .remove(&(message_type_id, error_type_id))
-                    {
-                        handler(self, envelope, err.as_ref()).await;
-                        self.error_handler_map
-                            .insert((message_type_id, error_type_id), handler);
-                    } else {
-                        tracing::error!(
-                            "Unhandled error from message handler in actor {}: {:?}",
-                            self.id(),
-                            err
-                        );
-                    }
-                }
+                self.dispatch_mutable_fallible(fut, envelope, message_type_id).await;
             }
             ReactorItem::ReadOnly(_) | ReactorItem::ReadOnlyFallible(_) => {
                 tracing::warn!("Found read-only handler in mutable_reactors map");
             }
+        }
+    }
+
+    /// Dispatches an infallible mutable handler with panic protection.
+    async fn dispatch_mutable_infallible(
+        &mut self,
+        fut: &crate::common::FutureHandler<Actor>,
+        envelope: &mut Envelope,
+        message_type_id: std::any::TypeId,
+    ) {
+        let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| fut(self, envelope)));
+        match future_result {
+            Ok(future) => {
+                if let Err(ref panic_payload) = AssertUnwindSafe(future).catch_unwind().await {
+                    log_handler_panic(self.id(), message_type_id, panic_payload,
+                        "Panic in mutable message handler (during await)");
+                }
+            }
+            Err(ref panic_payload) => {
+                log_handler_panic(self.id(), message_type_id, panic_payload,
+                    "Panic in mutable message handler (during closure invocation)");
+            }
+        }
+    }
+
+    /// Dispatches a fallible mutable handler with panic and error handling.
+    async fn dispatch_mutable_fallible(
+        &mut self,
+        fut: &crate::common::FutureHandlerResult<Actor>,
+        envelope: &mut Envelope,
+        message_type_id: std::any::TypeId,
+    ) {
+        let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| fut(self, envelope)));
+        match future_result {
+            Ok(future) => {
+                match AssertUnwindSafe(future).catch_unwind().await {
+                    Ok(Ok(_)) => { /* Handler succeeded */ }
+                    Ok(Err((err, error_type_id))) => {
+                        self.handle_fallible_error(envelope, message_type_id, error_type_id, err).await;
+                    }
+                    Err(ref panic_payload) => {
+                        log_handler_panic(self.id(), message_type_id, panic_payload,
+                            "Panic in mutable fallible message handler (during await)");
+                    }
+                }
+            }
+            Err(ref panic_payload) => {
+                log_handler_panic(self.id(), message_type_id, panic_payload,
+                    "Panic in mutable fallible message handler (during closure invocation)");
+            }
+        }
+    }
+
+
+    /// Handles an error from a fallible handler, invoking the error handler if registered.
+    async fn handle_fallible_error(
+        &mut self,
+        envelope: &mut Envelope,
+        message_type_id: std::any::TypeId,
+        error_type_id: std::any::TypeId,
+        err: Box<dyn std::error::Error + Send + Sync>,
+    ) {
+        if let Some(handler) = self.error_handler_map.remove(&(message_type_id, error_type_id)) {
+            let error_future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                handler(self, envelope, err.as_ref())
+            }));
+
+            match error_future_result {
+                Ok(error_future) => {
+                    if let Err(ref panic_payload) = AssertUnwindSafe(error_future).catch_unwind().await {
+                        log_error_handler_panic(self.id(), message_type_id, error_type_id,
+                            panic_payload, "Panic in error handler (during await)");
+                    }
+                }
+                Err(ref panic_payload) => {
+                    log_error_handler_panic(self.id(), message_type_id, error_type_id,
+                        panic_payload, "Panic in error handler (during closure invocation)");
+                }
+            }
+            self.error_handler_map.insert((message_type_id, error_type_id), handler);
+        } else {
+            error!(
+                actor_id = %self.id(),
+                message_type = ?message_type_id,
+                error = ?err,
+                "Unhandled error from message handler"
+            );
         }
     }
 
@@ -128,27 +285,100 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
     /// Instead of spawning a separate task for each handler, this pushes the future
     /// directly to `FuturesUnordered` for more efficient execution of lightweight handlers.
     /// This avoids the overhead of task creation and `JoinHandle` management.
+    ///
+    /// Panics in read-only handlers are caught and logged, preventing one panicking
+    /// handler from affecting other concurrent handlers or crashing the actor.
+    ///
+    /// # Panic Safety
+    ///
+    /// Both the synchronous closure invocation (which creates the future) and the
+    /// asynchronous execution of the future are protected from panics.
     fn enqueue_read_only_handler(
         &self,
         reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
         read_only_futures: &FuturesUnordered<FutureBoxReadOnly>,
     ) {
+        let actor_id = self.id().clone();
+        let message_type_id = envelope.message.as_any().type_id();
+
         match reactor {
             ReactorItem::ReadOnly(fut) => {
-                read_only_futures.push(fut(self, envelope));
-            }
-            ReactorItem::ReadOnlyFallible(fut) => {
-                let future = fut(self, envelope);
-                // Wrap fallible handler to log errors and normalize to `()`
-                read_only_futures.push(Box::pin(async move {
-                    if let Err((err, _)) = future.await {
-                        tracing::error!(
-                            "Unhandled error from read-only message handler: {:?}",
-                            err
+                // Protect the closure invocation from panics
+                let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    fut(self, envelope)
+                }));
+
+                match future_result {
+                    Ok(future) => {
+                        // Wrap handler with panic catching for the async execution
+                        read_only_futures.push(Box::pin(async move {
+                            let result = AssertUnwindSafe(future).catch_unwind().await;
+                            if let Err(panic_payload) = result {
+                                let panic_msg = extract_panic_message(&panic_payload);
+                                error!(
+                                    actor_id = %actor_id,
+                                    message_type = ?message_type_id,
+                                    panic_message = %panic_msg,
+                                    "Panic in read-only message handler (during await)"
+                                );
+                            }
+                        }));
+                    }
+                    Err(panic_payload) => {
+                        let panic_msg = extract_panic_message(&panic_payload);
+                        error!(
+                            actor_id = %actor_id,
+                            message_type = ?message_type_id,
+                            panic_message = %panic_msg,
+                            "Panic in read-only message handler (during closure invocation)"
                         );
                     }
+                }
+            }
+            ReactorItem::ReadOnlyFallible(fut) => {
+                // Protect the closure invocation from panics
+                let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    fut(self, envelope)
                 }));
+
+                match future_result {
+                    Ok(future) => {
+                        // Wrap fallible handler with panic catching and error logging
+                        read_only_futures.push(Box::pin(async move {
+                            let result = AssertUnwindSafe(future).catch_unwind().await;
+                            match result {
+                                Ok(Ok(_)) => { /* Handler succeeded */ }
+                                Ok(Err((err, _error_type_id))) => {
+                                    error!(
+                                        actor_id = %actor_id,
+                                        message_type = ?message_type_id,
+                                        error = ?err,
+                                        "Unhandled error from read-only message handler"
+                                    );
+                                }
+                                Err(panic_payload) => {
+                                    let panic_msg = extract_panic_message(&panic_payload);
+                                    error!(
+                                        actor_id = %actor_id,
+                                        message_type = ?message_type_id,
+                                        panic_message = %panic_msg,
+                                        "Panic in read-only fallible message handler (during await)"
+                                    );
+                                }
+                            }
+                        }));
+                    }
+                    Err(panic_payload) => {
+                        let panic_msg = extract_panic_message(&panic_payload);
+                        error!(
+                            actor_id = %actor_id,
+                            message_type = ?message_type_id,
+                            panic_message = %panic_msg,
+                            "Panic in read-only fallible message handler (during closure invocation)"
+                        );
+                    }
+                }
             }
             _ => {
                 tracing::warn!("Found mutable handler in read_only_reactors map");
@@ -164,7 +394,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         mutable_reactors: ReactorMap<Actor>,
         read_only_reactors: ReactorMap<Actor>,
     ) {
-        (self.after_start)(self).await;
+        run_lifecycle_hook!(self, after_start, "after_start");
         assert!(
             self.cancellation_token.is_some(),
             "ManagedActor in Started state must always have a cancellation_token"
@@ -177,11 +407,16 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
         let mut last_flush_time = Instant::now();
 
+        // Track the termination reason - set when the loop exits
+        let termination_reason;
+
         loop {
             tokio::select! {
                 () = &mut cancel => {
                     trace!("Forceful cancellation triggered for actor: {}", self.id());
                     while read_only_futures.next().await.is_some() {}
+                    // Parent-initiated shutdown via cancellation token
+                    termination_reason = TerminationReason::ParentShutdown;
                     break;
                 }
 
@@ -191,7 +426,11 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                 }
 
                 incoming_opt = self.inbox.recv() => {
-                    let Some(incoming_envelope) = incoming_opt else { break; };
+                    let Some(incoming_envelope) = incoming_opt else {
+                        // Inbox closed without Terminate signal = unexpected closure
+                        termination_reason = TerminationReason::InboxClosed;
+                        break;
+                    };
                     trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root);
 
                     // Extract envelope and type_id, handling BrokerRequestEnvelope indirection
@@ -221,8 +460,11 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate)) {
                         while read_only_futures.next().await.is_some() {}
                         trace!("Terminate signal received for actor: {}. Closing inbox.", self.id());
-                        (self.before_stop)(self).await;
+                        run_lifecycle_hook!(self, before_stop, "before_stop");
                         self.inbox.close();
+                        // Graceful shutdown via Terminate signal - break to avoid overwriting
+                        termination_reason = TerminationReason::Normal;
+                        break;
                     } else {
                         trace!("No handler found for message type {:?} for actor {}", type_id, self.id());
                     }
@@ -230,13 +472,32 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             }
         }
 
-        trace!(
-            "Message loop finished for actor: {}. Initiating final termination.",
-            self.id()
-        );
+        trace!("Message loop finished for actor: {}. Initiating final termination.", self.id());
         while read_only_futures.next().await.is_some() {}
         terminate_children(&self.handle, self.id()).await;
-        (self.after_stop)(self).await;
+        run_lifecycle_hook!(self, after_stop, "after_stop");
+
+        // Notify parent of termination if we have a parent
+        // We extract everything we need before the await to avoid holding &self across await
+        if let Some(parent) = &self.parent {
+            let notification = ChildTerminated::new(
+                self.id.clone(),
+                termination_reason,
+                self.restart_policy,
+            );
+
+            trace!(
+                "Notifying parent {} of child {} termination: {:?}",
+                parent.id(),
+                self.id(),
+                notification
+            );
+
+            // Clone the parent handle to avoid borrowing self across await
+            let parent_clone = parent.clone();
+            parent_clone.send(notification).await;
+        }
+
         trace!("Actor {} stopped.", self.id());
     }
 }

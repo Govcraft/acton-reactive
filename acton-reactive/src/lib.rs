@@ -161,10 +161,14 @@ pub mod prelude {
     pub use tokio;
 
     // Core types
-    pub use crate::actor::{ActorConfig, Idle, ManagedActor, Started};
+    pub use crate::actor::{
+        ActorConfig, Idle, ManagedActor, RestartLimitExceeded, RestartLimiter, RestartLimiterConfig,
+        RestartPolicy, RestartStats, Started, SupervisionDecision, SupervisionStrategy,
+        TerminationReason,
+    };
     pub use crate::common::{ActonApp, ActorHandle, ActorRuntime, Broker, Reply};
     pub use crate::message::{
-        BrokerRequest, BrokerRequestEnvelope, MessageAddress, OutboundEnvelope,
+        BrokerRequest, BrokerRequestEnvelope, ChildTerminated, MessageAddress, OutboundEnvelope,
     };
     pub use crate::traits::{
         ActonMessage, ActorHandleInterface, Broadcaster, Subscribable, Subscriber,

@@ -15,6 +15,10 @@
  */
 use std::fmt::Debug;
 
+use acton_ern::Ern;
+
+use crate::actor::{RestartPolicy, TerminationReason};
+
 /// Represents system-level signals used to manage actor lifecycles.
 ///
 /// These signals are distinct from regular application messages and are typically
@@ -43,12 +47,37 @@ pub enum SystemSignal {
     // Wake, Recreate, Suspend, Resume, Supervise, Watch, Unwatch, Failed,
 }
 
-// The original file had no methods, but if an `as_str` or similar were needed:
-// impl SystemSignal {
-//     /// Returns a string representation of the signal variant.
-//     pub fn as_str(&self) -> &'static str {
-//         match self {
-//             SystemSignal::Terminate => "Terminate",
-//         }
-//     }
-// }
+/// Notification sent to a parent actor when one of its children terminates.
+///
+/// This message is sent by the child actor's `wake` loop to its parent,
+/// providing all the information needed for the parent to decide whether
+/// to restart the child based on its [`RestartPolicy`] and the
+/// [`TerminationReason`].
+///
+/// # Supervision Flow
+///
+/// 1. Child actor terminates (normally, panic, or inbox closed)
+/// 2. Child sends `ChildTerminated` to parent (if parent exists)
+/// 3. Parent's supervision handler evaluates restart policy
+/// 4. Parent may restart the child or take other action
+#[derive(Debug, Clone)]
+pub struct ChildTerminated {
+    /// The unique identifier of the child actor that terminated.
+    pub child_id: Ern,
+    /// The reason the child terminated.
+    pub reason: TerminationReason,
+    /// The restart policy configured for this child.
+    pub restart_policy: RestartPolicy,
+}
+
+impl ChildTerminated {
+    /// Creates a new `ChildTerminated` notification.
+    #[must_use]
+    pub const fn new(child_id: Ern, reason: TerminationReason, restart_policy: RestartPolicy) -> Self {
+        Self {
+            child_id,
+            reason,
+            restart_policy,
+        }
+    }
+}
