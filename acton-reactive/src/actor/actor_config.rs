@@ -16,7 +16,7 @@
 
 use acton_ern::{Ern, ErnParser};
 
-use crate::actor::{RestartPolicy, SupervisionStrategy};
+use crate::actor::{RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
 use crate::common::{BrokerRef, ParentRef};
 use crate::traits::ActorHandleInterface;
 
@@ -48,6 +48,10 @@ pub struct ActorConfig {
     /// The supervision strategy for managing child actors.
     /// Defaults to `SupervisionStrategy::OneForOne`.
     supervision_strategy: SupervisionStrategy,
+    /// Optional restart limiter configuration for this actor.
+    /// When `Some`, the supervisor will use this configuration to limit
+    /// restart frequency and apply exponential backoff.
+    restart_limiter_config: Option<RestartLimiterConfig>,
 }
 
 impl ActorConfig {
@@ -90,6 +94,7 @@ impl ActorConfig {
                 inbox_capacity: None,
                 restart_policy: RestartPolicy::default(),
                 supervision_strategy: SupervisionStrategy::default(),
+                restart_limiter_config: None,
             })
         } else {
             Ok(Self {
@@ -99,6 +104,7 @@ impl ActorConfig {
                 inbox_capacity: None,
                 restart_policy: RestartPolicy::default(),
                 supervision_strategy: SupervisionStrategy::default(),
+                restart_limiter_config: None,
             })
         }
     }
@@ -220,5 +226,38 @@ impl ActorConfig {
     #[inline]
     pub(crate) const fn supervision_strategy(&self) -> SupervisionStrategy {
         self.supervision_strategy
+    }
+
+    /// Sets the restart limiter configuration for this actor.
+    ///
+    /// The restart limiter controls how frequently an actor can be restarted
+    /// and applies exponential backoff between restart attempts:
+    /// - Tracks restarts within a sliding time window
+    /// - Limits the maximum number of restarts within that window
+    /// - Applies exponential backoff delays between restarts
+    ///
+    /// When the restart limit is exceeded, the supervisor should escalate
+    /// the failure to its parent rather than continuing to restart.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The [`RestartLimiterConfig`] specifying limits and backoff parameters.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` for method chaining.
+    #[must_use]
+    pub const fn with_restart_limiter(mut self, config: RestartLimiterConfig) -> Self {
+        self.restart_limiter_config = Some(config);
+        self
+    }
+
+    /// Returns the optional restart limiter configuration for this actor.
+    ///
+    /// Used by the supervision system when creating restart limiters for child actors.
+    #[inline]
+    #[allow(dead_code)] // Will be used when supervision fully integrates restart limiting
+    pub(crate) const fn restart_limiter_config(&self) -> Option<&RestartLimiterConfig> {
+        self.restart_limiter_config.as_ref()
     }
 }
