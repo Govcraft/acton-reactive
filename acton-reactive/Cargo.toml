@@ -38,6 +38,7 @@ chrono = "0.4.42"
 scopeguard = "1.2.0"
 futures.workspace = true
 mti.workspace = true
+divan = "0.1"
 
 [features]
 default = []
@@ -126,3 +127,11 @@ required-features = ["ipc"]
 name = "ipc_client_libraries_server"
 path = "examples/ipc_client_libraries/server/main.rs"
 required-features = ["ipc"]
+
+# ============================================================================
+# Benchmarks
+# ============================================================================
+
+[[bench]]
+name = "actor_benchmarks"
+harness = false
