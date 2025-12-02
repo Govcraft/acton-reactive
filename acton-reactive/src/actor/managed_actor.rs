@@ -24,7 +24,7 @@ use tokio_util::task::TaskTracker;
 
 pub use idle::Idle;
 
-use crate::actor::RestartPolicy;
+use crate::actor::{RestartPolicy, SupervisionStrategy};
 use crate::common::{
     ActorHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap,
 };
@@ -109,6 +109,9 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// The restart policy for this actor when supervised.
     /// Determines whether and when the actor should be restarted after termination.
     pub(crate) restart_policy: RestartPolicy,
+    /// The supervision strategy for managing child actors.
+    /// Determines how to handle child terminations (`OneForOne`, `OneForAll`, `RestForOne`).
+    pub(crate) supervision_strategy: SupervisionStrategy,
     /// Phantom data to associate the `ActorState` type parameter.
     _actor_state: std::marker::PhantomData<ActorState>,
 }

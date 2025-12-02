@@ -16,7 +16,7 @@
 
 use acton_ern::{Ern, ErnParser};
 
-use crate::actor::RestartPolicy;
+use crate::actor::{RestartPolicy, SupervisionStrategy};
 use crate::common::{BrokerRef, ParentRef};
 use crate::traits::ActorHandleInterface;
 
@@ -45,6 +45,9 @@ pub struct ActorConfig {
     /// The restart policy for this actor when supervised.
     /// Defaults to `RestartPolicy::Permanent`.
     restart_policy: RestartPolicy,
+    /// The supervision strategy for managing child actors.
+    /// Defaults to `SupervisionStrategy::OneForOne`.
+    supervision_strategy: SupervisionStrategy,
 }
 
 impl ActorConfig {
@@ -86,6 +89,7 @@ impl ActorConfig {
                 parent: Some(parent_ref),
                 inbox_capacity: None,
                 restart_policy: RestartPolicy::default(),
+                supervision_strategy: SupervisionStrategy::default(),
             })
         } else {
             Ok(Self {
@@ -94,6 +98,7 @@ impl ActorConfig {
                 parent, // parent is None here
                 inbox_capacity: None,
                 restart_policy: RestartPolicy::default(),
+                supervision_strategy: SupervisionStrategy::default(),
             })
         }
     }
@@ -189,5 +194,31 @@ impl ActorConfig {
     #[inline]
     pub(crate) const fn restart_policy(&self) -> RestartPolicy {
         self.restart_policy
+    }
+
+    /// Sets the supervision strategy for managing child actors.
+    ///
+    /// The supervision strategy determines how the supervisor handles child terminations:
+    /// - [`SupervisionStrategy::OneForOne`]: Restart only the failed child
+    /// - [`SupervisionStrategy::OneForAll`]: Restart all children when one fails
+    /// - [`SupervisionStrategy::RestForOne`]: Restart the failed child and all children started after it
+    ///
+    /// # Arguments
+    ///
+    /// * `strategy` - The supervision strategy to use for this actor.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` for method chaining.
+    #[must_use]
+    pub const fn with_supervision_strategy(mut self, strategy: SupervisionStrategy) -> Self {
+        self.supervision_strategy = strategy;
+        self
+    }
+
+    /// Returns the supervision strategy for this actor.
+    #[inline]
+    pub(crate) const fn supervision_strategy(&self) -> SupervisionStrategy {
+        self.supervision_strategy
     }
 }

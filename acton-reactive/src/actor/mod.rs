@@ -42,6 +42,7 @@ pub use managed_actor::Idle;
 pub use managed_actor::ManagedActor;
 pub use managed_actor::started::Started; // Note: `Started` is defined within a submodule
 pub use restart_policy::{RestartPolicy, TerminationReason};
+pub use supervision::{SupervisionDecision, SupervisionStrategy};
 
 /// Contains the `ManagedActor` struct and its state-specific implementations (`Idle`, `Started`).
 mod managed_actor;
@@ -51,3 +52,6 @@ mod actor_config;
 
 /// Contains restart policies for supervised actors.
 mod restart_policy;
+
+/// Contains supervision strategies for managing child actor restarts.
+mod supervision;
