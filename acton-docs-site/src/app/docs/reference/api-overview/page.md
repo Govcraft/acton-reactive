@@ -12,22 +12,26 @@ All the key types, traits, and macros in one place. For complete API documentati
 The actor system runtime.
 
 ```rust
-let app = ActonApp::launch();
+let runtime = ActonApp::launch_async().await;
 ```
 
 | Method | Description |
 |--------|-------------|
-| `launch()` | Start a new actor system |
-| `new_actor::<T>()` | Create an AgentBuilder |
-| `shutdown_all()` | Graceful shutdown |
-| `get_broker()` | Access the message broker |
+| `launch_async().await` | Start a new actor system |
+| `new_actor::<T>()` | Create an actor builder |
+| `new_actor_with_name::<T>(name)` | Create a named actor builder |
+| `shutdown_all().await` | Graceful shutdown |
+| `broker()` | Access the message broker |
+| `ipc_registry()` | Access IPC type registry |
+| `ipc_expose(name, handle)` | Expose actor for IPC |
+| `start_ipc_listener().await` | Start IPC listener |
 
-### AgentBuilder
+### Actor Builder
 
 Configures actors before spawning.
 
 ```rust
-let handle = app
+let handle = runtime
     .new_actor::<Counter>()
     .mutate_on::<Increment>(handler)
     .act_on::<GetCount>(handler)
@@ -39,24 +43,29 @@ let handle = app
 |--------|-------------|
 | `mutate_on::<M>(handler)` | Register state-changing handler |
 | `act_on::<M>(handler)` | Register read-only handler |
-| `after_start(hook)` | Lifecycle hook |
-| `start()` | Spawn the actor |
+| `before_start(hook)` | Lifecycle hook before start |
+| `after_stop(hook)` | Lifecycle hook after stop |
+| `start().await` | Spawn the actor |
+| `handle()` | Get handle before starting |
 
-### AgentHandle
+### ActorHandle
 
 Reference to a running actor.
 
 ```rust
 handle.send(Message).await;
-let result = handle.ask(Query).await;
+handle.stop().await.ok();
 ```
 
 | Method | Description |
 |--------|-------------|
-| `send(msg)` | Fire-and-forget |
-| `ask(msg)` | Request-response |
-| `stop()` | Stop the actor |
-| `subscribe::<M>()` | Subscribe to broadcast messages |
+| `send(msg).await` | Fire-and-forget message |
+| `stop().await` | Stop the actor |
+| `subscribe::<M>().await` | Subscribe to broadcast messages |
+| `reply_address()` | Get address for replies |
+| `create_envelope(target)` | Create envelope for sending |
+| `supervise(child).await` | Start and supervise a child |
+| `id()` | Get actor's identifier |
 
 ### Reply
 
@@ -64,9 +73,20 @@ Handler return type.
 
 | Method | Description |
 |--------|-------------|
-| `Reply::ready()` | No response |
-| `Reply::with(value)` | Return a value |
-| `Reply::pending(future)` | Async response |
+| `Reply::ready()` | Synchronous completion |
+| `Reply::pending(future)` | Async completion |
+| `Reply::try_ok(value)` | For fallible handlers |
+
+### Envelope
+
+Message wrapper with routing information.
+
+| Method | Description |
+|--------|-------------|
+| `message()` | Access the message data |
+| `reply_envelope()` | Create envelope back to sender |
+| `new_envelope(&address)` | Create envelope to different recipient |
+| `send(msg).await` | Send via this envelope |
 
 ---
 
@@ -91,7 +111,7 @@ Marks a struct as a message.
 #[acton_message]
 struct Increment;
 
-#[acton_message(ipc)]  // Enable IPC
+#[acton_message(ipc)]  // Enable IPC serialization
 struct GetValue;
 ```
 
@@ -102,7 +122,7 @@ Sets up the async runtime.
 ```rust
 #[acton_main]
 async fn main() {
-    let app = ActonApp::launch();
+    let runtime = ActonApp::launch_async().await;
     // ...
 }
 ```
@@ -117,4 +137,4 @@ Import everything:
 use acton_reactive::prelude::*;
 ```
 
-Includes: `ActonApp`, `AgentBuilder`, `AgentHandle`, `Reply`, all macros.
+Includes: `ActonApp`, `ActorHandle`, `Reply`, all macros.

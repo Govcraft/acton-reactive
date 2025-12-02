@@ -12,13 +12,13 @@ If you've used actor systems before, this guide maps familiar concepts to Acton 
 | `ActorSystem` | `ActonApp` |
 | `Actor` trait | `#[acton_actor]` struct |
 | `receive` | `mutate_on` / `act_on` handlers |
-| `ActorRef` | `AgentHandle` |
+| `ActorRef` | `ActorHandle` |
 | `tell` (!) | `handle.send(msg).await` |
-| `ask` (?) | `handle.ask(msg).await` |
-| `Props` | `AgentBuilder` |
-| `context.spawn` | `actor.new_child::<T>()` |
+| `ask` (?) | Reply envelope pattern |
+| `Props` | Actor builder |
+| `context.spawn` | `actor.create_child()` + `supervise()` |
 | `PoisonPill` | `handle.stop()` |
-| `EventBus` | `app.get_broker()` |
+| `EventBus` | `runtime.broker()` |
 
 ### Key Differences
 
@@ -36,7 +36,7 @@ enum State {
     Done,
 }
 
-builder.mutate_on::<Event>(|actor, msg| {
+builder.mutate_on::<Event>(|actor, envelope| {
     match actor.model.state {
         State::Idle => { /* idle behavior */ }
         State::Processing => { /* processing behavior */ }
@@ -48,6 +48,8 @@ builder.mutate_on::<Event>(|actor, msg| {
 
 **Supervision is simpler**: No complex supervision strategies. Parents are notified of child failures and decide how to respond.
 
+**Reply envelope pattern**: Instead of `ask`, use reply envelopes for request-response.
+
 ---
 
 ## From Actix (Rust)
@@ -56,12 +58,12 @@ builder.mutate_on::<Event>(|actor, msg| {
 |-------|----------------|
 | `Actor` trait | `#[acton_actor]` struct |
 | `Handler<M>` impl | `mutate_on::<M>` / `act_on::<M>` |
-| `Addr<A>` | `AgentHandle` |
+| `Addr<A>` | `ActorHandle` |
 | `do_send` | `handle.send(msg).await` |
-| `send().await` | `handle.ask(msg).await` |
+| `send().await` | Reply envelope pattern |
 | `Context` | `ManagedAgent` (in handler) |
 | `Arbiter` | Tokio runtime (implicit) |
-| `System::new()` | `ActonApp::launch()` |
+| `System::new()` | `ActonApp::launch_async().await` |
 
 ### Key Differences
 
@@ -77,8 +79,17 @@ impl Handler<Increment> for Counter {
 }
 
 // Acton
-builder.mutate_on::<Increment>(|actor, _| {
+builder.mutate_on::<Increment>(|actor, _envelope| {
     actor.model.count += 1;
+    Reply::ready()
+});
+```
+
+**Envelope-based handlers**: Handlers receive envelopes, not raw messages:
+
+```rust
+builder.mutate_on::<MyMessage>(|actor, envelope| {
+    let msg = envelope.message();  // Access the message
     Reply::ready()
 });
 ```
@@ -86,9 +97,11 @@ builder.mutate_on::<Increment>(|actor, _| {
 **Async handlers are explicit**: Use `Reply::pending` for async work:
 
 ```rust
-builder.act_on::<Query>(|actor, msg| {
+builder.act_on::<Query>(|actor, envelope| {
+    let reply = envelope.reply_envelope();
     Reply::pending(async move {
-        fetch_data().await
+        let data = fetch_data().await;
+        reply.send(QueryResponse(data)).await;
     })
 });
 ```
@@ -102,10 +115,10 @@ If you've built actors manually with Tokio channels:
 | Manual | Acton Reactive |
 |--------|----------------|
 | `mpsc::channel` | Built into framework |
-| `tokio::spawn` + loop | `AgentBuilder.start()` |
+| `tokio::spawn` + loop | `builder.start().await` |
 | Match on message enum | Typed handlers |
 | Manual state management | `actor.model` |
-| Manual shutdown logic | `app.shutdown_all()` |
+| Manual shutdown logic | `runtime.shutdown_all()` |
 
 ### Key Differences
 
@@ -123,23 +136,32 @@ loop {
 
 // Acton
 builder
-    .mutate_on::<Increment>(|actor, _| {
+    .mutate_on::<Increment>(|actor, _envelope| {
         actor.model.count += 1;
         Reply::ready()
     })
-    .act_on::<GetCount>(|actor, _| {
-        Reply::with(actor.model.count)
+    .act_on::<GetCount>(|actor, envelope| {
+        let count = actor.model.count;
+        let reply = envelope.reply_envelope();
+        Reply::pending(async move {
+            reply.send(CountResponse(count)).await;
+        })
     });
 ```
 
-**Built-in request-response**: No need to include oneshot channels in messages:
+**Reply envelope pattern**: Use envelopes instead of oneshot channels:
 
 ```rust
 // Manual: include response channel
 struct GetCount(oneshot::Sender<i32>);
 
-// Acton: just use ask
-let count: i32 = handle.ask(GetCount).await;
+// Acton: use reply envelope
+builder.act_on::<GetCount>(|actor, envelope| {
+    let reply = envelope.reply_envelope();
+    Reply::pending(async move {
+        reply.send(CountResponse(actor.model.count)).await;
+    })
+});
 ```
 
 ---
@@ -150,7 +172,7 @@ let count: i32 = handle.ask(GetCount).await;
 |---------|----------------|
 | Grain | Actor |
 | `IGrain` interface | `#[acton_actor]` struct |
-| `GrainClient` | `AgentHandle` |
+| `GrainClient` | `ActorHandle` |
 | Silo | `ActonApp` (single process) |
 | Virtual actors | Not supported (explicit spawn) |
 | Grain persistence | Manual (store in state) |
@@ -168,7 +190,7 @@ let count: i32 = handle.ask(GetCount).await;
 | Erlang/Elixir | Acton Reactive |
 |---------------|----------------|
 | `spawn` | `builder.start().await` |
-| `pid` | `AgentHandle` |
+| `pid` | `ActorHandle` |
 | `send` (!) | `handle.send(msg).await` |
 | `receive` | Handler closures |
 | `GenServer` | Actor with handlers |
@@ -199,11 +221,11 @@ struct SetValue { value: i32 }
 2. **Map your messages**: Create `#[acton_message]` structs for each message type
 3. **Identify mutation**: Separate read-only handlers (`act_on`) from state-changing ones (`mutate_on`)
 4. **Handle async differently**: Use `Reply::pending` for async work
-5. **Simplify supervision**: Start with default behavior, add custom logic as needed
+5. **Use envelope pattern**: Replace `ask` with reply envelopes
+6. **Simplify supervision**: Start with default behavior, add custom logic as needed
 
 ---
 
 ## Need Help?
 
-If you're stuck migrating from a specific framework, [open an issue](https://github.com/acton-lang/acton-reactive/issues) with your use case.
-
+If you're stuck migrating from a specific framework, [open an issue](https://github.com/Govcraft/acton-reactive/issues) with your use case.

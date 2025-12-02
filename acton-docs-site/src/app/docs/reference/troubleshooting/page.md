@@ -52,8 +52,8 @@ impl Default for MyActor {
 **Solution**: Return `Reply::ready()` for no response:
 
 ```rust
-builder.mutate_on::<Message>(|actor, msg| {
-    actor.model.value = msg.value;
+builder.mutate_on::<Message>(|actor, envelope| {
+    actor.model.value = envelope.message().value;
     Reply::ready()  // Don't forget this!
 });
 ```
@@ -85,7 +85,7 @@ let data = Arc::new(value);
 **Solution**: Catch panics or use Result types:
 
 ```rust
-builder.mutate_on::<RiskyMessage>(|actor, msg| {
+builder.mutate_on::<RiskyMessage>(|actor, envelope| {
     // Catch potential panics
     let result = std::panic::catch_unwind(|| {
         risky_operation()
@@ -114,8 +114,8 @@ builder.mutate_on::<RiskyMessage>(|actor, msg| {
 **Debug with logging**:
 
 ```rust
-builder.mutate_on::<Message>(|actor, msg| {
-    tracing::debug!("Received message: {:?}", msg);
+builder.mutate_on::<Message>(|actor, envelope| {
+    tracing::debug!("Received message: {:?}", envelope.message());
     // ...
     Reply::ready()
 });
@@ -123,28 +123,18 @@ builder.mutate_on::<Message>(|actor, msg| {
 
 ---
 
-### `ask` hangs forever
+### Reply envelope not working
 
-**Problem**: The handler never returns a Reply.
+**Problem**: Response never arrives at sender.
 
-**Solution**: Ensure all code paths return a Reply:
+**Solution**: Ensure the sender has a handler for the response type:
 
 ```rust
-// Bad: missing Reply in else branch
-builder.act_on::<Query>(|actor, msg| {
-    if actor.model.ready {
-        Reply::with(actor.model.value)
-    }
-    // Missing else!
-});
-
-// Good: all paths return Reply
-builder.act_on::<Query>(|actor, msg| {
-    if actor.model.ready {
-        Reply::with(Some(actor.model.value))
-    } else {
-        Reply::with(None)
-    }
+// Sender must handle the response
+sender.mutate_on::<CountResponse>(|actor, envelope| {
+    let count = envelope.message().0;
+    println!("Got count: {}", count);
+    Reply::ready()
 });
 ```
 
@@ -152,16 +142,15 @@ builder.act_on::<Query>(|actor, msg| {
 
 ### Deadlock between actors
 
-**Problem**: Actor A waits for B, B waits for A.
+**Problem**: Actor A waits for B, B waits for A via reply envelopes.
 
-**Solution**: Avoid circular `ask` chains. Use `send` or restructure:
+**Solution**: Avoid circular request chains. Use fire-and-forget with callbacks:
 
 ```rust
-// Bad: potential deadlock
-// Actor A: let result = actor_b.ask(Query).await;
-// Actor B: let result = actor_a.ask(Query).await;
+// Bad: potential circular wait
+// Actor A sends to B, B sends back to A, A sends back to B...
 
-// Good: use fire-and-forget with callbacks
+// Good: use fire-and-forget
 actor_b.send(QueryRequest { reply_to: self_handle }).await;
 ```
 
@@ -180,13 +169,17 @@ actor_b.send(QueryRequest { reply_to: self_handle }).await;
 **Solution for blocking work**:
 
 ```rust
-builder.act_on::<HeavyWork>(|actor, msg| {
-    let data = msg.data.clone();
+builder.act_on::<HeavyWork>(|actor, envelope| {
+    let data = envelope.message().data.clone();
+    let reply = envelope.reply_envelope();
+
     Reply::pending(async move {
         // Move to blocking thread pool
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             heavy_computation(&data)
-        }).await.unwrap()
+        }).await.unwrap();
+
+        reply.send(WorkResult(result)).await;
     })
 });
 ```
@@ -203,17 +196,17 @@ builder.act_on::<HeavyWork>(|actor, msg| {
 #[acton_message]
 struct Cleanup;
 
-builder.mutate_on::<Cleanup>(|actor, _| {
+builder.mutate_on::<Cleanup>(|actor, _envelope| {
     actor.model.cache.retain(|_, v| !v.is_expired());
     Reply::ready()
 });
 
 // Schedule cleanup
-let handle = handle.clone();
+let cleanup_handle = handle.clone();
 tokio::spawn(async move {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
-        handle.send(Cleanup).await.ok();
+        cleanup_handle.send(Cleanup).await;
     }
 });
 ```
@@ -224,16 +217,21 @@ tokio::spawn(async move {
 
 ### "Connection refused"
 
-**Problem**: Socket doesn't exist or wrong path.
+**Problem**: Socket doesn't exist or server isn't running.
 
-**Solution**: Verify the server is running and socket path matches:
+**Solution**: Verify the server started successfully:
 
 ```rust
 // Server
-handle.enable_ipc("/tmp/my-app.sock").await;
+let listener = runtime.start_ipc_listener().await
+    .expect("Failed to start IPC listener");
+println!("IPC listener started");
 
-// Client - must match exactly
-let client = IpcClient::connect("/tmp/my-app.sock").await?;
+// Client - check socket exists
+let socket_path = IpcConfig::load().socket_path();
+if !std::path::Path::new(&socket_path).exists() {
+    eprintln!("Socket not found at: {}", socket_path);
+}
 ```
 
 ---
@@ -246,9 +244,9 @@ let client = IpcClient::connect("/tmp/my-app.sock").await?;
 
 ```bash
 # Check permissions
-ls -la /tmp/my-app.sock
+ls -la /run/user/$(id -u)/acton/
 
-# Or use a path in a writable directory
+# Socket should be writable by your user
 ```
 
 ---
@@ -264,9 +262,9 @@ ls -la /tmp/my-app.sock
 ```rust
 #[tokio::test]
 async fn test() {
-    let mut app = ActonApp::launch();
+    let mut runtime = ActonApp::launch_async().await;
     // ... test code ...
-    app.shutdown_all().await.ok();  // Don't forget!
+    runtime.shutdown_all().await.ok();  // Don't forget!
 }
 ```
 
@@ -276,21 +274,33 @@ async fn test() {
 
 **Problem**: Race conditions in async tests.
 
-**Solution**: Use explicit synchronization:
+**Solution**: Use atomic counters and allow processing time:
 
 ```rust
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
+
 #[tokio::test]
 async fn test() {
-    let mut app = ActonApp::launch();
-    let handle = setup_actor(&mut app).await;
+    let mut runtime = ActonApp::launch_async().await;
+    let count = Arc::new(AtomicI32::new(0));
+    let count_clone = count.clone();
 
-    handle.send(DoWork).await.ok();
+    // Set up actor that updates atomic counter
+    let mut actor = runtime.new_actor::<MyActor>();
+    actor.mutate_on::<Increment>(move |_actor, _env| {
+        count_clone.fetch_add(1, Ordering::SeqCst);
+        Reply::ready()
+    });
 
-    // Wait for work to complete
-    let result: bool = handle.ask(IsComplete).await;
-    assert!(result);
+    let handle = actor.start().await;
+    handle.send(Increment).await;
 
-    app.shutdown_all().await.ok();
+    // Wait for async processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    runtime.shutdown_all().await.ok();
 }
 ```
 
@@ -301,9 +311,8 @@ async fn test() {
 If you can't find your answer here:
 
 1. Check the [API docs](https://docs.rs/acton-reactive)
-2. Search [GitHub issues](https://github.com/acton-lang/acton-reactive/issues)
+2. Search [GitHub issues](https://github.com/Govcraft/acton-reactive/issues)
 3. Open a new issue with:
    - Minimal reproduction code
    - Error messages
    - Rust and acton-reactive versions
-
