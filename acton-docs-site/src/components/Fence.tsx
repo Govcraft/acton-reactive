@@ -9,16 +9,20 @@ export function Fence({
   language,
 }: {
   children: string
-  language: string
+  language?: string
 }) {
   if (language === 'mermaid') {
     return <Mermaid chart={children} />
   }
 
+  // Default to 'text' when no language is specified to prevent
+  // prism-react-renderer from crashing on undefined.toLowerCase()
+  const lang = language || 'text'
+
   return (
     <Highlight
       code={children.trimEnd()}
-      language={language}
+      language={lang}
       theme={{ plain: {}, styles: [] }}
     >
       {({ className, style, tokens, getTokenProps }) => (
