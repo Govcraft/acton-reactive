@@ -13,7 +13,10 @@ export const navigation = [
     links: [
       { title: 'What are actors?', href: '/docs/core-concepts/what-are-actors' },
       { title: 'Messages & handlers', href: '/docs/core-concepts/messages-and-handlers' },
+      { title: 'Handler types', href: '/docs/handler-types' },
+      { title: 'Actor lifecycle', href: '/docs/actor-lifecycle' },
       { title: 'The actor system', href: '/docs/core-concepts/the-actor-system' },
+      { title: 'Pub/Sub', href: '/docs/pub-sub' },
       { title: 'Supervision basics', href: '/docs/core-concepts/supervision-basics' },
     ],
   },
@@ -30,6 +33,8 @@ export const navigation = [
     title: 'Advanced',
     links: [
       { title: 'Inter-process communication', href: '/docs/advanced/ipc' },
+      { title: 'IPC setup', href: '/docs/ipc-setup' },
+      { title: 'IPC patterns', href: '/docs/ipc-patterns' },
       { title: 'Custom supervision', href: '/docs/advanced/custom-supervision' },
       { title: 'Performance', href: '/docs/advanced/performance' },
       { title: 'Integration', href: '/docs/advanced/integration' },
@@ -39,8 +44,11 @@ export const navigation = [
     title: 'Reference',
     links: [
       { title: 'API overview', href: '/docs/reference/api-overview' },
+      { title: 'Configuration', href: '/docs/configuration' },
+      { title: 'Examples', href: '/docs/examples' },
       { title: 'Cheatsheet', href: '/docs/reference/cheatsheet' },
       { title: 'Troubleshooting', href: '/docs/reference/troubleshooting' },
+      { title: 'FAQ', href: '/docs/faq' },
       { title: 'Migration guide', href: '/docs/reference/migration-guide' },
     ],
   },

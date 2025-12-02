@@ -3,136 +3,216 @@ title: Custom Supervision
 description: Advanced failure recovery and supervision strategies.
 ---
 
-While Acton's default supervision handles most cases, complex systems may need custom recovery logic.
+While Acton's built-in supervision (strategies, policies, restart limiting) handles most cases, complex systems may need custom recovery logic. This page covers advanced supervision features and custom patterns.
 
-## Default Behavior
-
-When an actor fails:
-1. The actor stops
-2. Parent is notified (if applicable)
-3. Children stop (cascade)
+{% callout type="note" title="Prerequisites" %}
+This page assumes familiarity with [Supervision Basics](/docs/core-concepts/supervision-basics). Make sure you understand supervision strategies and restart policies before proceeding.
+{% /callout %}
 
 ---
 
-## Custom Recovery
+## Built-in Restart Limiting
 
-Implement recovery logic in the parent by tracking child failures:
+Acton includes built-in restart limiting with exponential backoff. This prevents restart storms and cascading failures in production systems.
+
+### Configuration
 
 ```rust
-#[acton_actor]
-struct Supervisor {
-    workers: HashMap<String, ActorHandle>,
-    restart_counts: HashMap<String, u32>,
-}
+use acton_reactive::prelude::*;
 
-#[acton_message]
-struct WorkerFailed { worker_id: String }
-
-builder.mutate_on::<WorkerFailed>(|actor, envelope| {
-    let worker_id = &envelope.message().worker_id;
-    let restarts = actor.model.restart_counts
-        .entry(worker_id.clone())
-        .or_insert(0);
-
-    if *restarts < 3 {
-        *restarts += 1;
-        tracing::info!("Restarting worker {}", worker_id);
-
-        // Create new worker using create_child + supervise
-        let mut worker = actor.create_child(worker_id.clone())
-            .expect("Failed to create child");
-        worker.mutate_on::<Task>(handle_task);
-
-        let parent_handle = actor.handle().clone();
-        let worker_id_clone = worker_id.clone();
-
-        Reply::pending(async move {
-            let worker_handle = parent_handle.supervise(worker).await
-                .expect("Failed to supervise");
-            // Store handle if needed
-            tracing::info!("Worker {} restarted", worker_id_clone);
-        })
-    } else {
-        tracing::error!("Worker {} exceeded restart limit", worker_id);
-        Reply::ready()
-    }
+let config = ActorConfig::new(
+    Ern::with_root("worker")?,
+    Some(parent_handle.clone()),
+    None,
+)?
+.with_restart_limiter(RestartLimiterConfig {
+    enabled: true,
+    max_restarts: 5,        // Max restarts in time window
+    window_secs: 60,        // 1 minute window
+    initial_backoff_ms: 100,
+    max_backoff_ms: 30_000, // 30 second max delay
+    backoff_multiplier: 2.0,
 });
 ```
 
+### How It Works
+
+1. **Sliding window**: Tracks restarts within a configurable time window
+2. **Exponential backoff**: Delays between restarts grow exponentially (100ms → 200ms → 400ms...)
+3. **Escalation**: When the limit is exceeded, the supervisor escalates to its parent
+
+### Default Values
+
+If you don't configure restart limiting, these defaults apply:
+
+| Setting | Default |
+|---------|---------|
+| `max_restarts` | 5 |
+| `window_secs` | 60 |
+| `initial_backoff_ms` | 100 |
+| `max_backoff_ms` | 30,000 |
+| `backoff_multiplier` | 2.0 |
+
 ---
 
-## Rate-Limited Restarts
+## Handling ChildTerminated
 
-Prevent restart storms by tracking failure frequency:
+When a child terminates, the parent receives a `ChildTerminated` message. You can handle this message for custom supervision logic.
+
+### The ChildTerminated Message
 
 ```rust
-use std::time::{Duration, Instant};
-
-#[acton_actor]
-struct RateLimitedSupervisor {
-    failures: Vec<Instant>,
-    max_failures: usize,
-    window: Duration,
-}
-
-fn should_restart(model: &mut RateLimitedSupervisor) -> bool {
-    let now = Instant::now();
-    let window_start = now - model.window;
-
-    // Remove old failures
-    model.failures.retain(|&t| t > window_start);
-
-    // Check if we're under the limit
-    if model.failures.len() < model.max_failures {
-        model.failures.push(now);
-        true
-    } else {
-        false
-    }
+pub struct ChildTerminated {
+    pub child_id: Ern,            // Which child terminated
+    pub reason: TerminationReason, // Why it terminated
+    pub restart_policy: RestartPolicy, // Child's configured policy
 }
 ```
 
----
-
-## Exponential Backoff
-
-Delay restarts with increasing intervals:
+### Custom Handler
 
 ```rust
+use acton_reactive::prelude::*;
+
 #[acton_actor]
-struct BackoffSupervisor {
-    base_delay: Duration,
-    max_delay: Duration,
-    current_attempt: u32,
+struct Supervisor {
+    failure_counts: HashMap<String, u32>,
+    max_failures: u32,
 }
 
-#[acton_message]
-struct RestartWorker { id: String }
+// Handle child termination notifications
+supervisor.mutate_on::<ChildTerminated>(|actor, ctx| {
+    let notification = ctx.message;
+    let child_id = notification.child_id.to_string();
 
-fn get_backoff_delay(model: &BackoffSupervisor) -> Duration {
-    let delay = model.base_delay * 2u32.pow(model.current_attempt);
-    std::cmp::min(delay, model.max_delay)
+    // Track failures
+    let count = actor.model.failure_counts
+        .entry(child_id.clone())
+        .or_insert(0);
+    *count += 1;
+
+    tracing::warn!(
+        "Child {} terminated ({}): {:?}",
+        child_id,
+        count,
+        notification.reason
+    );
+
+    // Custom logic based on failure count
+    if *count >= actor.model.max_failures {
+        tracing::error!("Child {} exceeded failure limit, escalating", child_id);
+        // Could notify monitoring, alert on-call, etc.
+    }
+
+    Reply::ready()
+});
+```
+
+This pattern enables:
+- Tracking failure counts per child
+- Custom escalation logic
+- Alerting and monitoring integration
+- Different handling based on termination reason
+
+---
+
+## Termination Reasons
+
+The `TerminationReason` enum tells you *why* a child terminated:
+
+```rust
+pub enum TerminationReason {
+    /// Normal graceful shutdown via `SystemSignal::Terminate`
+    Normal,
+
+    /// Actor panicked during message handling or lifecycle hook
+    Panic(String),  // Contains the panic message
+
+    /// Actor inbox closed unexpectedly
+    InboxClosed,
+
+    /// Parent-initiated cascading shutdown
+    ParentShutdown,
 }
+```
 
-builder.mutate_on::<WorkerFailed>(|actor, envelope| {
-    let delay = get_backoff_delay(&actor.model);
-    actor.model.current_attempt += 1;
+### Using Termination Reasons
 
-    let handle = actor.handle().clone();
-    let worker_id = envelope.message().id.clone();
-
-    tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
-        handle.send(RestartWorker { id: worker_id }).await;
-    });
-
+```rust
+supervisor.mutate_on::<ChildTerminated>(|actor, ctx| {
+    match &ctx.message.reason {
+        TerminationReason::Normal => {
+            // Expected shutdown, may not need action
+            tracing::info!("Child shut down normally");
+        }
+        TerminationReason::Panic(msg) => {
+            // Crash - log details and potentially alert
+            tracing::error!("Child panicked: {}", msg);
+        }
+        TerminationReason::InboxClosed => {
+            // Unexpected closure - investigate
+            tracing::warn!("Child inbox closed unexpectedly");
+        }
+        TerminationReason::ParentShutdown => {
+            // Cascading shutdown - this is expected
+            tracing::debug!("Child stopped due to parent shutdown");
+        }
+    }
     Reply::ready()
 });
 ```
 
 ---
 
-## Circuit Breaker Pattern
+## Custom Recovery Patterns
+
+When built-in supervision isn't enough, implement custom recovery logic.
+
+### Restart with State Recovery
+
+```rust
+#[acton_actor]
+struct Supervisor {
+    worker_handles: HashMap<String, ActorHandle>,
+    worker_state: HashMap<String, WorkerState>,
+}
+
+supervisor.mutate_on::<ChildTerminated>(|actor, ctx| {
+    let child_id = ctx.message.child_id.to_string();
+
+    // Get persisted state for this worker
+    let saved_state = actor.model.worker_state
+        .get(&child_id)
+        .cloned()
+        .unwrap_or_default();
+
+    let parent_handle = actor.handle().clone();
+    let runtime = actor.runtime().clone();
+
+    Reply::pending(async move {
+        // Create new worker with recovered state
+        let config = ActorConfig::new(
+            Ern::with_root(&child_id).unwrap(),
+            None,
+            None,
+        ).unwrap();
+
+        let mut worker = runtime.new_actor_with_config_and_state::<WorkerState>(
+            config,
+            saved_state,
+        );
+
+        worker.mutate_on::<Task>(handle_task);
+
+        let new_handle = parent_handle.supervise(worker).await
+            .expect("Failed to supervise");
+
+        tracing::info!("Worker {} restarted with recovered state", child_id);
+    })
+});
+```
+
+### Circuit Breaker Pattern
 
 Stop attempting restarts after repeated failures:
 
@@ -186,15 +266,83 @@ fn record_success(model: &mut CircuitBreaker) {
 }
 ```
 
+{% callout type="note" title="Built-in vs Custom" %}
+The circuit breaker pattern is useful when you need to stop *all* operations to a subsystem, not just restarts. For restart limiting, use the built-in `RestartLimiterConfig`.
+{% /callout %}
+
+---
+
+## Supervision Tree Patterns
+
+### Worker Pool with Shared Supervisor
+
+```rust
+let mut runtime = ActonApp::launch_async().await;
+
+// Create supervisor with OneForOne strategy
+let supervisor_config = ActorConfig::new(
+    Ern::with_root("pool-supervisor")?,
+    None,
+    None,
+)?
+.with_supervision_strategy(SupervisionStrategy::OneForOne);
+
+let supervisor = runtime.new_actor_with_config::<PoolSupervisor>(supervisor_config);
+let supervisor_handle = supervisor.start().await;
+
+// Create workers with Permanent policy
+for i in 0..4 {
+    let worker_config = ActorConfig::new(
+        Ern::with_root(format!("worker-{}", i))?,
+        None,
+        None,
+    )?
+    .with_restart_policy(RestartPolicy::Permanent);
+
+    let mut worker = runtime.new_actor_with_config::<Worker>(worker_config);
+    worker.mutate_on::<Task>(handle_task);
+
+    supervisor_handle.supervise(worker).await?;
+}
+```
+
+### Pipeline with RestForOne
+
+For pipelines where later stages depend on earlier ones:
+
+```rust
+let pipeline_config = ActorConfig::new(
+    Ern::with_root("pipeline")?,
+    None,
+    None,
+)?
+.with_supervision_strategy(SupervisionStrategy::RestForOne);
+
+let pipeline = runtime.new_actor_with_config::<Pipeline>(pipeline_config);
+let pipeline_handle = pipeline.start().await;
+
+// Stages in order of dependency
+let ingester = create_ingester(&mut runtime);
+let processor = create_processor(&mut runtime);
+let outputter = create_outputter(&mut runtime);
+
+// Order matters with RestForOne!
+pipeline_handle.supervise(ingester).await?;  // Stage 1
+pipeline_handle.supervise(processor).await?; // Stage 2
+pipeline_handle.supervise(outputter).await?; // Stage 3
+// If processor fails, outputter is also restarted
+```
+
 ---
 
 ## Best Practices
 
 1. **Log failures** before restarting for debugging
-2. **Set limits** on restart attempts
-3. **Use backoff** to avoid restart storms
-4. **Monitor** restart patterns for systemic issues
-5. **Fail gracefully** when limits are exceeded
+2. **Use built-in restart limiting** rather than implementing your own
+3. **Match strategy to architecture** — don't use OneForAll when children are independent
+4. **Monitor restart patterns** for systemic issues
+5. **Fail gracefully** when limits are exceeded (alert, degrade, escalate)
+6. **Keep state external** so restarts can recover
 
 ---
 
