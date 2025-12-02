@@ -232,49 +232,69 @@ impl OutboundEnvelope {
 
     /// Crate-internal: Asynchronously sends the message payload to the recipient.
     /// Handles channel reservation and error logging.
+    ///
+    /// # Performance
+    ///
+    /// This method uses a fast-path optimization: it first attempts `try_reserve()` which
+    /// is non-blocking and avoids async overhead when the channel has capacity (common case).
+    /// Only when the channel is full does it fall back to the async `reserve()` path.
     #[instrument(skip(self, message), level = "debug", fields(message_type = ?message.type_id()))]
     async fn send_message_inner(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
-        // Determine the target address: recipient if Some, otherwise return_address.
+        // Delegate to untraced impl to avoid borrow issues with #[instrument] macro
+        self.send_message_inner_impl(message).await;
+    }
+
+    /// Internal implementation without instrumentation to avoid lifetime issues with Permit.
+    async fn send_message_inner_impl(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
+        // Clone everything upfront
         let target_address = self
             .recipient_address
             .as_ref()
-            .unwrap_or(&self.return_address);
-        let target_id = &target_address.sender;
-        let channel_sender = target_address.address.clone(); // Keep the owned clone
+            .unwrap_or(&self.return_address)
+            .clone();
+        let return_address = self.return_address.clone();
+        let sender_id = return_address.sender.clone();
+        let target_id = target_address.sender.clone();
+        let channel_sender = target_address.address.clone();
 
-        trace!(sender = %self.return_address.sender, recipient = %target_id, "Attempting to send message");
+        trace!(sender = %sender_id, recipient = %target_id, "Attempting to send message");
 
-        if channel_sender.is_closed() {
-            // Channel was already closed.
-            error!(sender = %self.return_address.sender, recipient = %target_id, "Recipient channel is closed");
-        } else {
-            // Cancellation-aware reservation of a send permit
-            let cancellation = self.cancellation_token.clone();
-            tokio::select! {
-                () = cancellation.cancelled() => {
-                    error!(sender = %self.return_address.sender, recipient = %target_id, "Send aborted: cancellation_token triggered");
-                    return;
-                }
-                permit_result = channel_sender.reserve() => {
-                    match permit_result {
-                        Ok(permit) => {
-                            // Create the internal Envelope to put on the channel.
-                            let internal_envelope = Envelope::new(
-                                message, // Pass the Arc'd message
-                                self.return_address.clone(),
-                                target_address.clone(),
-                            );
-                            trace!(sender = %self.return_address.sender, recipient = %target_id, "Sending message via permit");
-                            permit.send(internal_envelope); // Send using the permit
-                        }
-                        Err(e) => {
-                            // Error reserving capacity (likely channel closed).
-                            error!(sender = %self.return_address.sender, recipient = %target_id, error = %e, "Failed to reserve channel capacity");
-                        }
-                    }
-                }
+        // Check if cancelled before attempting send
+        if self.cancellation_token.is_cancelled() {
+            error!(sender = %sender_id, recipient = %target_id, "Send aborted: cancellation_token triggered");
+            return;
+        }
+
+        // Fast path: try non-blocking reserve first (common case when channel has capacity)
+        match channel_sender.try_reserve() {
+            Ok(permit) => {
+                // Success! Send without any async overhead
+                let internal_envelope = Envelope::new(message, return_address, target_address);
+                trace!(sender = %sender_id, recipient = %target_id, "Sending message via fast-path permit");
+                permit.send(internal_envelope);
+                return;
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                error!(sender = %sender_id, recipient = %target_id, "Recipient channel is closed");
+                return;
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {
+                // Channel is full, fall through to slow path
+                trace!(sender = %sender_id, recipient = %target_id, "Channel full, using slow path");
             }
         }
+
+        // Slow path: channel is full, need to wait for capacity
+        match channel_sender.reserve().await {
+            Ok(permit) => {
+                let internal_envelope = Envelope::new(message, return_address, target_address);
+                trace!(sender = %sender_id, recipient = %target_id, "Sending message via slow-path permit");
+                permit.send(internal_envelope);
+            }
+            Err(e) => {
+                error!(sender = %sender_id, recipient = %target_id, error = %e, "Failed to reserve channel capacity");
+            }
+        };
     }
 
     /// Sends a message asynchronously using this envelope.
@@ -319,6 +339,10 @@ impl OutboundEnvelope {
     /// - The recipient's channel is closed (`MessageError::ChannelClosed`)
     /// - The operation was cancelled (`MessageError::Cancelled`)
     /// - The channel capacity could not be reserved (`MessageError::SendFailed`)
+    ///
+    /// # Performance
+    ///
+    /// Uses a fast-path with `try_reserve()` for the common case when the channel has capacity.
     #[instrument(skip(self, message), level = "trace", fields(message_type = std::any::type_name_of_val(&message)))]
     pub async fn try_send(&self, message: impl ActonMessage + 'static) -> Result<(), MessageError> {
         let message = Arc::new(message);
@@ -329,19 +353,35 @@ impl OutboundEnvelope {
             .as_ref()
             .unwrap_or(&self.return_address);
 
-        // Check channel state synchronously to avoid capturing in async
-        if target_address.address.is_closed() {
-            trace!(sender = %self.return_address.sender, recipient = %target_address.sender, "Recipient channel is closed");
-            return Err(MessageError::ChannelClosed);
+        // Check cancellation synchronously first
+        if self.cancellation_token.is_cancelled() {
+            return Err(MessageError::Cancelled);
         }
 
-        // Extract only what's needed for the async block to minimize future size
-        let channel_sender = target_address.address.clone();
+        let channel_sender = &target_address.address;
+
+        // Fast path: try non-blocking reserve first
+        match channel_sender.try_reserve() {
+            Ok(permit) => {
+                let internal_envelope =
+                    Envelope::new(message, self.return_address.clone(), target_address.clone());
+                permit.send(internal_envelope);
+                return Ok(());
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                return Err(MessageError::ChannelClosed);
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {
+                // Fall through to slow path
+            }
+        }
+
+        // Slow path: channel is full, need to wait for capacity
+        let channel_sender = channel_sender.clone();
         let cancellation = self.cancellation_token.clone();
         let return_addr = self.return_address.clone();
         let target_addr = target_address.clone();
 
-        // Use Box::pin on the select block itself
         Box::pin(async move {
             tokio::select! {
                 () = cancellation.cancelled() => {
