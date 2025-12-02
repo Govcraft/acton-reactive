@@ -18,8 +18,21 @@ For read-heavy workloads, use `act_on` to enable parallel processing:
 
 ```rust
 // These can run concurrently
-builder.act_on::<GetCount>(|actor, _| Reply::with(actor.model.count));
-builder.act_on::<GetName>(|actor, _| Reply::with(actor.model.name.clone()));
+builder.act_on::<GetCount>(|actor, envelope| {
+    let count = actor.model.count;
+    let reply = envelope.reply_envelope();
+    Reply::pending(async move {
+        reply.send(CountResponse(count)).await;
+    })
+});
+
+builder.act_on::<GetName>(|actor, envelope| {
+    let name = actor.model.name.clone();
+    let reply = envelope.reply_envelope();
+    Reply::pending(async move {
+        reply.send(NameResponse(name)).await;
+    })
+});
 ```
 
 ---
@@ -38,9 +51,10 @@ for item in items {
 #[acton_message]
 struct ProcessBatch { items: Vec<Item> }
 
-builder.mutate_on::<ProcessBatch>(|actor, msg| {
-    for item in &msg.items {
-        process(&item);
+builder.mutate_on::<ProcessBatch>(|actor, envelope| {
+    let items = &envelope.message().items;
+    for item in items {
+        process(item);
     }
     Reply::ready()
 });
@@ -67,25 +81,27 @@ let worker = &workers[request_id % workers.len()];
 worker.send(Request).await;
 ```
 
-### Ask Chains
+### Request Chains Add Latency
 
-Long chains of `ask` calls add latency:
+Long chains of requests add latency:
 
 ```rust
-// Each ask waits for the previous
-let a = actor1.ask(Query1).await;
-let b = actor2.ask(Query2 { data: a }).await;
-let c = actor3.ask(Query3 { data: b }).await;
+// Each request waits for the previous
+// actor1 responds, then actor2 processes, then actor3...
 ```
 
 **Solution: Parallelize Independent Requests**
 
+When requests are independent, send them concurrently:
+
 ```rust
-// Independent requests can run in parallel
-let (a, b) = tokio::join!(
-    actor1.ask(Query1),
-    actor2.ask(Query2)
-);
+// Send independent requests in parallel
+let request1 = actor1_handle.create_envelope(Some(receiver.reply_address()));
+let request2 = actor2_handle.create_envelope(Some(receiver.reply_address()));
+
+request1.send(Query1).await;
+request2.send(Query2).await;
+// Both process concurrently
 ```
 
 ---
@@ -114,16 +130,17 @@ Long-running actors can accumulate state. Clean up periodically:
 #[acton_message]
 struct Cleanup;
 
-builder.mutate_on::<Cleanup>(|actor, _| {
-    actor.model.cache.retain(|k, v| !v.is_expired());
+builder.mutate_on::<Cleanup>(|actor, _envelope| {
+    actor.model.cache.retain(|_k, v| !v.is_expired());
     Reply::ready()
 });
 
 // Schedule periodic cleanup
+let cleanup_handle = handle.clone();
 tokio::spawn(async move {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
-        handle.send(Cleanup).await.ok();
+        cleanup_handle.send(Cleanup).await;
     }
 });
 ```
@@ -135,8 +152,9 @@ tokio::spawn(async move {
 Use tracing to identify bottlenecks:
 
 ```rust
-builder.mutate_on::<ExpensiveOperation>(|actor, msg| {
-    let span = tracing::info_span!("expensive_op", id = %msg.id);
+builder.mutate_on::<ExpensiveOperation>(|actor, envelope| {
+    let id = envelope.message().id;
+    let span = tracing::info_span!("expensive_op", id = %id);
     let _guard = span.enter();
 
     // Operation timing will be captured
@@ -161,7 +179,7 @@ tracing_subscriber::fmt::init();
 - Use `mutate_on` only when modifying state (sequential)
 - Batch operations when possible
 - Avoid single-actor bottlenecks with worker pools
-- Parallelize independent `ask` calls
+- Send independent requests concurrently
 - Use `Arc` for large data in messages
 - Profile with tracing to find bottlenecks
 
@@ -169,4 +187,4 @@ tracing_subscriber::fmt::init();
 
 ## Next
 
-[Integration](/docs/advanced/integration) - Working with the Rust ecosystem
+[Integration](/docs/advanced/integration) — Working with the Rust ecosystem

@@ -16,33 +16,46 @@ When an actor fails:
 
 ## Custom Recovery
 
-Implement recovery logic in the parent:
+Implement recovery logic in the parent by tracking child failures:
 
 ```rust
 #[acton_actor]
 struct Supervisor {
-    workers: HashMap<String, AgentHandle>,
+    workers: HashMap<String, ActorHandle>,
     restart_counts: HashMap<String, u32>,
 }
 
 #[acton_message]
 struct WorkerFailed { worker_id: String }
 
-builder.mutate_on::<WorkerFailed>(|actor, msg| {
+builder.mutate_on::<WorkerFailed>(|actor, envelope| {
+    let worker_id = &envelope.message().worker_id;
     let restarts = actor.model.restart_counts
-        .entry(msg.worker_id.clone())
+        .entry(worker_id.clone())
         .or_insert(0);
 
     if *restarts < 3 {
         *restarts += 1;
-        tracing::info!("Restarting worker {}", msg.worker_id);
-        let new_worker = spawn_worker(&msg.worker_id);
-        actor.model.workers.insert(msg.worker_id.clone(), new_worker);
-    } else {
-        tracing::error!("Worker {} exceeded restart limit", msg.worker_id);
-    }
+        tracing::info!("Restarting worker {}", worker_id);
 
-    Reply::ready()
+        // Create new worker using create_child + supervise
+        let mut worker = actor.create_child(worker_id.clone())
+            .expect("Failed to create child");
+        worker.mutate_on::<Task>(handle_task);
+
+        let parent_handle = actor.handle().clone();
+        let worker_id_clone = worker_id.clone();
+
+        Reply::pending(async move {
+            let worker_handle = parent_handle.supervise(worker).await
+                .expect("Failed to supervise");
+            // Store handle if needed
+            tracing::info!("Worker {} restarted", worker_id_clone);
+        })
+    } else {
+        tracing::error!("Worker {} exceeded restart limit", worker_id);
+        Reply::ready()
+    }
 });
 ```
 
@@ -62,16 +75,16 @@ struct RateLimitedSupervisor {
     window: Duration,
 }
 
-fn should_restart(actor: &mut ManagedAgent<RateLimitedSupervisor>) -> bool {
+fn should_restart(model: &mut RateLimitedSupervisor) -> bool {
     let now = Instant::now();
-    let window_start = now - actor.model.window;
+    let window_start = now - model.window;
 
     // Remove old failures
-    actor.model.failures.retain(|&t| t > window_start);
+    model.failures.retain(|&t| t > window_start);
 
     // Check if we're under the limit
-    if actor.model.failures.len() < actor.model.max_failures {
-        actor.model.failures.push(now);
+    if model.failures.len() < model.max_failures {
+        model.failures.push(now);
         true
     } else {
         false
@@ -93,19 +106,24 @@ struct BackoffSupervisor {
     current_attempt: u32,
 }
 
-fn get_backoff_delay(actor: &BackoffSupervisor) -> Duration {
-    let delay = actor.base_delay * 2u32.pow(actor.current_attempt);
-    std::cmp::min(delay, actor.max_delay)
+#[acton_message]
+struct RestartWorker { id: String }
+
+fn get_backoff_delay(model: &BackoffSupervisor) -> Duration {
+    let delay = model.base_delay * 2u32.pow(model.current_attempt);
+    std::cmp::min(delay, model.max_delay)
 }
 
-builder.mutate_on::<WorkerFailed>(|actor, msg| {
+builder.mutate_on::<WorkerFailed>(|actor, envelope| {
     let delay = get_backoff_delay(&actor.model);
     actor.model.current_attempt += 1;
 
     let handle = actor.handle().clone();
+    let worker_id = envelope.message().id.clone();
+
     tokio::spawn(async move {
         tokio::time::sleep(delay).await;
-        handle.send(RestartWorker { id: msg.worker_id }).await.ok();
+        handle.send(RestartWorker { id: worker_id }).await;
     });
 
     Reply::ready()
@@ -134,13 +152,13 @@ enum CircuitState {
     HalfOpen,  // Testing if recovered
 }
 
-fn check_circuit(actor: &mut CircuitBreaker) -> bool {
-    match actor.state {
+fn check_circuit(model: &mut CircuitBreaker) -> bool {
+    match model.state {
         CircuitState::Closed => true,
         CircuitState::Open => {
-            if let Some(last) = actor.last_failure {
-                if last.elapsed() > actor.reset_timeout {
-                    actor.state = CircuitState::HalfOpen;
+            if let Some(last) = model.last_failure {
+                if last.elapsed() > model.reset_timeout {
+                    model.state = CircuitState::HalfOpen;
                     true
                 } else {
                     false
@@ -151,6 +169,20 @@ fn check_circuit(actor: &mut CircuitBreaker) -> bool {
         }
         CircuitState::HalfOpen => true,
     }
+}
+
+fn record_failure(model: &mut CircuitBreaker) {
+    model.failure_count += 1;
+    model.last_failure = Some(Instant::now());
+
+    if model.failure_count >= model.threshold {
+        model.state = CircuitState::Open;
+    }
+}
+
+fn record_success(model: &mut CircuitBreaker) {
+    model.failure_count = 0;
+    model.state = CircuitState::Closed;
 }
 ```
 
@@ -168,4 +200,4 @@ fn check_circuit(actor: &mut CircuitBreaker) -> bool {
 
 ## Next
 
-[Performance](/docs/advanced/performance) - Optimizing actor systems
+[Performance](/docs/advanced/performance) — Optimizing actor systems
