@@ -64,14 +64,14 @@ Add the `ipc` feature to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-reactive = { version = "0.1", features = ["ipc"] }
+{% $dep.ipc %}
 ```
 
 For MessagePack serialization (smaller messages):
 
 ```toml
 [dependencies]
-acton-reactive = { version = "0.1", features = ["ipc-messagepack"] }
+{% $dep.ipcMessagepack %}
 ```
 
 ### Feature Comparison

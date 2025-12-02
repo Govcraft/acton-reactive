@@ -56,6 +56,36 @@ const nodes = {
       language: {
         type: String,
       },
+      content: {
+        type: String,
+      },
+    },
+    transform(node, config) {
+      const attributes = node.transformAttributes(config)
+      const children = node.children[0]
+
+      // Get the fence content
+      let content = children?.attributes?.content || ''
+
+      // Replace {% $variable.path %} with actual values from config.variables
+      if (config.variables) {
+        content = content.replace(/\{%\s*\$([a-zA-Z0-9._]+)\s*%\}/g, (match, path) => {
+          const parts = path.split('.')
+          let value = config.variables
+
+          for (const part of parts) {
+            if (value && typeof value === 'object') {
+              value = value[part]
+            } else {
+              return match // Return original if path not found
+            }
+          }
+
+          return value !== undefined ? String(value) : match
+        })
+      }
+
+      return new Tag(this.render, attributes, [content])
     },
   },
 }

@@ -1,3 +1,5 @@
+import { VERSION } from '@/lib/version'
+
 function LogomarkPaths() {
   return (
     <g fill="none" stroke="#38BDF8" strokeLinejoin="round" strokeWidth={2}>
@@ -19,7 +21,7 @@ export function Logomark(props: React.ComponentPropsWithoutRef<'svg'>) {
 
 export function Logo(props: React.ComponentPropsWithoutRef<'svg'>) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 200 36" fill="none" {...props}>
+    <svg aria-hidden="true" viewBox="0 0 260 36" fill="none" {...props}>
       <LogomarkPaths />
       <text
         x="40"
@@ -31,6 +33,17 @@ export function Logo(props: React.ComponentPropsWithoutRef<'svg'>) {
         letterSpacing="-0.02em"
       >
         acton-reactive
+      </text>
+      <text
+        x="180"
+        y="24"
+        fill="currentColor"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+        fontSize="14"
+        fontWeight="400"
+        opacity="0.6"
+      >
+        v{VERSION}
       </text>
     </svg>
   )

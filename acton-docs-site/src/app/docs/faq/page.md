@@ -78,7 +78,7 @@ Yes! Enable the `ipc` feature and use Unix Domain Sockets:
 
 ```toml
 [dependencies]
-acton-reactive = { version = "0.1", features = ["ipc"] }
+{% $dep.ipc %}
 ```
 
 See the [IPC Communication](/docs/ipc) guide for details.
@@ -401,7 +401,7 @@ If you're using IPC heavily, MessagePack is faster and smaller than JSON:
 
 ```toml
 [dependencies]
-acton-reactive = { version = "0.1", features = ["ipc-messagepack"] }
+{% $dep.ipcMessagepack %}
 ```
 
 ---
