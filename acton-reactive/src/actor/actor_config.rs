@@ -16,6 +16,7 @@
 
 use acton_ern::{Ern, ErnParser};
 
+use crate::actor::RestartPolicy;
 use crate::common::{BrokerRef, ParentRef};
 use crate::traits::ActorHandleInterface;
 
@@ -41,6 +42,9 @@ pub struct ActorConfig {
     /// Optional custom inbox capacity for this actor.
     /// If `None`, uses the global default from configuration.
     inbox_capacity: Option<usize>,
+    /// The restart policy for this actor when supervised.
+    /// Defaults to `RestartPolicy::Permanent`.
+    restart_policy: RestartPolicy,
 }
 
 impl ActorConfig {
@@ -81,6 +85,7 @@ impl ActorConfig {
                 broker,
                 parent: Some(parent_ref),
                 inbox_capacity: None,
+                restart_policy: RestartPolicy::default(),
             })
         } else {
             Ok(Self {
@@ -88,6 +93,7 @@ impl ActorConfig {
                 broker,
                 parent, // parent is None here
                 inbox_capacity: None,
+                restart_policy: RestartPolicy::default(),
             })
         }
     }
@@ -108,6 +114,26 @@ impl ActorConfig {
     #[must_use]
     pub const fn with_inbox_capacity(mut self, capacity: usize) -> Self {
         self.inbox_capacity = Some(capacity);
+        self
+    }
+
+    /// Sets the restart policy for this actor when supervised.
+    ///
+    /// The restart policy determines how the supervisor handles actor termination:
+    /// - [`RestartPolicy::Permanent`]: Always restart (except during parent shutdown)
+    /// - [`RestartPolicy::Temporary`]: Never restart
+    /// - [`RestartPolicy::Transient`]: Restart only on abnormal termination (panic, inbox closed)
+    ///
+    /// # Arguments
+    ///
+    /// * `policy` - The restart policy to use for this actor.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` for method chaining.
+    #[must_use]
+    pub const fn with_restart_policy(mut self, policy: RestartPolicy) -> Self {
+        self.restart_policy = policy;
         self
     }
 
@@ -157,5 +183,11 @@ impl ActorConfig {
     #[inline]
     pub(crate) const fn inbox_capacity(&self) -> Option<usize> {
         self.inbox_capacity
+    }
+
+    /// Returns the restart policy for this actor.
+    #[inline]
+    pub(crate) const fn restart_policy(&self) -> RestartPolicy {
+        self.restart_policy
     }
 }

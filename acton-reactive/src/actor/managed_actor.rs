@@ -24,6 +24,7 @@ use tokio_util::task::TaskTracker;
 
 pub use idle::Idle;
 
+use crate::actor::RestartPolicy;
 use crate::common::{
     ActorHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap,
 };
@@ -105,6 +106,9 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// Tokio cancellation token for managing shutdown/cancellation.
     /// This will be set to Some(token) when the actor is created, by cloning the root token.
     pub(crate) cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    /// The restart policy for this actor when supervised.
+    /// Determines whether and when the actor should be restarted after termination.
+    pub(crate) restart_policy: RestartPolicy,
     /// Phantom data to associate the `ActorState` type parameter.
     _actor_state: std::marker::PhantomData<ActorState>,
 }

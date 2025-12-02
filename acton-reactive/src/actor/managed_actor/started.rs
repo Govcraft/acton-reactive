@@ -24,10 +24,10 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use tracing::{error, instrument, trace};
 
-use crate::actor::ManagedActor;
+use crate::actor::{ManagedActor, TerminationReason};
 use crate::common::config::CONFIG;
 use crate::common::{Envelope, FutureBoxReadOnly, OutboundEnvelope, ReactorItem, ReactorMap};
-use crate::message::{BrokerRequestEnvelope, MessageAddress, SystemSignal};
+use crate::message::{BrokerRequestEnvelope, ChildTerminated, MessageAddress, SystemSignal};
 use crate::traits::ActorHandleInterface;
 
 /// Type-state marker for a [`ManagedActor`] that is actively running and processing messages.
@@ -407,11 +407,16 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
         let mut last_flush_time = Instant::now();
 
+        // Track the termination reason - set when the loop exits
+        let termination_reason;
+
         loop {
             tokio::select! {
                 () = &mut cancel => {
                     trace!("Forceful cancellation triggered for actor: {}", self.id());
                     while read_only_futures.next().await.is_some() {}
+                    // Parent-initiated shutdown via cancellation token
+                    termination_reason = TerminationReason::ParentShutdown;
                     break;
                 }
 
@@ -421,7 +426,11 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                 }
 
                 incoming_opt = self.inbox.recv() => {
-                    let Some(incoming_envelope) = incoming_opt else { break; };
+                    let Some(incoming_envelope) = incoming_opt else {
+                        // Inbox closed without Terminate signal = unexpected closure
+                        termination_reason = TerminationReason::InboxClosed;
+                        break;
+                    };
                     trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root);
 
                     // Extract envelope and type_id, handling BrokerRequestEnvelope indirection
@@ -453,6 +462,9 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                         trace!("Terminate signal received for actor: {}. Closing inbox.", self.id());
                         run_lifecycle_hook!(self, before_stop, "before_stop");
                         self.inbox.close();
+                        // Graceful shutdown via Terminate signal - break to avoid overwriting
+                        termination_reason = TerminationReason::Normal;
+                        break;
                     } else {
                         trace!("No handler found for message type {:?} for actor {}", type_id, self.id());
                     }
@@ -464,6 +476,28 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         while read_only_futures.next().await.is_some() {}
         terminate_children(&self.handle, self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
+
+        // Notify parent of termination if we have a parent
+        // We extract everything we need before the await to avoid holding &self across await
+        if let Some(parent) = &self.parent {
+            let notification = ChildTerminated::new(
+                self.id.clone(),
+                termination_reason,
+                self.restart_policy,
+            );
+
+            trace!(
+                "Notifying parent {} of child {} termination: {:?}",
+                parent.id(),
+                self.id(),
+                notification
+            );
+
+            // Clone the parent handle to avoid borrowing self across await
+            let parent_clone = parent.clone();
+            parent_clone.send(notification).await;
+        }
+
         trace!("Actor {} stopped.", self.id());
     }
 }
