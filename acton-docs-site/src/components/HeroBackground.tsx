@@ -86,9 +86,9 @@ export function HeroBackground(props: React.ComponentPropsWithoutRef<'svg'>) {
           cy="574.062"
           r="10.438"
           transform="rotate(-180 484.301 574.062)"
-          fill="#0EA5E9"
+          fill="#FBBF24"
           fillOpacity=".42"
-          stroke="#0EA5E9"
+          stroke="#FBBF24"
         />
         <circle
           cx="384.1"
@@ -140,9 +140,9 @@ export function HeroBackground(props: React.ComponentPropsWithoutRef<'svg'>) {
           cy="484.3"
           r="10.438"
           transform="rotate(-180 83.5 484.3)"
-          fill="#0EA5E9"
+          fill="#FBBF24"
           fillOpacity=".42"
-          stroke="#0EA5E9"
+          stroke="#FBBF24"
         />
         <circle
           cx="484.301"

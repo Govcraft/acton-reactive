@@ -2,11 +2,27 @@ import { VERSION } from '@/lib/version'
 
 function LogomarkPaths() {
   return (
-    <g fill="none" stroke="#38BDF8" strokeLinejoin="round" strokeWidth={2}>
-      {/* Stylized "A" representing an Actor */}
-      <path d="M18 6 L6 30 M18 6 L30 30 M10 22 L26 22" />
-      {/* Message arrow flowing through */}
-      <path d="M14 14 L22 14 L20 11 M22 14 L20 17" strokeWidth={1.5} />
+    <g>
+      {/* Connection lines between actors */}
+      <path
+        d="M8 18 L16 10 M16 10 L28 14 M16 10 L18 26 M28 14 L18 26"
+        fill="none"
+        stroke="url(#logo-gradient)"
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+      {/* Actor nodes */}
+      <circle cx="8" cy="18" r="4" fill="#F59E0B" />
+      <circle cx="16" cy="10" r="5" fill="#F97316" />
+      <circle cx="28" cy="14" r="4" fill="#FBBF24" />
+      <circle cx="18" cy="26" r="4" fill="#F59E0B" />
+      {/* Gradient definition */}
+      <defs>
+        <linearGradient id="logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#F97316" />
+        </linearGradient>
+      </defs>
     </g>
   )
 }

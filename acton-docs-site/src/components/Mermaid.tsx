@@ -59,7 +59,7 @@ export function Mermaid({ chart }: { chart: string }) {
   return (
     <div
       ref={containerRef}
-      className="my-6 w-full overflow-x-auto rounded-lg bg-slate-50 p-4 dark:bg-slate-800/50 [&_svg]:mx-auto [&_svg]:block"
+      className="my-6 w-full overflow-x-auto rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50 [&_svg]:mx-auto [&_svg]:block"
       aria-label="Mermaid diagram"
     />
   )
