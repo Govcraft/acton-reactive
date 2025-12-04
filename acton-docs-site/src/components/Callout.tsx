@@ -15,6 +15,12 @@ const styles = {
     title: 'text-amber-900 dark:text-amber-500',
     body: 'text-amber-800 [--tw-prose-underline:var(--color-amber-400)] [--tw-prose-background:var(--color-amber-50)] prose-a:text-amber-900 prose-code:text-amber-900 dark:text-zinc-300 dark:[--tw-prose-underline:var(--color-amber-700)] dark:prose-code:text-zinc-300',
   },
+  tip: {
+    container:
+      'bg-emerald-50 dark:bg-zinc-800/60 dark:ring-1 dark:ring-zinc-300/10',
+    title: 'text-emerald-900 dark:text-emerald-400',
+    body: 'text-emerald-800 [--tw-prose-background:var(--color-emerald-50)] prose-a:text-emerald-900 prose-code:text-emerald-900 dark:text-zinc-300 dark:prose-code:text-zinc-300',
+  },
 }
 
 const icons = {
@@ -22,6 +28,7 @@ const icons = {
   warning: (props: { className?: string }) => (
     <Icon icon="warning" color="amber" {...props} />
   ),
+  tip: (props: { className?: string }) => <Icon icon="lightbulb" {...props} />,
 }
 
 export function Callout({
