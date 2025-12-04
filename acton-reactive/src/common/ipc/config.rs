@@ -120,12 +120,25 @@ pub struct IpcTimeoutsConfig {
     pub request: u64,
 
     /// Connection read timeout in milliseconds.
+    ///
+    /// This applies to connections that do not have active subscriptions.
+    /// Connections with subscriptions use `subscription_read` instead.
     #[serde(rename = "read_timeout_ms")]
     pub read: u64,
 
     /// Connection write timeout in milliseconds.
     #[serde(rename = "write_timeout_ms")]
     pub write: u64,
+
+    /// Read timeout in milliseconds for connections with active subscriptions.
+    ///
+    /// Subscription clients often only receive data (push notifications) without
+    /// sending messages. A value of 0 means no timeout for subscription connections,
+    /// allowing them to remain connected indefinitely while receiving broadcasts.
+    ///
+    /// Default is 0 (no timeout for subscribers).
+    #[serde(rename = "subscription_read_timeout_ms")]
+    pub subscription_read: u64,
 }
 
 /// Rate limiting configuration for IPC connections.
@@ -185,6 +198,7 @@ impl Default for IpcTimeoutsConfig {
             request: 30_000,
             read: 60_000,
             write: 30_000,
+            subscription_read: 0, // No timeout for subscribers by default
         }
     }
 }
@@ -326,6 +340,21 @@ impl IpcConfig {
     #[must_use]
     pub const fn write_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeouts.write)
+    }
+
+    /// Get the subscription read timeout as an `Option<Duration>`.
+    ///
+    /// Returns `None` if the timeout is 0 (no timeout for subscribers),
+    /// otherwise returns `Some(Duration)`.
+    #[must_use]
+    pub const fn subscription_read_timeout(&self) -> Option<std::time::Duration> {
+        if self.timeouts.subscription_read == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_millis(
+                self.timeouts.subscription_read,
+            ))
+        }
     }
 
     /// Get the drain timeout as a `Duration`.

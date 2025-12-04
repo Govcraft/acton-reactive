@@ -128,6 +128,27 @@ name = "ipc_client_libraries_server"
 path = "examples/ipc_client_libraries/server/main.rs"
 required-features = ["ipc"]
 
+# RGB Keyboard - Advanced IPC Demo (multiple patterns combined)
+[[example]]
+name = "rgb_keyboard_server"
+path = "examples/rgb_keyboard/server.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "rgb_keyboard_color_client"
+path = "examples/rgb_keyboard/color_client.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "rgb_keyboard_input_client"
+path = "examples/rgb_keyboard/input_client.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "rgb_keyboard_output_client"
+path = "examples/rgb_keyboard/output_client.rs"
+required-features = ["ipc"]
+
 # ============================================================================
 # Benchmarks
 # ============================================================================

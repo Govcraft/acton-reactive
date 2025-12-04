@@ -88,6 +88,20 @@ const WRITER_CHANNEL_CAPACITY: usize = 64;
 /// Handle for sending write commands to the writer task.
 type WriterHandle = mpsc::Sender<WriteCommand>;
 
+/// Connection limits and timeouts extracted from config.
+///
+/// Bundled together to reduce function parameter count.
+#[derive(Clone, Copy)]
+struct ConnectionLimits {
+    /// Read timeout for connections without subscriptions.
+    read_timeout: Duration,
+    /// Read timeout for connections with active subscriptions.
+    /// `None` means no timeout for subscribers.
+    subscription_read_timeout: Option<Duration>,
+    /// Maximum message size in bytes.
+    max_message_size: usize,
+}
+
 /// Statistics for the IPC listener.
 #[derive(Debug)]
 pub struct IpcListenerStats {
@@ -885,9 +899,12 @@ async fn process_frame(
 /// Handle a single client connection.
 async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionContext) {
     let (mut reader, writer) = stream.into_split();
-    let max_message_size = ctx.config.limits.max_message_size;
     let push_buffer_size = ctx.config.limits.push_buffer_size;
-    let read_timeout = ctx.config.read_timeout();
+    let limits = ConnectionLimits {
+        read_timeout: ctx.config.read_timeout(),
+        subscription_read_timeout: ctx.config.subscription_read_timeout(),
+        max_message_size: ctx.config.limits.max_message_size,
+    };
     let mut rate_limiter = RateLimiter::new(&ctx.config.rate_limit);
 
     // Create push notification channel and register connection for subscriptions
@@ -924,8 +941,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
     run_connection_loop(
         conn_id,
         &mut reader,
-        read_timeout,
-        max_message_size,
+        limits,
         &mut rate_limiter,
         &ctx,
         &writer_tx,
@@ -950,16 +966,30 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
 }
 
 /// Run the main connection read loop.
+///
+/// # Timeout Behavior
+///
+/// - Connections without subscriptions use `limits.read_timeout`
+/// - Connections with active subscriptions use `limits.subscription_read_timeout`:
+///   - `None` means no timeout (subscribers can stay connected indefinitely)
+///   - `Some(duration)` uses that duration as the timeout
 async fn run_connection_loop(
     conn_id: usize,
     reader: &mut tokio::net::unix::OwnedReadHalf,
-    read_timeout: Duration,
-    max_message_size: usize,
+    limits: ConnectionLimits,
     rate_limiter: &mut RateLimiter,
     ctx: &ConnectionContext,
     writer_tx: &WriterHandle,
 ) {
     loop {
+        // Determine timeout based on whether connection has subscriptions
+        let has_subscriptions = !ctx.subscription_manager.get_subscriptions(conn_id).is_empty();
+        let effective_timeout = if has_subscriptions {
+            limits.subscription_read_timeout
+        } else {
+            Some(limits.read_timeout)
+        };
+
         tokio::select! {
             biased;
 
@@ -968,27 +998,40 @@ async fn run_connection_loop(
                 break;
             }
 
-            frame_result = tokio::time::timeout(read_timeout, read_frame(reader, max_message_size)) => {
-                let frame_result = match frame_result {
-                    Ok(result) => result,
-                    Err(_elapsed) => {
-                        debug!(conn_id, timeout_ms = read_timeout.as_millis(), "Connection read timeout");
-                        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
-                        break;
+            frame_result = async {
+                match effective_timeout {
+                    Some(timeout) => {
+                        tokio::time::timeout(timeout, read_frame(reader, limits.max_message_size))
+                            .await
+                            .map_err(|_| TimeoutOrFrame::Timeout)
+                            .and_then(|r| r.map_err(TimeoutOrFrame::Frame))
                     }
-                };
-
+                    None => {
+                        // No timeout for this connection (subscriber)
+                        read_frame(reader, limits.max_message_size)
+                            .await
+                            .map_err(TimeoutOrFrame::Frame)
+                    }
+                }
+            } => {
                 match frame_result {
                     Ok((msg_type, format, payload)) => {
                         if !process_frame(conn_id, msg_type, format, &payload, rate_limiter, ctx, writer_tx).await {
                             break;
                         }
                     }
-                    Err(IpcError::ConnectionClosed) => {
+                    Err(TimeoutOrFrame::Timeout) => {
+                        // Only timeout non-subscriber connections
+                        // (subscriber connections with Some(timeout) will also reach here)
+                        debug!(conn_id, timeout_ms = effective_timeout.map_or(0, |t| t.as_millis()), "Connection read timeout");
+                        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                    Err(TimeoutOrFrame::Frame(IpcError::ConnectionClosed)) => {
                         debug!(conn_id, "Connection closed by client");
                         break;
                     }
-                    Err(e) => {
+                    Err(TimeoutOrFrame::Frame(e)) => {
                         error!(conn_id, error = %e, "Connection error");
                         ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
                         break;
@@ -997,6 +1040,12 @@ async fn run_connection_loop(
             }
         }
     }
+}
+
+/// Helper enum for distinguishing timeout errors from frame errors.
+enum TimeoutOrFrame {
+    Timeout,
+    Frame(IpcError),
 }
 
 /// Run the push notification forwarder task.
