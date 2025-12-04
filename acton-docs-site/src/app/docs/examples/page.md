@@ -18,6 +18,12 @@ Learn from working code. Each example demonstrates specific patterns and concept
 
 {% quick-link title="Fruit Market" icon="theming" href="#fruit-market" description="Multi-actor coordination" /%}
 
+{% quick-link title="IPC Fruit Market" icon="lightbulb" href="#ipc-fruit-market" description="Multi-process POS system" /%}
+
+{% quick-link title="IPC Multi-Service" icon="lightbulb" href="#ipc-multi-service" description="Service routing with dashboard" /%}
+
+{% quick-link title="RGB Keyboard" icon="lightbulb" href="#rgb-keyboard" description="Advanced 6-process IPC" /%}
+
 {% /quick-links %}
 
 ---
@@ -234,6 +240,111 @@ cd examples/ipc_client_libraries/python && python client.py
 cd examples/ipc_client_libraries/node && node client.js
 ```
 
+### IPC Fruit Market
+
+**Location:** `examples/ipc_fruit_market/`
+
+A multi-process point-of-sale system demonstrating advanced IPC patterns.
+
+```mermaid
+flowchart TB
+    subgraph Server["Server Process"]
+        PS[PriceService Actor]
+        Broker[Message Broker]
+    end
+    KC[Keyboard Client] -->|ScanItem| PS
+    PS -->|broadcast| Broker
+    Broker -->|ItemScanned| DC[Display Client]
+    Broker -->|PriceUpdate| DC
+```
+
+**Components:**
+- **Server**: Central coordinator with PriceService actor
+- **Keyboard Client**: Raw input capture, fire-and-forget commands
+- **Display Client**: Reactive terminal UI with cart state
+
+**Patterns demonstrated:**
+- Fire-and-forget commands
+- Push subscriptions
+- Broker broadcasting
+- State synchronization across processes
+
+```bash
+# Using tmux launcher (recommended)
+cd acton-reactive/examples/ipc_fruit_market
+./start.sh
+
+# Or manually in 3 terminals:
+cargo run --example ipc_fruit_market_server --features ipc
+cargo run --example ipc_fruit_market_display --features ipc
+cargo run --example ipc_fruit_market_keyboard --features ipc
+```
+
+### IPC Multi-Service
+
+**Location:** `examples/ipc_multi_service/`
+
+Multiple actors via IPC, each providing a different service, with a real-time dashboard.
+
+**Services:**
+| Service | Description |
+|---------|-------------|
+| **counter** | Tracks increments/decrements |
+| **logger** | Accepts log messages |
+| **config** | Key-value configuration store |
+
+**Features:**
+- IPC routing to services by logical name
+- Real-time terminal dashboard
+- Listener statistics monitoring
+- Heartbeat/ping for connection health
+
+```bash
+# Terminal 1 - Server with dashboard
+cargo run --example ipc_multi_service_server --features ipc
+
+# Terminal 2 - Client
+cargo run --example ipc_multi_service_client --features ipc
+```
+
+### RGB Keyboard
+
+**Location:** `examples/rgb_keyboard/`
+
+Advanced IPC example with multiple patterns working together for a colorful keyboard visualization.
+
+```mermaid
+flowchart TB
+    Input[Input Client] -->|Keystroke| Server[RGB Server]
+    Server -->|ColorRequest| R[R Client]
+    Server -->|ColorRequest| G[G Client]
+    Server -->|ColorRequest| B[B Client]
+    R -->|ColorResponse| Server
+    G -->|ColorResponse| Server
+    B -->|ColorResponse| Server
+    Server -->|ColoredChar| Output[Output Client]
+```
+
+**Components (6 processes):**
+- **Server**: Central hub correlating RGB responses
+- **R/G/B Clients**: Subscribe to requests, generate random color values
+- **Input Client**: Captures keystrokes
+- **Output Client**: Displays characters with true RGB colors
+
+**Patterns demonstrated:**
+- Fire-and-forget (input → server)
+- Broadcast/subscription (server → color clients)
+- Request-response with correlation IDs
+- Push notifications (server → output)
+
+```bash
+# Using tmux launcher (recommended)
+cd acton-reactive/examples/rgb_keyboard
+./start.sh
+
+# Or manually in 6 terminals (see README)
+```
+
 ---
 
 ## Quick Reference
@@ -245,7 +356,14 @@ cd examples/ipc_client_libraries/node && node client.js
 | broadcast | Pub/Sub | Broker, subscriptions |
 | configuration | Config loading | XDG paths, TOML |
 | fruit_market | Multi-actor | Coordination, real-world |
-| ipc_* | IPC communication | Type registry, wire protocol |
+| ipc_basic | IPC foundation | Type registry, wire protocol |
+| ipc_bidirectional | Request-response | Multi-service IPC |
+| ipc_streaming | Streaming | Multi-frame responses |
+| ipc_subscriptions | Push notifications | Broker subscriptions over IPC |
+| ipc_client_libraries | Polyglot | Python, Node.js clients |
+| ipc_fruit_market | Multi-process POS | Fire-and-forget, push, broadcast |
+| ipc_multi_service | Service routing | Multiple actors, dashboards |
+| rgb_keyboard | Advanced IPC | Correlation, 6-process coordination |
 
 ---
 

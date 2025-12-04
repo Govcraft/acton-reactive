@@ -32,13 +32,13 @@ Add the `ipc` option to enable serialization:
 
 ```rust
 #[acton_message(ipc)]
-struct GetStatus;
+struct GetValue;
 
 #[acton_message(ipc)]
 struct SetValue { value: i32 }
 
 #[acton_message(ipc)]
-struct StatusResponse { value: i32 }
+struct ValueResponse { value: i32 }
 ```
 
 The `ipc` option adds `Serialize` and `Deserialize` derives. You must still register types with the runtime.
@@ -63,8 +63,8 @@ async fn main() {
     registry.register::<SetValue>("SetValue");
     registry.register::<ValueResponse>("ValueResponse");
 
-    // Create the service actor
-    let mut service = runtime.new_actor::<MyService>();
+    // Create and configure the service actor
+    let mut service = runtime.new_actor_with_name::<MyService>("my-service".to_string());
 
     service
         .act_on::<GetValue>(|actor, envelope| {
@@ -78,12 +78,10 @@ async fn main() {
         .mutate_on::<SetValue>(|actor, envelope| {
             actor.model.value = envelope.message().value;
             Reply::ready()
-        });
+        })
+        .expose_for_ipc();  // Expose using the actor's name ("my-service")
 
-    let handle = service.start().await;
-
-    // Expose the actor for IPC access
-    runtime.ipc_expose("my-service", handle);
+    service.start().await;
 
     // Start the IPC listener
     let listener = runtime.start_ipc_listener().await
@@ -97,6 +95,10 @@ async fn main() {
     runtime.shutdown_all().await.ok();
 }
 ```
+
+{% callout type="tip" title="Custom IPC Names" %}
+The `expose_for_ipc()` method uses the actor's ERN name automatically. If you need a different IPC name, use `runtime.ipc_expose("custom-name", handle)` after starting the actor.
+{% /callout %}
 
 ---
 
@@ -117,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create an envelope targeting the exposed actor
     let envelope = IpcEnvelope::new(
-        "my-service",  // Logical name from ipc_expose
+        "my-service",  // Actor name (from expose_for_ipc or ipc_expose)
         "GetValue",    // Registered type name
         serde_json::json!({}),
     );

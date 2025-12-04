@@ -45,6 +45,7 @@ let handle = runtime
 | `act_on::<M>(handler)` | Register read-only handler |
 | `before_start(hook)` | Lifecycle hook before start |
 | `after_stop(hook)` | Lifecycle hook after stop |
+| `expose_for_ipc()` | Expose actor for IPC using its name |
 | `start().await` | Spawn the actor |
 | `handle()` | Get handle before starting |
 

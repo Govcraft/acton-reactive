@@ -206,10 +206,18 @@ registry.register::<SetValue>("SetValue");
 registry.register::<GetValue>("GetValue");
 registry.register::<ValueResponse>("ValueResponse");
 
-// Expose multiple services
-runtime.ipc_expose("calculator", calculator_handle);
-runtime.ipc_expose("kv_store", kv_store_handle);
-runtime.ipc_expose("price_feed", price_feed_handle);
+// Create and expose multiple services using expose_for_ipc
+let mut calculator = runtime.new_actor_with_name::<Calculator>("calculator".to_string());
+calculator.expose_for_ipc();
+calculator.start().await;
+
+let mut kv_store = runtime.new_actor_with_name::<KvStore>("kv_store".to_string());
+kv_store.expose_for_ipc();
+kv_store.start().await;
+
+let mut price_feed = runtime.new_actor_with_name::<PriceFeed>("price_feed".to_string());
+price_feed.expose_for_ipc();
+price_feed.start().await;
 ```
 
 Clients target different services:

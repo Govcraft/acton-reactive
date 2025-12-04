@@ -100,20 +100,21 @@ async fn main() -> anyhow::Result<()> {
     registry.register::<MyRequest>("MyRequest");
     registry.register::<MyResponse>("MyResponse");
 
-    // 4. Create and start actors
-    let actor = runtime.new_actor::<MyState>().start().await;
+    // 4. Create, configure, and expose actors
+    let mut actor = runtime.new_actor_with_name::<MyState>("my_service".to_string());
+    actor
+        .act_on::<MyRequest>(|actor, ctx| { /* ... */ })
+        .expose_for_ipc();  // Expose using the actor's name
+    actor.start().await;
 
-    // 5. Expose actors via IPC
-    runtime.ipc_expose("my_service", actor);
-
-    // 6. Start IPC listener
+    // 5. Start IPC listener
     let listener = runtime.start_ipc_listener().await?;
 
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
 
-    // 7. Clean shutdown
-    listener.shutdown().await?;
+    // 6. Clean shutdown
+    listener.shutdown_gracefully().await;
     runtime.shutdown_all().await?;
 
     Ok(())
@@ -204,15 +205,31 @@ println!("Registered types: {:?}", types);
 
 ## Exposing Actors
 
-### Basic Exposure
+### Using expose_for_ipc (Recommended)
+
+The simplest way to expose actors. Uses the actor's ERN name automatically:
 
 ```rust
-// Expose a single actor
-runtime.ipc_expose("calculator", calculator_handle);
+// Expose using the actor's name
+let mut calculator = runtime.new_actor_with_name::<Calculator>("calculator".to_string());
+calculator
+    .mutate_on::<AddRequest>(handler)
+    .expose_for_ipc();  // Exposed as "calculator"
+calculator.start().await;
 
-// Expose multiple actors
-runtime.ipc_expose("kv_store", kv_store_handle);
-runtime.ipc_expose("price_feed", price_feed_handle);
+// Expose multiple named actors
+let mut kv_store = runtime.new_actor_with_name::<KvStore>("kv_store".to_string());
+kv_store.expose_for_ipc();
+kv_store.start().await;
+```
+
+### Manual Exposure (Custom Names)
+
+Use `ipc_expose` when you need a different IPC name than the actor's ERN:
+
+```rust
+let handle = runtime.new_actor::<Calculator>().start().await;
+runtime.ipc_expose("calc-v2", handle);  // Custom IPC name
 ```
 
 ### Hiding Actors
@@ -227,7 +244,9 @@ runtime.ipc_hide("calculator");
 ```rust
 // Expose actors based on configuration
 if config.enable_calculator {
-    runtime.ipc_expose("calculator", calc_handle);
+    let mut calc = runtime.new_actor_with_name::<Calculator>("calculator".to_string());
+    calc.expose_for_ipc();
+    calc.start().await;
 }
 ```
 

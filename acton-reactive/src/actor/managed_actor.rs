@@ -112,6 +112,9 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// The supervision strategy for managing child actors.
     /// Determines how to handle child terminations (`OneForOne`, `OneForAll`, `RestForOne`).
     pub(crate) supervision_strategy: SupervisionStrategy,
+    /// Whether to automatically expose this actor for IPC access when started.
+    /// When `true`, the actor will be registered with the IPC system using its ERN root name.
+    pub(crate) expose_for_ipc: bool,
     /// Phantom data to associate the `ActorState` type parameter.
     _actor_state: std::marker::PhantomData<ActorState>,
 }

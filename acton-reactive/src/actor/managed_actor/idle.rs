@@ -589,6 +589,36 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         self
     }
 
+    /// Marks this actor to be automatically exposed for IPC access when started.
+    ///
+    /// When an actor is marked for IPC exposure, it will be registered with the IPC system
+    /// during [`start()`](Self::start) using its ERN root name as the logical IPC name.
+    /// This allows external processes to send messages to this actor via Unix domain sockets.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut service = runtime.new_actor_with_name::<MyService>("prices".to_string());
+    /// service
+    ///     .act_on::<GetPrice>(|actor, ctx| { /* ... */ })
+    ///     .expose_for_ipc()  // Will be accessible as "prices" via IPC
+    ///     .start().await;
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// Returns a mutable reference to `self` for chaining.
+    ///
+    /// # See Also
+    ///
+    /// - [`ActorRuntime::ipc_expose`](crate::prelude::ActorRuntime::ipc_expose) for manual IPC exposure with custom names
+    /// - [`ActorRuntime::ipc_hide`](crate::prelude::ActorRuntime::ipc_hide) for removing IPC exposure
+    #[cfg(feature = "ipc")]
+    pub fn expose_for_ipc(&mut self) -> &mut Self {
+        self.expose_for_ipc = true;
+        self
+    }
+
     /// Creates the configuration for a new child actor under this actor's supervision.
     ///
     /// This method generates a `ManagedActor<Idle, State>` instance pre-configured
@@ -685,7 +715,8 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// 2.  Executes the registered `before_start` lifecycle hook.
     /// 3.  Spawns the actor's main asynchronous task (`wake`) which handles message processing.
     /// 4.  Closes the actor's `TaskTracker` to signal that the main task has been spawned.
-    /// 5.  Returns the actor's [`ActorHandle`] for external interaction.
+    /// 5.  If [`expose_for_ipc()`](Self::expose_for_ipc) was called, registers the actor for IPC access.
+    /// 6.  Returns the actor's [`ActorHandle`] for external interaction.
     ///
     /// After this method returns, the actor is running and ready to process messages sent to its handle.
     ///
@@ -701,6 +732,14 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         let message_handlers = mem::take(&mut self.message_handlers);
         let read_only_handlers = mem::take(&mut self.read_only_handlers);
         let actor_ref = self.handle.clone(); // Clone handle before consuming self.
+
+        // Capture IPC exposure settings before consuming self
+        #[cfg(feature = "ipc")]
+        let should_expose_for_ipc = self.expose_for_ipc;
+        #[cfg(feature = "ipc")]
+        let ipc_name = self.id.root.as_str().to_owned();
+        #[cfg(feature = "ipc")]
+        let runtime_for_ipc = self.runtime.clone();
 
         // Convert the actor to the Started state.
         let mut active_actor: ManagedActor<Started, State> = self.into();
@@ -723,6 +762,13 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         });
         // Close the tracker to indicate the main task is launched.
         actor_ref.tracker().close();
+
+        // Register for IPC access if requested
+        #[cfg(feature = "ipc")]
+        if should_expose_for_ipc {
+            trace!("Exposing actor '{}' for IPC access", ipc_name);
+            runtime_for_ipc.ipc_expose(&ipc_name, actor_ref.clone());
+        }
 
         trace!("Actor {} started successfully.", actor_ref.id());
         actor_ref // Return the handle.
@@ -788,6 +834,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedActor<Idle, State>>
             cancellation_token: value.cancellation_token,
             restart_policy: value.restart_policy,
             supervision_strategy: value.supervision_strategy,
+            expose_for_ipc: value.expose_for_ipc,
             _actor_state: PhantomData,
         }
     }
@@ -825,6 +872,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
             read_only_handlers: DashMap::default(),
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
+            expose_for_ipc: false,
             _actor_state: PhantomData,
         }
     }
