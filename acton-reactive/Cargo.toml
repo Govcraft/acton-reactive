@@ -149,6 +149,22 @@ name = "rgb_keyboard_output_client"
 path = "examples/rgb_keyboard/output_client.rs"
 required-features = ["ipc"]
 
+# IPC Fruit Market - Advanced IPC Demo (multi-process POS system)
+[[example]]
+name = "ipc_fruit_market_server"
+path = "examples/ipc_fruit_market/server.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "ipc_fruit_market_keyboard"
+path = "examples/ipc_fruit_market/keyboard_client.rs"
+required-features = ["ipc"]
+
+[[example]]
+name = "ipc_fruit_market_display"
+path = "examples/ipc_fruit_market/display_client.rs"
+required-features = ["ipc"]
+
 # ============================================================================
 # Benchmarks
 # ============================================================================

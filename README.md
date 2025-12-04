@@ -1,7 +1,7 @@
 # Acton Reactive
 
-[![Crates.io](https://img.shields.io/crates/v/acton-reactive.svg)](https://crates.io/crates/acton-reactive/0.7.0)
-[![Documentation](https://docs.rs/acton-reactive/0.7.0/badge.svg)](https://docs.rs/acton-reactive/0.7.0)
+[![Crates.io](https://img.shields.io/crates/v/acton-reactive.svg)](https://crates.io/crates/acton-reactive)
+[![Documentation](https://docs.rs/acton-reactive/badge.svg)](https://docs.rs/acton-reactive)
 [![License](https://img.shields.io/crates/l/acton-reactive.svg)](LICENSE-MIT)
 
 **Concurrent Rust made simple.** Build fast, responsive applications using actors—independent workers that manage their own state and communicate through messages.
