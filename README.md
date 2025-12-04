@@ -1,8 +1,8 @@
 # Acton Reactive
 
 [![Crates.io](https://img.shields.io/crates/v/acton-reactive.svg)](https://crates.io/crates/acton-reactive)
-[![Documentation](https://docs.rs/acton-reactive/badge.svg)](https://docs.rs/acton-reactive)
-[![License](https://img.shields.io/crates/l/acton-reactive.svg)](LICENSE-MIT)
+[![Documentation](https://img.shields.io/badge/docs.rs-acton--reactive-blue)](https://docs.rs/acton-reactive)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE-MIT)
 
 **Concurrent Rust made simple.** Build fast, responsive applications using actors—independent workers that manage their own state and communicate through messages.
 
@@ -67,7 +67,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-reactive = "0.7"
+acton-reactive = "7"
 ```
 
 Tokio is re-exported via `acton_reactive::prelude::*`, so no separate dependency is needed.
