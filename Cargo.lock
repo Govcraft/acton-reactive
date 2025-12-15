@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "acton-macro"
-version = "7.0.0"
+version = "7.1.0"
 dependencies = [
  "quote",
  "syn",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "acton-reactive"
-version = "7.0.0"
+version = "7.1.0"
 dependencies = [
  "acton-ern",
  "acton-macro",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "acton_test"
-version = "7.0.0"
+version = "7.1.0"
 dependencies = [
  "acton_test_macro",
  "parking_lot",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "acton_test_macro"
-version = "7.0.0"
+version = "7.1.0"
 dependencies = [
  "parking_lot",
  "quote",
