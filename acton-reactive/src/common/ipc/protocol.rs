@@ -312,13 +312,15 @@ impl std::fmt::Display for ProtocolVersion {
 // ============================================================================
 
 /// Serialization format for IPC payloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     /// JSON format (UTF-8 encoded, human-readable).
     #[default]
     Json,
     /// `MessagePack` format (binary, compact).
     #[cfg(feature = "ipc-messagepack")]
+    #[serde(rename = "messagepack")]
     MessagePack,
 }
 
@@ -350,11 +352,15 @@ impl Format {
     }
 
     /// Serialize a value using this format.
+    ///
+    /// For MessagePack, uses named/map encoding (with field names) rather than
+    /// compact/array encoding. This ensures compatibility with `skip_serializing_if`
+    /// and other serde attributes that modify field presence.
     pub fn serialize<T: Serialize>(self, value: &T) -> Result<Vec<u8>, IpcError> {
         match self {
             Self::Json => serde_json::to_vec(value).map_err(IpcError::from),
             #[cfg(feature = "ipc-messagepack")]
-            Self::MessagePack => rmp_serde::to_vec(value).map_err(|e| {
+            Self::MessagePack => rmp_serde::to_vec_named(value).map_err(|e| {
                 IpcError::SerializationError(format!("MessagePack serialization failed: {e}"))
             }),
         }
@@ -754,6 +760,7 @@ pub const fn is_unsubscribe(msg_type: u8) -> bool {
 /// Push notifications are sent from the server to clients for broker subscription
 /// forwarding. They carry messages that were broadcast internally and match the
 /// client's subscriptions.
+#[allow(dead_code)]
 pub async fn write_push<W>(
     writer: &mut W,
     push: &super::types::IpcPushNotification,

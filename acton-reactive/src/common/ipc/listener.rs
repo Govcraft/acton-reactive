@@ -34,8 +34,9 @@ use tracing::{debug, error, info, trace, warn};
 use super::config::IpcConfig;
 use super::protocol::{
     is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame,
-    write_discovery_response_with_format, write_heartbeat, write_push, write_response_with_format,
-    write_stream_frame_with_format, write_subscription_response_with_format, Format,
+    write_discovery_response_with_format, write_heartbeat, write_push_with_format,
+    write_response_with_format, write_stream_frame_with_format,
+    write_subscription_response_with_format, Format,
     MSG_TYPE_REQUEST,
 };
 use super::rate_limiter::RateLimiter;
@@ -65,7 +66,10 @@ enum WriteCommand {
     /// Write a heartbeat.
     Heartbeat,
     /// Write a push notification.
-    Push(IpcPushNotification),
+    Push {
+        notification: IpcPushNotification,
+        format: Format,
+    },
     /// Write a subscription response.
     SubscriptionResponse {
         response: IpcSubscriptionResponse,
@@ -691,8 +695,8 @@ async fn run_writer_task(
                     WriteCommand::Heartbeat => {
                         write_heartbeat(&mut writer).await
                     }
-                    WriteCommand::Push(notification) => {
-                        write_push(&mut writer, &notification).await
+                    WriteCommand::Push { notification, format } => {
+                        write_push_with_format(&mut writer, &notification, format).await
                     }
                     WriteCommand::SubscriptionResponse { response, format } => {
                         write_subscription_response_with_format(&mut writer, &response, format).await
@@ -933,9 +937,10 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
     let push_writer = writer_tx.clone();
     let push_cancel = ctx.cancel_token.clone();
     let push_stats = ctx.stats.clone();
+    let push_format = ctx.config.push_format;
 
     let push_task = tokio::spawn(async move {
-        run_push_forwarder(conn_id, push_receiver, push_writer, push_cancel, push_stats).await;
+        run_push_forwarder(conn_id, push_receiver, push_writer, push_cancel, push_stats, push_format).await;
     });
 
     run_connection_loop(
@@ -1059,6 +1064,7 @@ async fn run_push_forwarder(
     writer: WriterHandle,
     cancel_token: CancellationToken,
     stats: Arc<IpcListenerStats>,
+    push_format: Format,
 ) {
     trace!(conn_id, "Push forwarder started");
 
@@ -1076,7 +1082,7 @@ async fn run_push_forwarder(
                     let message_type = push.message_type.clone();
                     let notification_id = push.notification_id.clone();
 
-                    if writer.send(WriteCommand::Push(push)).await.is_err() {
+                    if writer.send(WriteCommand::Push { notification: push, format: push_format }).await.is_err() {
                         error!(conn_id, "Failed to send push notification: writer channel closed");
                         // Connection is broken, exit the forwarder
                         break;

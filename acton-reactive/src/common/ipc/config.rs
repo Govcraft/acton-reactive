@@ -16,6 +16,7 @@
 
 //! IPC configuration with XDG-compliant socket path handling.
 
+use super::protocol::Format;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -54,7 +55,7 @@ use tracing::{info, warn};
 /// [shutdown]
 /// drain_timeout_ms = 5000
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IpcConfig {
     /// Socket configuration.
@@ -67,6 +68,29 @@ pub struct IpcConfig {
     pub timeouts: IpcTimeoutsConfig,
     /// Graceful shutdown configuration.
     pub shutdown: ShutdownConfig,
+    /// Default format for push notifications.
+    ///
+    /// This format is used when sending push notifications to subscribers.
+    /// Default is MessagePack for efficiency.
+    #[serde(default = "default_push_format")]
+    pub push_format: Format,
+}
+
+fn default_push_format() -> Format {
+    Format::MessagePack
+}
+
+impl Default for IpcConfig {
+    fn default() -> Self {
+        Self {
+            socket: SocketConfig::default(),
+            limits: IpcLimitsConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            timeouts: IpcTimeoutsConfig::default(),
+            shutdown: ShutdownConfig::default(),
+            push_format: default_push_format(),
+        }
+    }
 }
 
 /// Socket-specific configuration.
