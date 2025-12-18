@@ -30,6 +30,44 @@ use tracing::{debug, trace, warn};
 
 use super::types::IpcPushNotification;
 
+// ============================================================================
+// Pattern Matching
+// ============================================================================
+
+/// Check if a message type matches a subscription pattern.
+///
+/// Supports simple glob patterns:
+/// - `*` matches everything
+/// - `prefix*` matches types starting with prefix
+/// - `*suffix` matches types ending with suffix
+/// - `prefix*suffix` matches types with both prefix and suffix
+///
+/// Note: Multiple wildcards (e.g., `a*b*c`) are not supported.
+fn matches_pattern(message_type: &str, pattern: &str) -> bool {
+    if !pattern.contains('*') {
+        return message_type == pattern;
+    }
+
+    let parts: Vec<&str> = pattern.split('*').collect();
+
+    match parts.as_slice() {
+        ["", ""] => true, // "*" matches all
+        ["", suffix] => message_type.ends_with(suffix), // "*suffix"
+        [prefix, ""] => message_type.starts_with(prefix), // "prefix*"
+        [prefix, suffix] => {
+            // "prefix*suffix" - ensure no overlap
+            message_type.starts_with(prefix)
+                && message_type.ends_with(suffix)
+                && message_type.len() >= prefix.len() + suffix.len()
+        }
+        _ => false, // Multiple wildcards not supported
+    }
+}
+
+// ============================================================================
+// Types
+// ============================================================================
+
 /// Unique identifier for an IPC connection.
 pub type ConnectionId = usize;
 
@@ -286,19 +324,37 @@ impl SubscriptionManager {
 
     /// Forwards a push notification to all connections subscribed to the message type.
     ///
+    /// Supports wildcard pattern matching for subscription patterns like:
+    /// - `system.started.*` matches `system.started.timer`
+    /// - `*.event` matches `foo.bar.event`
+    /// - `*` matches everything
+    ///
     /// Uses non-blocking `try_send` to avoid backpressure from slow consumers.
     pub fn forward_to_subscribers(&self, notification: &IpcPushNotification) {
         let message_type = &notification.message_type;
+        let mut matched_connections: HashSet<ConnectionId> = HashSet::new();
 
-        let Some(connections_entry) = self.type_to_connections.get(message_type) else {
+        // 1. Try exact match first (fast path)
+        if let Some(connections_entry) = self.type_to_connections.get(message_type) {
+            matched_connections.extend(connections_entry.iter().copied());
+        }
+
+        // 2. Check wildcard pattern subscriptions
+        for entry in self.type_to_connections.iter() {
+            let pattern = entry.key();
+            // Only check patterns that contain wildcards and haven't been matched yet
+            if pattern.contains('*') && matches_pattern(message_type, pattern) {
+                matched_connections.extend(entry.value().iter().copied());
+            }
+        }
+
+        if matched_connections.is_empty() {
             trace!(message_type, "No subscribers for message type");
             return;
-        };
+        }
 
-        let conn_ids: Vec<_> = connections_entry.iter().copied().collect();
-        drop(connections_entry); // Release lock before sending
-
-        for conn_id in conn_ids {
+        // 3. Send to all matched connections
+        for conn_id in matched_connections {
             if let Some(conn_info) = self.connections.get(&conn_id) {
                 let notification_clone = notification.clone();
                 match conn_info.push_sender.try_send(notification_clone) {
@@ -543,5 +599,198 @@ mod tests {
     fn test_push_receiver_struct() {
         let (_, receiver) = create_push_channel(123, 5);
         assert_eq!(receiver.conn_id, 123);
+    }
+
+    // ========================================================================
+    // Pattern Matching Tests
+    // ========================================================================
+
+    #[test]
+    fn test_matches_pattern_exact() {
+        assert!(matches_pattern("timer.tick", "timer.tick"));
+        assert!(!matches_pattern("timer.tick", "timer.tock"));
+        assert!(!matches_pattern("timer.tick", "timer.tick.extra"));
+    }
+
+    #[test]
+    fn test_matches_pattern_prefix_wildcard() {
+        // "prefix*" should match anything starting with prefix
+        assert!(matches_pattern("system.started.timer", "system.started.*"));
+        assert!(matches_pattern("system.started.sink", "system.started.*"));
+        assert!(matches_pattern("system.started.", "system.started.*"));
+        assert!(!matches_pattern("system.stopped.timer", "system.started.*"));
+        assert!(!matches_pattern("system.start", "system.started.*"));
+    }
+
+    #[test]
+    fn test_matches_pattern_suffix_wildcard() {
+        // "*suffix" should match anything ending with suffix
+        assert!(matches_pattern("foo.bar.event", "*.event"));
+        assert!(matches_pattern(".event", "*.event")); // Edge case: starts with dot
+        assert!(!matches_pattern("event", "*.event")); // "event" does NOT end with ".event"
+        assert!(!matches_pattern("foo.bar.message", "*.event"));
+        // Without the dot in the pattern
+        assert!(matches_pattern("event", "*event"));
+        assert!(matches_pattern("myevent", "*event"));
+        assert!(matches_pattern("foo.bar.event", "*event"));
+    }
+
+    #[test]
+    fn test_matches_pattern_match_all() {
+        // "*" should match everything
+        assert!(matches_pattern("anything", "*"));
+        assert!(matches_pattern("", "*"));
+        assert!(matches_pattern("a.b.c.d.e", "*"));
+    }
+
+    #[test]
+    fn test_matches_pattern_prefix_and_suffix() {
+        // "prefix*suffix" should match strings with both
+        assert!(matches_pattern("system.timer.event", "system.*.event"));
+        assert!(matches_pattern("system..event", "system.*.event"));
+        assert!(!matches_pattern("system.timer.message", "system.*.event"));
+        assert!(!matches_pattern("other.timer.event", "system.*.event"));
+    }
+
+    #[test]
+    fn test_matches_pattern_multiple_wildcards_not_supported() {
+        // Multiple wildcards should not match
+        assert!(!matches_pattern("a.b.c", "a*b*c"));
+        assert!(!matches_pattern("abc", "*.*.*"));
+    }
+
+    #[tokio::test]
+    async fn test_forward_with_wildcard_subscription() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let (sender, mut receiver) = mpsc::channel(10);
+
+        manager.register_connection(1, sender);
+        manager.subscribe(1, &["system.started.*".to_string()]);
+
+        // This should match the wildcard pattern
+        let notification = IpcPushNotification::new(
+            "system.started.timer",
+            Some("engine".to_string()),
+            serde_json::json!({ "name": "timer" }),
+        );
+
+        manager.forward_to_subscribers(&notification);
+
+        let received = receiver.try_recv().unwrap();
+        assert_eq!(received.message_type, "system.started.timer");
+        assert_eq!(manager.stats().push_notifications_sent(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_forward_wildcard_no_match() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let (sender, mut receiver) = mpsc::channel(10);
+
+        manager.register_connection(1, sender);
+        manager.subscribe(1, &["system.started.*".to_string()]);
+
+        // This should NOT match the wildcard pattern
+        let notification = IpcPushNotification::new(
+            "system.stopped.timer",
+            Some("engine".to_string()),
+            serde_json::json!({ "name": "timer" }),
+        );
+
+        manager.forward_to_subscribers(&notification);
+
+        // Should not receive anything
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(manager.stats().push_notifications_sent(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_forward_exact_and_wildcard_combined() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let (sender, mut receiver) = mpsc::channel(10);
+
+        manager.register_connection(1, sender);
+        // Subscribe to both exact and wildcard
+        manager.subscribe(
+            1,
+            &[
+                "timer.tick".to_string(),
+                "system.started.*".to_string(),
+            ],
+        );
+
+        // Send exact match
+        let notification1 = IpcPushNotification::new(
+            "timer.tick",
+            Some("timer".to_string()),
+            serde_json::json!({ "seq": 1 }),
+        );
+        manager.forward_to_subscribers(&notification1);
+
+        // Send wildcard match
+        let notification2 = IpcPushNotification::new(
+            "system.started.sink",
+            Some("engine".to_string()),
+            serde_json::json!({ "name": "sink" }),
+        );
+        manager.forward_to_subscribers(&notification2);
+
+        // Both should be received
+        let msg1 = receiver.try_recv().unwrap();
+        assert_eq!(msg1.message_type, "timer.tick");
+
+        let msg2 = receiver.try_recv().unwrap();
+        assert_eq!(msg2.message_type, "system.started.sink");
+
+        assert_eq!(manager.stats().push_notifications_sent(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_forward_match_all_wildcard() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let (sender, mut receiver) = mpsc::channel(10);
+
+        manager.register_connection(1, sender);
+        manager.subscribe(1, &["*".to_string()]);
+
+        // Any message should match
+        let notification = IpcPushNotification::new(
+            "anything.at.all",
+            Some("source".to_string()),
+            serde_json::json!({}),
+        );
+
+        manager.forward_to_subscribers(&notification);
+
+        let received = receiver.try_recv().unwrap();
+        assert_eq!(received.message_type, "anything.at.all");
+    }
+
+    #[tokio::test]
+    async fn test_forward_no_duplicate_delivery() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let (sender, mut receiver) = mpsc::channel(10);
+
+        manager.register_connection(1, sender);
+        // Subscribe to overlapping patterns - should only receive once
+        manager.subscribe(
+            1,
+            &[
+                "system.started.timer".to_string(), // Exact
+                "system.started.*".to_string(),     // Wildcard that also matches
+            ],
+        );
+
+        let notification = IpcPushNotification::new(
+            "system.started.timer",
+            Some("engine".to_string()),
+            serde_json::json!({ "name": "timer" }),
+        );
+
+        manager.forward_to_subscribers(&notification);
+
+        // Should only receive once (HashSet deduplicates connection IDs)
+        let _ = receiver.try_recv().unwrap();
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(manager.stats().push_notifications_sent(), 1);
     }
 }
