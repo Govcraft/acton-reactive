@@ -737,7 +737,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         #[cfg(feature = "ipc")]
         let should_expose_for_ipc = self.expose_for_ipc;
         #[cfg(feature = "ipc")]
-        let ipc_name = self.id.root.as_str().to_owned();
+        let ipc_name = self.id.root().as_str().to_owned();
         #[cfg(feature = "ipc")]
         let runtime_for_ipc = self.runtime.clone();
 

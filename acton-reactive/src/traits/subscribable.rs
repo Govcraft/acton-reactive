@@ -103,21 +103,21 @@ where
         let message_type_name = std::any::type_name::<M>().to_string();
         // Create the subscription message with the actor's handle as context.
         let subscription = SubscribeBroker {
-            subscriber_id: subscriber_id.clone(), // Clone Ern for the message
+            subscriber_id,
             message_type_id,
             subscriber_context: self.clone_ref(), // Clone the handle
         };
         let broker_option = self.get_broker(); // Get Option<BrokerRef>
 
         async move {
-            trace!( type_id=?message_type_id, subscriber = %subscriber_id, "Sending subscription request");
+            trace!( type_id=?message_type_id, subscriber = %subscription.subscriber_id, "Sending subscription request");
             if let Some(broker_handle) = broker_option {
                 trace!(broker = %broker_handle.id(), "Sending SubscribeBroker message");
                 // Send the subscription message to the broker.
                 broker_handle.send(subscription).await;
             } else {
                 // Log an error if no broker is available.
-                error!(subscriber = %subscriber_id, message_type = %message_type_name, "Cannot subscribe: No broker found.");
+                error!(subscriber = %subscription.subscriber_id, message_type = %message_type_name, "Cannot subscribe: No broker found.");
             }
         }
     }

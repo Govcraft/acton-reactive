@@ -41,7 +41,7 @@ impl MessageAddress {
     #[inline]
     #[must_use]
     pub fn name(&self) -> &str {
-        self.sender.root.as_str()
+        self.sender.root().as_str()
     }
 }
 

@@ -130,7 +130,7 @@ impl<ActorState, Model: Default + Send + Debug + 'static> ManagedActor<ActorStat
     /// Returns the root name segment of the actor's identifier (`Ern`).
     #[inline]
     pub fn name(&self) -> &str {
-        self.id.root.as_str()
+        self.id.root().as_str()
     }
 
     /// Returns a reference to the actor's [`ActorHandle`].

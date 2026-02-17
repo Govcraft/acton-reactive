@@ -183,11 +183,11 @@ impl ShoppingCart {
         // via message handlers, not direct struct modification here.
         trace!(
             "actor_handle id is {}",
-            self.actor_handle.id().root.to_string()
+            self.actor_handle.id().root().to_string()
         );
         trace!(
             "and pricing_service id is {}",
-            self.price_service_handle.id().root.to_string()
+            self.price_service_handle.id().root().to_string()
         );
         // Send Ping to self to kick off the process defined in the Ping handler.
         self.actor_handle.send(Ping).await;

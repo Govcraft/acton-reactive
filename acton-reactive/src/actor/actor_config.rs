@@ -14,7 +14,8 @@
  * limitations under that License.
  */
 
-use acton_ern::{Ern, ErnParser};
+use acton_ern::Ern;
+use acton_ern::ErnParser;
 
 use crate::actor::{RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
 use crate::common::{BrokerRef, ParentRef};

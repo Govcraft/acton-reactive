@@ -434,7 +434,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                         termination_reason = TerminationReason::InboxClosed;
                         break;
                     };
-                    trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root);
+                    trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root());
 
                     // Extract envelope and type_id, handling BrokerRequestEnvelope indirection
                     let (mut envelope, type_id) = if let Some(broker_req) = incoming_envelope

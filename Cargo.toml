@@ -47,7 +47,7 @@ dashmap = "6.1.0"
 parking_lot = "0.12.3"
 
 # Utilities
-acton-ern = "1.0.0"
+acton-ern = "2"
 static_assertions = "1.1.0"
 dyn-clone = "1.0.17"
 derive-new = "0.7.0"

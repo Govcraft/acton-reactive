@@ -239,7 +239,7 @@ impl ActorHandleInterface for ActorHandle {
     #[instrument(skip(self))]
     fn create_envelope(&self, recipient_address: Option<MessageAddress>) -> OutboundEnvelope {
         let return_address = self.reply_address();
-        trace!(sender = %return_address.sender.root, recipient = ?recipient_address.as_ref().map(|r| r.sender.root.as_str()), "Creating envelope");
+        trace!(sender = %return_address.sender.root(), recipient = ?recipient_address.as_ref().map(|r| r.sender.root().as_str()), "Creating envelope");
         if let Some(recipient) = recipient_address {
             OutboundEnvelope::new_with_recipient(
                 return_address,
@@ -297,7 +297,7 @@ impl ActorHandleInterface for ActorHandle {
     /// Returns the actor's root name (the first part of its `Ern`) as a String.
     #[inline]
     fn name(&self) -> String {
-        self.id.root.to_string()
+        self.id.root().to_string()
     }
 
     /// Returns a clone of this `ActorHandle`.
@@ -408,7 +408,7 @@ impl ActorHandleInterface for ActorHandle {
             );
             trace!(
                 recipient = %self.id,
-                reply_to = ?envelope.return_address.sender.root.as_str(),
+                reply_to = ?envelope.return_address.sender.root().as_str(),
                 "Sending boxed message with custom reply-to via IPC"
             );
             // Convert Box to Arc for the internal send mechanism
@@ -476,7 +476,7 @@ impl ActorHandleInterface for ActorHandle {
         );
         trace!(
             recipient = %self.id,
-            reply_to = ?envelope.return_address.sender.root.as_str(),
+            reply_to = ?envelope.return_address.sender.root().as_str(),
             "Trying to send boxed message with custom reply-to via IPC (backpressure-aware)"
         );
         // Convert Box to Arc for the internal send mechanism

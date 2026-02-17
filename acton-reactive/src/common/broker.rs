@@ -154,13 +154,12 @@ impl Broker {
 
                 let subscribers_map = actor.model.subscribers.clone(); // Clone Arc<DashMap>
                 Box::pin(async move {
-                    let subscriber_id_for_insert = subscriber_id.clone(); // Clone before moving
+                    trace!(subscriber = %subscriber_id, message_type = ?type_id, "Subscription added");
                     // Insert the subscriber into the set for the given message TypeId.
                     subscribers_map
                         .entry(type_id)
                         .or_default() // Get the HashSet or create a new one
-                        .insert((subscriber_id_for_insert, subscriber_handle)); // Insert the clone
-                    trace!(subscriber = %subscriber_id, message_type = ?type_id, "Subscription added"); // Use original subscriber_id here
+                        .insert((subscriber_id, subscriber_handle)); // Moved, no clone
                 })
             });
 
