@@ -94,6 +94,14 @@ builder.mutate_on::<Increment>(|actor, _envelope| {
 });
 ```
 
+### Mutate State (Sync — No Future Allocation)
+
+```rust
+builder.mutate_on_sync::<Increment>(|actor, _envelope| {
+    actor.model.count += 1;
+});
+```
+
 ### Read State with Reply
 
 ```rust

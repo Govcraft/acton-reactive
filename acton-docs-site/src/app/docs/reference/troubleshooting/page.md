@@ -49,12 +49,18 @@ impl Default for MyActor {
 
 **Problem**: Handler must return a `Reply`.
 
-**Solution**: Return `Reply::ready()` for no response:
+**Solution**: Return `Reply::ready()` for no response, or use a `_sync` variant that returns `()` directly:
 
 ```rust
+// Async handler — must return Reply
 builder.mutate_on::<Message>(|actor, envelope| {
     actor.model.value = envelope.message().value;
     Reply::ready()  // Don't forget this!
+});
+
+// Sync handler — returns () directly, no Reply needed
+builder.mutate_on_sync::<Message>(|actor, envelope| {
+    actor.model.value = envelope.message().value;
 });
 ```
 
@@ -82,11 +88,21 @@ let data = Arc::new(value);
 
 **Problem**: A panic in a handler stops the actor.
 
-**Solution**: Catch panics or use Result types:
+**Solution**: Enable the `catch-handler-panics` feature (on by default). This wraps every handler dispatch in `catch_unwind` so a panicking handler is logged and skipped rather than crashing the actor task:
+
+```toml
+# Enabled by default — panics in handlers are caught and logged
+acton-reactive = "8.0.0"
+
+# Disable for production workloads with well-tested handlers to
+# eliminate the (small) catch_unwind overhead
+acton-reactive = { version = "8.0.0", default-features = false }
+```
+
+If you need per-handler control instead, use `try_mutate_on` with proper error types, or catch panics manually:
 
 ```rust
 builder.mutate_on::<RiskyMessage>(|actor, envelope| {
-    // Catch potential panics
     let result = std::panic::catch_unwind(|| {
         risky_operation()
     });

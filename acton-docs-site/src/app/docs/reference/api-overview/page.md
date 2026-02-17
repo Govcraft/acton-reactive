@@ -41,8 +41,10 @@ let handle = runtime
 
 | Method | Description |
 |--------|-------------|
-| `mutate_on::<M>(handler)` | Register state-changing handler |
-| `act_on::<M>(handler)` | Register read-only handler |
+| `mutate_on::<M>(handler)` | Register async state-changing handler |
+| `mutate_on_sync::<M>(handler)` | Register sync state-changing handler (no future allocation) |
+| `act_on::<M>(handler)` | Register async read-only handler |
+| `act_on_sync::<M>(handler)` | Register sync read-only handler (no future allocation) |
 | `before_start(hook)` | Lifecycle hook before start |
 | `after_stop(hook)` | Lifecycle hook after stop |
 | `expose_for_ipc()` | Expose actor for IPC using its name |

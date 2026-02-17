@@ -125,8 +125,10 @@ Each message is processed in order. The actor's state is never accessed concurre
 
 | If you need to... | Use this | Why |
 |-------------------|----------|-----|
-| **Modify** the actor's data | `mutate_on` | Exclusive access, one message at a time |
-| **Read** the actor's data | `act_on` | Multiple reads can run concurrently |
+| **Modify** the actor's data | `mutate_on` / `mutate_on_sync` | Exclusive access, one message at a time |
+| **Read** the actor's data | `act_on` / `act_on_sync` | Multiple reads can run concurrently |
+
+Use the `_sync` variants when your handler doesn't need async — they avoid a heap allocation per invocation.
 
 ```rust
 // For mutations - one at a time, exclusive access

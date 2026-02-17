@@ -3,23 +3,25 @@ title: Handler Types
 nextjs:
   metadata:
     title: Handler Types - acton-reactive
-    description: Understanding the four handler types - mutate_on, act_on, try_mutate_on, and try_act_on.
+    description: Understanding the six handler types - mutate_on, act_on, their sync variants, and the fallible try_ variants.
 ---
 
-Acton provides four handler types to cover different combinations of state access and error handling. Choosing the right one affects both correctness and performance.
+Acton provides six handler types to cover different combinations of state access, error handling, and async needs. Choosing the right one affects both correctness and performance.
 
 ---
 
 ## Quick Reference
 
-| Handler | State Access | Can Fail | Concurrency |
-|---------|-------------|----------|-------------|
-| `mutate_on` | Mutable | No | Sequential |
-| `act_on` | Read-only | No | Concurrent |
-| `try_mutate_on` | Mutable | Yes | Sequential |
-| `try_act_on` | Read-only | Yes | Concurrent |
+| Handler | State Access | Can Fail | Concurrency | Async |
+|---------|-------------|----------|-------------|-------|
+| `mutate_on` | Mutable | No | Sequential | Yes |
+| `mutate_on_sync` | Mutable | No | Sequential | No |
+| `act_on` | Read-only | No | Concurrent | Yes |
+| `act_on_sync` | Read-only | No | Concurrent | No |
+| `try_mutate_on` | Mutable | Yes | Sequential | Yes |
+| `try_act_on` | Read-only | Yes | Concurrent | Yes |
 
-**Rule of thumb:** Start with `mutate_on`. Use `act_on` when you're sure the handler only reads. Add `try_` prefix when you need error handling.
+**Rule of thumb:** Start with `mutate_on`. Use `act_on` when you're sure the handler only reads. Add `try_` prefix when you need error handling. Use `_sync` variants when you don't need async to avoid a heap allocation per invocation.
 
 ---
 
@@ -66,6 +68,29 @@ Each message completes before the next starts.
 - State mutations (counters, adding to collections, updating fields)
 - Any operation where order matters
 - When you're unsure - this is the safe default
+
+---
+
+## mutate_on_sync
+
+Use when you need to modify actor state and the handler body is purely synchronous. This avoids the `Box::pin(async move {})` heap allocation that `mutate_on` requires, providing lower overhead on hot paths.
+
+```rust
+actor.mutate_on_sync::<Increment>(|actor, _ctx| {
+    actor.model.counter += 1;
+});
+```
+
+**Characteristics:**
+- Same sequential, mutable-access semantics as `mutate_on`
+- Handler returns `()` instead of a `Future` — no heap allocation
+- Cannot perform async work (no `.await`)
+- Ideal for lightweight state mutations
+
+**When to use:**
+- Simple counters, flag toggles, state transitions
+- Any `mutate_on` handler that just returns `Reply::ready()`
+- Performance-sensitive hot paths
 
 ---
 
@@ -117,6 +142,28 @@ flowchart LR
 - Queries that don't modify state
 - Sending notifications/replies
 - Heavy read operations (can parallelize)
+
+---
+
+## act_on_sync
+
+Use for read-only operations that don't need async. Like `mutate_on_sync`, this avoids the future allocation. Sync read-only handlers complete immediately inline rather than being pushed to the concurrent executor.
+
+```rust
+actor.act_on_sync::<GetStatus>(|actor, ctx| {
+    println!("Current status: {:?}", actor.model.status);
+});
+```
+
+**Characteristics:**
+- Same read-only semantics as `act_on`
+- Completes inline (not pushed to `FuturesUnordered`)
+- No heap allocation
+- Cannot perform async work
+
+**When to use:**
+- Lightweight reads, logging, metrics emission
+- Any `act_on` handler that just returns `Reply::ready()`
 
 ### High-Water Mark
 
@@ -268,6 +315,7 @@ If no error handler is registered, errors are logged and the message is dropped.
 | Handler Type | Sync Return | Async Return |
 |-------------|-------------|--------------|
 | `mutate_on` / `act_on` | `Reply::ready()` | `Reply::pending(async { })` |
+| `mutate_on_sync` / `act_on_sync` | Returns `()` directly | N/A (sync only) |
 | `try_mutate_on` / `try_act_on` | `Reply::try_ok(val)` or `Reply::try_err(err)` | `Reply::try_pending(async { Ok/Err })` |
 
 ---
@@ -280,25 +328,46 @@ flowchart TD
     Start -->|Yes| ModYes{"Can the operation fail?"}
     Start -->|No| ModNo{"Can the operation fail?"}
     ModYes -->|Yes| TryMut["try_mutate_on"]
-    ModYes -->|No| Mut["mutate_on"]
+    ModYes -->|No| NeedAsync1{"Need async (.await)?"}
     ModNo -->|Yes| TryAct["try_act_on"]
-    ModNo -->|No| Act["act_on"]
+    ModNo -->|No| NeedAsync2{"Need async (.await)?"}
+    NeedAsync1 -->|Yes| Mut["mutate_on"]
+    NeedAsync1 -->|No| MutSync["mutate_on_sync"]
+    NeedAsync2 -->|Yes| Act["act_on"]
+    NeedAsync2 -->|No| ActSync["act_on_sync"]
 ```
 
 ### Examples by Use Case
 
 | Use Case | Handler | Reason |
 |----------|---------|--------|
-| Increment counter | `mutate_on` | Modifies state, can't fail |
+| Increment counter | `mutate_on_sync` | Modifies state, can't fail, no async needed |
 | Get current value | `act_on` | Read-only, can't fail |
 | Deduct from balance | `try_mutate_on` | Modifies state, can fail (insufficient funds) |
 | Validate API key | `try_act_on` | Read-only, can fail (invalid key) |
-| Log a message | `mutate_on` | Modifies state (log buffer) |
+| Toggle a flag | `mutate_on_sync` | Modifies state, purely synchronous |
 | Send notification | `act_on` | Read-only (just reading data to send) |
 
 ---
 
 ## Performance Considerations
+
+### Use _sync Variants for Non-Async Handlers
+
+Every `mutate_on` / `act_on` handler must return a `Future`, which allocates a `Box::pin(async move {})` on the heap — even for handlers that do no async work. The `_sync` variants eliminate this overhead entirely:
+
+```rust
+// Allocates a future even though no async work happens
+actor.mutate_on::<Increment>(|actor, _ctx| {
+    actor.model.count += 1;
+    Reply::ready()  // Box::pin(async move {}) under the hood
+});
+
+// Zero-allocation: handler returns () directly
+actor.mutate_on_sync::<Increment>(|actor, _ctx| {
+    actor.model.count += 1;
+});
+```
 
 ### Use act_on for Read-Heavy Workloads
 

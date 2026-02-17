@@ -5,16 +5,37 @@ description: Optimizing actor systems for throughput and latency.
 
 Acton Reactive is built for performance. Understanding how actors work helps you optimize for your specific needs.
 
-## mutate_on vs act_on
+## Choosing the Right Handler
 
-The choice between `mutate_on` and `act_on` has performance implications:
+The choice of handler type has performance implications:
 
-| Handler | Execution | Best For |
-|---------|-----------|----------|
-| `mutate_on` | Sequential | State changes |
-| `act_on` | Concurrent | Read operations |
+| Handler | Execution | Allocates Future | Best For |
+|---------|-----------|-----------------|----------|
+| `mutate_on` | Sequential | Yes | State changes with async work |
+| `mutate_on_sync` | Sequential | No | State changes without async |
+| `act_on` | Concurrent | Yes | Read operations with async work |
+| `act_on_sync` | Concurrent | No | Read operations without async |
 
-For read-heavy workloads, use `act_on` to enable parallel processing:
+### Use _sync variants to eliminate allocation overhead
+
+If your handler doesn't need `.await`, prefer the `_sync` variant. It avoids the `Box::pin(async move {})` heap allocation per invocation:
+
+```rust
+// Allocates a future unnecessarily
+builder.mutate_on::<Increment>(|actor, _ctx| {
+    actor.model.count += 1;
+    Reply::ready()
+});
+
+// Zero allocation — handler returns () directly
+builder.mutate_on_sync::<Increment>(|actor, _ctx| {
+    actor.model.count += 1;
+});
+```
+
+### Use act_on for read-heavy workloads
+
+For read-heavy workloads, use `act_on` (or `act_on_sync`) to enable parallel processing:
 
 ```rust
 // These can run concurrently
@@ -175,6 +196,7 @@ tracing_subscriber::fmt::init();
 
 ## Summary
 
+- Use `_sync` variants (`mutate_on_sync`, `act_on_sync`) for handlers that don't need async
 - Use `act_on` for read operations (concurrent)
 - Use `mutate_on` only when modifying state (sequential)
 - Batch operations when possible
