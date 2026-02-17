@@ -135,7 +135,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                         );
                         MessageContext {
                             message: concrete_msg.clone(),
-                            timestamp: envelope.timestamp,
+
                             origin_envelope,
                             reply_envelope,
                         }
@@ -207,7 +207,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             );
                             MessageContext {
                                 message: concrete_msg.clone(),
-                                timestamp: envelope.timestamp,
+    
                                 origin_envelope,
                                 reply_envelope,
                             }
@@ -300,7 +300,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                         );
                         MessageContext {
                             message: concrete_msg.clone(),
-                            timestamp: envelope.timestamp,
+
                             origin_envelope,
                             reply_envelope,
                         }
@@ -386,7 +386,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                         );
                         MessageContext {
                             message: concrete_msg.clone(),
-                            timestamp: envelope.timestamp,
+
                             origin_envelope,
                             reply_envelope,
                         }
@@ -464,7 +464,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                         );
                         MessageContext {
                             message: concrete_msg.clone(),
-                            timestamp: envelope.timestamp,
+
                             origin_envelope,
                             reply_envelope,
                         }

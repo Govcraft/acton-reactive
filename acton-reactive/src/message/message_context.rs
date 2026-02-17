@@ -14,8 +14,6 @@
  * limitations under that License.
  */
 
-use std::time::SystemTime;
-
 use static_assertions::assert_impl_all;
 
 use crate::message::{MessageAddress, OutboundEnvelope};
@@ -30,8 +28,6 @@ use crate::message::{MessageAddress, OutboundEnvelope};
 pub struct MessageContext<S> {
     /// The actual message payload being transmitted
     pub(crate) message: S,
-    /// Records when the message was created/sent
-    pub(crate) timestamp: SystemTime,
     /// Contains routing information about where the message originated from
     pub(crate) origin_envelope: OutboundEnvelope,
     /// Contains routing information about where replies should be sent
@@ -64,11 +60,6 @@ impl<S> MessageContext<S> {
     /// Returns a reference to the message payload
     pub const fn message(&self) -> &S {
         &self.message
-    }
-
-    /// Returns a reference to the message's timestamp
-    pub const fn timestamp(&self) -> &SystemTime {
-        &self.timestamp
     }
 }
 

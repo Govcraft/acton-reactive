@@ -15,7 +15,6 @@
  */
 
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use static_assertions::assert_impl_all;
 
@@ -27,8 +26,6 @@ use crate::traits::ActonMessage;
 pub struct Envelope {
     /// The message contained in the envelope.
     pub message: Arc<dyn ActonMessage + Send + Sync + 'static>,
-    /// The time when the message was sent.
-    pub timestamp: SystemTime,
     /// The return address for the message response.
     pub reply_to: MessageAddress,
     pub recipient: MessageAddress,
@@ -49,10 +46,8 @@ impl Envelope {
         reply_to: MessageAddress,
         recipient: MessageAddress,
     ) -> Self {
-        let timestamp = SystemTime::now();
         Self {
             message,
-            timestamp,
             reply_to,
             recipient,
         }
