@@ -269,9 +269,8 @@ fn send_to_handler_latency(bencher: Bencher<'_, '_>) {
         let mut actor =
             runtime.new_actor_with_name::<CounterActor>("latency_actor".to_string());
 
-        actor.mutate_on::<Increment>(move |_actor, _event| {
+        actor.mutate_on_sync::<Increment>(move |_actor, _event| {
             notify_clone.notify_one();
-            Reply::ready()
         });
 
         let handle = actor.start().await;

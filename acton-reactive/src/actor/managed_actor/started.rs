@@ -215,7 +215,28 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             ReactorItem::MutableFallible(fut) => {
                 self.dispatch_mutable_fallible(fut, envelope, message_type_id).await;
             }
-            ReactorItem::ReadOnly(_) | ReactorItem::ReadOnlyFallible(_) => {
+            ReactorItem::MutableSync(handler) => {
+                #[cfg(feature = "catch-handler-panics")]
+                {
+                    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        handler(self, envelope);
+                    }));
+                    if let Err(ref panic_payload) = result {
+                        log_handler_panic(
+                            self.id(),
+                            message_type_id,
+                            panic_payload,
+                            "Panic in sync mutable message handler",
+                        );
+                    }
+                }
+                #[cfg(not(feature = "catch-handler-panics"))]
+                {
+                    let _ = message_type_id;
+                    handler(self, envelope);
+                }
+            }
+            ReactorItem::ReadOnly(_) | ReactorItem::ReadOnlyFallible(_) | ReactorItem::ReadOnlySync(_) => {
                 tracing::warn!("Found read-only handler in mutable_reactors map");
             }
         }
@@ -446,6 +467,27 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                             );
                         }
                     }));
+                }
+            }
+            ReactorItem::ReadOnlySync(handler) => {
+                #[cfg(feature = "catch-handler-panics")]
+                {
+                    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        handler(self, envelope);
+                    }));
+                    if let Err(ref panic_payload) = result {
+                        log_handler_panic(
+                            &actor_id,
+                            message_type_id,
+                            panic_payload,
+                            "Panic in sync read-only message handler",
+                        );
+                    }
+                }
+                #[cfg(not(feature = "catch-handler-panics"))]
+                {
+                    let _ = (actor_id, message_type_id);
+                    handler(self, envelope);
                 }
             }
             _ => {

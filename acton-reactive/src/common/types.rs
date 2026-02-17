@@ -51,10 +51,14 @@ pub enum ReactorItem<ActorEntity: Default + Send + Debug + 'static> {
     Mutable(Box<FutureHandler<ActorEntity>>),
     /// A handler for a fallible operation that processes a message and returns a `Result` future.
     MutableFallible(Box<FutureHandlerResult<ActorEntity>>),
+    /// A synchronous mutable handler that completes without creating a future.
+    MutableSync(Box<SyncHandler<ActorEntity>>),
     /// A handler for an infallible read-only operation that processes a message and returns a future.
     ReadOnly(Box<FutureHandlerReadOnly<ActorEntity>>),
     /// A handler for a fallible read-only operation that processes a message and returns a `Result` future.
     ReadOnlyFallible(Box<FutureHandlerReadOnlyResult<ActorEntity>>),
+    /// A synchronous read-only handler that completes without creating a future.
+    ReadOnlySync(Box<SyncHandlerReadOnly<ActorEntity>>),
 }
 
 /// Crate-internal: Type alias for the function signature of a message handler
@@ -92,6 +96,22 @@ pub type FutureHandlerReadOnlyResult<ManagedEntity> = dyn for<'a, 'b> Fn(
         &'b mut Envelope,
     ) -> FutureBoxReadOnlyResult
     + Send
+    + Sync
+    + 'static;
+
+/// A synchronous mutable handler that processes a message without creating a future.
+pub type SyncHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
+        &'a mut ManagedActor<Started, ManagedEntity>,
+        &'b mut Envelope,
+    ) + Send
+    + Sync
+    + 'static;
+
+/// A synchronous read-only handler that processes a message without creating a future.
+pub type SyncHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(
+        &'a ManagedActor<Started, ManagedEntity>,
+        &'b mut Envelope,
+    ) + Send
     + Sync
     + 'static;
 

@@ -155,6 +155,77 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         self
     }
 
+    /// Registers a synchronous message handler for a specific message type `M`.
+    ///
+    /// Like [`mutate_on`](Self::mutate_on), but the handler closure returns `()` directly
+    /// instead of a `Future`. This avoids the heap allocation of `Box::pin(async move {})` for
+    /// handlers that don't need to perform any async work, providing measurably lower overhead
+    /// on the dispatch hot path.
+    ///
+    /// # Type Parameters
+    ///
+    /// *   `M`: The concrete message type this handler will process. Must implement
+    ///     [`ActonMessage`], `Clone`, `Send`, `Sync`, and be `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// *   `message_processor`: A closure that takes the actor (`&mut ManagedActor<Started, State>`)
+    ///     and the message context (`&mut MessageContext<M>`) and returns `()`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a mutable reference to `self` to allow for method chaining during configuration.
+    #[instrument(skip(self, message_processor), level = "debug")]
+    pub fn mutate_on_sync<M>(
+        &mut self,
+        message_processor: impl for<'a> Fn(&'a mut ManagedActor<Started, State>, &'a mut MessageContext<M>)
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self
+    where
+        M: ActonMessage + Clone + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<M>();
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding sync mutable message handler");
+        let handler_box = Box::new(
+            move |actor: &mut ManagedActor<Started, State>, envelope: &mut Envelope| {
+                if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
+                    trace!(
+                        "Downcast successful for message type: {}",
+                        std::any::type_name::<M>()
+                    );
+                    let mut msg_context = {
+                        let origin_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.reply_to.clone(),
+                            envelope.recipient.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        let reply_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.recipient.clone(),
+                            envelope.reply_to.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        MessageContext {
+                            message: concrete_msg.clone(),
+                            origin_envelope,
+                            reply_envelope,
+                        }
+                    };
+                    message_processor(actor, &mut msg_context);
+                } else {
+                    error!(
+                        type_name = std::any::type_name::<M>(),
+                        "Sync message handler called with incompatible message type (downcast failed)"
+                    );
+                }
+            },
+        );
+        self.message_handlers
+            .insert(type_id, ReactorItem::MutableSync(handler_box));
+        self
+    }
+
     /// Registers an asynchronous error handler for a specific error type `E`.
     ///
     /// This allows the actor to handle errors of type `E` by executing the given closure
@@ -319,6 +390,77 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
             .insert(type_id, ReactorItem::ReadOnly(handler_box));
         self
     }
+    /// Registers a synchronous read-only message handler for a specific message type `M`.
+    ///
+    /// Like [`act_on`](Self::act_on), but the handler closure returns `()` directly instead of
+    /// a `Future`. This avoids the heap allocation overhead for handlers that don't need async.
+    /// Sync read-only handlers complete immediately inline rather than being pushed to
+    /// `FuturesUnordered`.
+    ///
+    /// # Type Parameters
+    ///
+    /// *   `M`: The concrete message type this handler will process. Must implement
+    ///     [`ActonMessage`], `Clone`, `Send`, `Sync`, and be `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// *   `message_processor`: A closure that takes the actor (`&ManagedActor<Started, State>`)
+    ///     and the message context (`&mut MessageContext<M>`) and returns `()`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a mutable reference to `self` to allow for method chaining during configuration.
+    #[instrument(skip(self, message_processor), level = "debug")]
+    pub fn act_on_sync<M>(
+        &mut self,
+        message_processor: impl for<'a> Fn(&'a ManagedActor<Started, State>, &'a mut MessageContext<M>)
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self
+    where
+        M: ActonMessage + Clone + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<M>();
+        trace!(type_name=std::any::type_name::<M>(),type_id=?type_id, " Adding sync read-only message handler");
+        let handler_box = Box::new(
+            move |actor: &ManagedActor<Started, State>, envelope: &mut Envelope| {
+                if let Some(concrete_msg) = downcast_message::<M>(&*envelope.message) {
+                    trace!(
+                        "Downcast successful for message type: {}",
+                        std::any::type_name::<M>()
+                    );
+                    let mut msg_context = {
+                        let origin_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.reply_to.clone(),
+                            envelope.recipient.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        let reply_envelope = OutboundEnvelope::new_with_recipient(
+                            envelope.recipient.clone(),
+                            envelope.reply_to.clone(),
+                            actor.handle.cancellation_token.clone(),
+                        );
+                        MessageContext {
+                            message: concrete_msg.clone(),
+                            origin_envelope,
+                            reply_envelope,
+                        }
+                    };
+                    message_processor(actor, &mut msg_context);
+                } else {
+                    error!(
+                        type_name = std::any::type_name::<M>(),
+                        "Sync read-only message handler called with incompatible message type (downcast failed)"
+                    );
+                }
+            },
+        );
+        self.read_only_handlers
+            .insert(type_id, ReactorItem::ReadOnlySync(handler_box));
+        self
+    }
+
     /// Registers an asynchronous read-only message handler for a specific message type `M` that returns a Result.
     ///
     /// This method is called during the actor's configuration phase (while in the `Idle` state).
