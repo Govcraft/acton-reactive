@@ -15,6 +15,7 @@
  */
 
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -22,7 +23,6 @@ use std::mem;
 use std::sync::atomic::AtomicBool;
 
 use acton_ern::Ern;
-use dashmap::DashMap;
 use tokio::sync::mpsc::channel;
 use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace};
@@ -862,14 +862,14 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
             model: State::default(),
             // Use placeholder for broker - will be set later in new() if runtime is provided
             broker: ActorHandle::placeholder(),
-            error_handler_map: std::collections::HashMap::new(),
+            error_handler_map: HashMap::new(),
             parent: Option::default(),
             runtime: ActorRuntime::default(),
             halt_signal: AtomicBool::default(),
             tracker: TaskTracker::default(),
             cancellation_token: Option::default(),
-            message_handlers: DashMap::default(),
-            read_only_handlers: DashMap::default(),
+            message_handlers: HashMap::new(),
+            read_only_handlers: HashMap::new(),
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
             expose_for_ipc: false,

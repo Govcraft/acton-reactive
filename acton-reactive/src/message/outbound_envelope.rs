@@ -238,9 +238,7 @@ impl OutboundEnvelope {
     /// This method uses a fast-path optimization: it first attempts `try_reserve()` which
     /// is non-blocking and avoids async overhead when the channel has capacity (common case).
     /// Only when the channel is full does it fall back to the async `reserve()` path.
-    #[instrument(skip(self, message), level = "debug", fields(message_type = ?message.type_id()))]
     async fn send_message_inner(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
-        // Delegate to untraced impl to avoid borrow issues with #[instrument] macro
         self.send_message_inner_impl(message).await;
     }
 
@@ -257,8 +255,6 @@ impl OutboundEnvelope {
         let target_id = target_address.sender.clone();
         let channel_sender = target_address.address.clone();
 
-        trace!(sender = %sender_id, recipient = %target_id, "Attempting to send message");
-
         // Check if cancelled before attempting send
         if self.cancellation_token.is_cancelled() {
             error!(sender = %sender_id, recipient = %target_id, "Send aborted: cancellation_token triggered");
@@ -270,7 +266,6 @@ impl OutboundEnvelope {
             Ok(permit) => {
                 // Success! Send without any async overhead
                 let internal_envelope = Envelope::new(message, return_address, target_address);
-                trace!(sender = %sender_id, recipient = %target_id, "Sending message via fast-path permit");
                 permit.send(internal_envelope);
                 return;
             }

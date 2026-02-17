@@ -434,8 +434,6 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                         termination_reason = TerminationReason::InboxClosed;
                         break;
                     };
-                    trace!("Received envelope from: {}", incoming_envelope.reply_to.sender.root());
-
                     // Extract envelope and type_id, handling BrokerRequestEnvelope indirection
                     let (mut envelope, type_id) = if let Some(broker_req) = incoming_envelope
                         .message.as_any().downcast_ref::<BrokerRequestEnvelope>()
@@ -453,9 +451,9 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     if let Some(reactor) = mutable_reactors.get(&type_id) {
                         while read_only_futures.next().await.is_some() {}
                         last_flush_time = Instant::now();
-                        self.dispatch_mutable_handler(reactor.value(), &mut envelope).await;
+                        self.dispatch_mutable_handler(reactor, &mut envelope).await;
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
-                        self.enqueue_read_only_handler(reactor.value(), &mut envelope, &read_only_futures);
+                        self.enqueue_read_only_handler(reactor, &mut envelope, &read_only_futures);
                         if read_only_futures.len() >= high_water_mark {
                             while read_only_futures.next().await.is_some() {}
                             last_flush_time = Instant::now();

@@ -26,7 +26,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 
-use dashmap::DashMap;
+use std::collections::HashMap;
+
 use tokio::sync::mpsc::Sender;
 
 use crate::actor::{ManagedActor, Started};
@@ -35,7 +36,11 @@ use crate::message::Envelope;
 use crate::traits::ActonMessageReply;
 
 /// Crate-internal: Map storing message handlers (`TypeId` -> `ReactorItem`).
-pub type ReactorMap<ActorEntity> = DashMap<TypeId, ReactorItem<ActorEntity>>;
+///
+/// Uses `HashMap` instead of `DashMap` because reactor maps are populated during
+/// the `Idle` phase and then read-only for the lifetime of the actor's wake loop,
+/// which runs on a single task. This eliminates unnecessary atomic synchronization.
+pub type ReactorMap<ActorEntity> = HashMap<TypeId, ReactorItem<ActorEntity>>;
 
 /// Crate-internal: Enum wrapping different kinds of message/event handlers.
 /// All variants are future-based reactors with different mutability and fallibility characteristics.
