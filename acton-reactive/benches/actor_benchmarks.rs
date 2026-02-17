@@ -246,6 +246,51 @@ fn message_throughput_multi_actor(bencher: Bencher<'_, '_>, actor_count: usize) 
 }
 
 // =============================================================================
+// Send-to-Handler Hot Path Benchmarks
+// =============================================================================
+
+/// Benchmarks the complete hot path: handle.send(msg) → handler invocation.
+///
+/// Actor setup happens once outside the measurement loop. Each iteration
+/// measures only: envelope creation → channel send → inbox recv → type
+/// dispatch → handler invocation.
+#[divan::bench]
+fn send_to_handler_latency(bencher: Bencher<'_, '_>) {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let (handle, notify, _runtime) = rt.block_on(async {
+        let mut runtime = ActonApp::launch_async().await;
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_clone = notify.clone();
+
+        let mut actor =
+            runtime.new_actor_with_name::<CounterActor>("latency_actor".to_string());
+
+        actor.mutate_on::<Increment>(move |_actor, _event| {
+            notify_clone.notify_one();
+            Reply::ready()
+        });
+
+        let handle = actor.start().await;
+        (handle, notify, runtime)
+    });
+
+    bencher.bench_local(|| {
+        rt.block_on(async {
+            handle.send(Increment).await;
+            notify.notified().await;
+        });
+    });
+
+    rt.block_on(async {
+        let _ = handle.stop().await;
+    });
+}
+
+// =============================================================================
 // Request-Reply Latency Benchmarks (Ping-Pong)
 // =============================================================================
 
