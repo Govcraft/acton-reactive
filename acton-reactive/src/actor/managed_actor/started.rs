@@ -14,13 +14,14 @@
  * limitations under that License.
  */
 
-use std::any::Any;
 use std::fmt::Debug;
+#[cfg(feature = "catch-handler-panics")]
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
+#[cfg(feature = "catch-handler-panics")]
 use futures::FutureExt;
 use tracing::{error, instrument, trace};
 
@@ -42,83 +43,107 @@ use crate::traits::ActorHandleInterface;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Started;
 
-/// Extracts a human-readable message from a panic payload.
-///
-/// Handles the common cases where the panic was created with `panic!("message")` (produces `&str`)
-/// or `panic!("{}", formatted)` (produces `String`). For other payload types, returns a debug
-/// representation of the type.
-fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
-    payload
-        .downcast_ref::<&str>()
-        .map_or_else(
-            || {
-                payload.downcast_ref::<String>().map_or_else(
-                    || format!("Panic with payload type: {:?}", (**payload).type_id()),
-                    Clone::clone,
-                )
-            },
-            |s| (*s).to_string(),
-        )
+#[cfg(feature = "catch-handler-panics")]
+mod panic_helpers {
+    use std::any::Any;
+
+    /// Extracts a human-readable message from a panic payload.
+    pub(super) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
+        payload
+            .downcast_ref::<&str>()
+            .map_or_else(
+                || {
+                    payload.downcast_ref::<String>().map_or_else(
+                        || format!("Panic with payload type: {:?}", (**payload).type_id()),
+                        Clone::clone,
+                    )
+                },
+                |s| (*s).to_string(),
+            )
+    }
+
+    /// Logs a panic that occurred in a handler.
+    pub(super) fn log_handler_panic(
+        actor_id: &acton_ern::Ern,
+        message_type_id: std::any::TypeId,
+        panic_payload: &Box<dyn Any + Send>,
+        context: &str,
+    ) {
+        let panic_msg = extract_panic_message(panic_payload);
+        tracing::error!(
+            actor_id = %actor_id,
+            message_type = ?message_type_id,
+            panic_message = %panic_msg,
+            "{context}"
+        );
+    }
+
+    /// Logs a panic that occurred in an error handler.
+    pub(super) fn log_error_handler_panic(
+        actor_id: &acton_ern::Ern,
+        message_type_id: std::any::TypeId,
+        error_type_id: std::any::TypeId,
+        panic_payload: &Box<dyn Any + Send>,
+        context: &str,
+    ) {
+        let panic_msg = extract_panic_message(panic_payload);
+        tracing::error!(
+            actor_id = %actor_id,
+            message_type = ?message_type_id,
+            error_type = ?error_type_id,
+            panic_message = %panic_msg,
+            "{context}"
+        );
+    }
+
+    /// Logs a panic that occurred in a lifecycle hook.
+    pub(super) fn log_lifecycle_panic(
+        actor_id: &acton_ern::Ern,
+        panic_payload: &Box<dyn Any + Send>,
+        context: &str,
+    ) {
+        let panic_msg = extract_panic_message(panic_payload);
+        tracing::error!(actor_id = %actor_id, panic_message = %panic_msg, "{context}");
+    }
 }
 
-/// Logs a panic that occurred in a handler.
-fn log_handler_panic(
-    actor_id: &acton_ern::Ern,
-    message_type_id: std::any::TypeId,
-    panic_payload: &Box<dyn Any + Send>,
-    context: &str,
-) {
-    let panic_msg = extract_panic_message(panic_payload);
-    error!(
-        actor_id = %actor_id,
-        message_type = ?message_type_id,
-        panic_message = %panic_msg,
-        "{context}"
-    );
-}
+#[cfg(feature = "catch-handler-panics")]
+use panic_helpers::*;
 
-/// Logs a panic that occurred in an error handler.
-fn log_error_handler_panic(
-    actor_id: &acton_ern::Ern,
-    message_type_id: std::any::TypeId,
-    error_type_id: std::any::TypeId,
-    panic_payload: &Box<dyn Any + Send>,
-    context: &str,
-) {
-    let panic_msg = extract_panic_message(panic_payload);
-    error!(
-        actor_id = %actor_id,
-        message_type = ?message_type_id,
-        error_type = ?error_type_id,
-        panic_message = %panic_msg,
-        "{context}"
-    );
-}
-
-/// Logs a panic that occurred in a lifecycle hook.
-fn log_lifecycle_panic(actor_id: &acton_ern::Ern, panic_payload: &Box<dyn Any + Send>, context: &str) {
-    let panic_msg = extract_panic_message(panic_payload);
-    error!(actor_id = %actor_id, panic_message = %panic_msg, "{context}");
-}
-
-/// Runs a lifecycle hook with panic protection and logs any panics.
-/// This macro avoids borrowing issues that would occur with a function.
-/// Lifecycle hooks are now Option<Box<...>> to avoid allocation for actors that don't use them.
+/// Runs a lifecycle hook with optional panic protection.
+/// Uses two-layer catch_unwind because hooks take `&self` (shared ref), which
+/// requires `State: Sync` for a merged async block to be `Send`.
 macro_rules! run_lifecycle_hook {
     ($self:expr, $hook:ident, $hook_name:literal) => {{
         if let Some(ref hook) = $self.$hook {
-            let hook_result = std::panic::catch_unwind(AssertUnwindSafe(|| hook($self)));
-            match hook_result {
-                Ok(future) => {
-                    if let Err(ref panic_payload) = AssertUnwindSafe(future).catch_unwind().await {
-                        log_lifecycle_panic($self.id(), panic_payload,
-                            concat!("Panic in ", $hook_name, " lifecycle hook (during await)"));
+            #[cfg(feature = "catch-handler-panics")]
+            {
+                let hook_result =
+                    std::panic::catch_unwind(AssertUnwindSafe(|| hook($self)));
+                match hook_result {
+                    Ok(future) => {
+                        if let Err(ref panic_payload) =
+                            AssertUnwindSafe(future).catch_unwind().await
+                        {
+                            log_lifecycle_panic(
+                                $self.id(),
+                                panic_payload,
+                                concat!("Panic in ", $hook_name, " lifecycle hook"),
+                            );
+                        }
+                    }
+                    Err(ref panic_payload) => {
+                        log_lifecycle_panic(
+                            $self.id(),
+                            panic_payload,
+                            concat!("Panic in ", $hook_name, " lifecycle hook"),
+                        );
                     }
                 }
-                Err(ref panic_payload) => {
-                    log_lifecycle_panic($self.id(), panic_payload,
-                        concat!("Panic in ", $hook_name, " lifecycle hook (during closure invocation)"));
-                }
+            }
+            #[cfg(not(feature = "catch-handler-panics"))]
+            {
+                hook($self).await;
             }
         }
     }};
@@ -196,52 +221,70 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         }
     }
 
-    /// Dispatches an infallible mutable handler with panic protection.
+    /// Dispatches an infallible mutable handler with optional panic protection.
     async fn dispatch_mutable_infallible(
         &mut self,
         fut: &crate::common::FutureHandler<Actor>,
         envelope: &mut Envelope,
         message_type_id: std::any::TypeId,
     ) {
-        let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| fut(self, envelope)));
-        match future_result {
-            Ok(future) => {
-                if let Err(ref panic_payload) = AssertUnwindSafe(future).catch_unwind().await {
-                    log_handler_panic(self.id(), message_type_id, panic_payload,
-                        "Panic in mutable message handler (during await)");
-                }
+        #[cfg(feature = "catch-handler-panics")]
+        {
+            let result = AssertUnwindSafe(async { fut(self, envelope).await })
+                .catch_unwind()
+                .await;
+            if let Err(ref panic_payload) = result {
+                log_handler_panic(
+                    self.id(),
+                    message_type_id,
+                    panic_payload,
+                    "Panic in mutable message handler",
+                );
             }
-            Err(ref panic_payload) => {
-                log_handler_panic(self.id(), message_type_id, panic_payload,
-                    "Panic in mutable message handler (during closure invocation)");
-            }
+        }
+        #[cfg(not(feature = "catch-handler-panics"))]
+        {
+            let _ = message_type_id;
+            fut(self, envelope).await;
         }
     }
 
-    /// Dispatches a fallible mutable handler with panic and error handling.
+    /// Dispatches a fallible mutable handler with optional panic protection and error handling.
     async fn dispatch_mutable_fallible(
         &mut self,
         fut: &crate::common::FutureHandlerResult<Actor>,
         envelope: &mut Envelope,
         message_type_id: std::any::TypeId,
     ) {
-        let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| fut(self, envelope)));
-        match future_result {
-            Ok(future) => {
-                match AssertUnwindSafe(future).catch_unwind().await {
-                    Ok(Ok(_)) => { /* Handler succeeded */ }
-                    Ok(Err((err, error_type_id))) => {
-                        self.handle_fallible_error(envelope, message_type_id, error_type_id, err).await;
-                    }
-                    Err(ref panic_payload) => {
-                        log_handler_panic(self.id(), message_type_id, panic_payload,
-                            "Panic in mutable fallible message handler (during await)");
-                    }
+        #[cfg(feature = "catch-handler-panics")]
+        {
+            let result = AssertUnwindSafe(async { fut(self, envelope).await })
+                .catch_unwind()
+                .await;
+            match result {
+                Ok(Ok(_)) => { /* Handler succeeded */ }
+                Ok(Err((err, error_type_id))) => {
+                    self.handle_fallible_error(envelope, message_type_id, error_type_id, err)
+                        .await;
+                }
+                Err(ref panic_payload) => {
+                    log_handler_panic(
+                        self.id(),
+                        message_type_id,
+                        panic_payload,
+                        "Panic in mutable fallible message handler",
+                    );
                 }
             }
-            Err(ref panic_payload) => {
-                log_handler_panic(self.id(), message_type_id, panic_payload,
-                    "Panic in mutable fallible message handler (during closure invocation)");
+        }
+        #[cfg(not(feature = "catch-handler-panics"))]
+        {
+            match fut(self, envelope).await {
+                Ok(_) => { /* Handler succeeded */ }
+                Err((err, error_type_id)) => {
+                    self.handle_fallible_error(envelope, message_type_id, error_type_id, err)
+                        .await;
+                }
             }
         }
     }
@@ -256,23 +299,28 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         err: Box<dyn std::error::Error + Send + Sync>,
     ) {
         if let Some(handler) = self.error_handler_map.remove(&(message_type_id, error_type_id)) {
-            let error_future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                handler(self, envelope, err.as_ref())
-            }));
-
-            match error_future_result {
-                Ok(error_future) => {
-                    if let Err(ref panic_payload) = AssertUnwindSafe(error_future).catch_unwind().await {
-                        log_error_handler_panic(self.id(), message_type_id, error_type_id,
-                            panic_payload, "Panic in error handler (during await)");
-                    }
-                }
-                Err(ref panic_payload) => {
-                    log_error_handler_panic(self.id(), message_type_id, error_type_id,
-                        panic_payload, "Panic in error handler (during closure invocation)");
+            #[cfg(feature = "catch-handler-panics")]
+            {
+                let result =
+                    AssertUnwindSafe(async { handler(self, envelope, err.as_ref()).await })
+                        .catch_unwind()
+                        .await;
+                if let Err(ref panic_payload) = result {
+                    log_error_handler_panic(
+                        self.id(),
+                        message_type_id,
+                        error_type_id,
+                        panic_payload,
+                        "Panic in error handler",
+                    );
                 }
             }
-            self.error_handler_map.insert((message_type_id, error_type_id), handler);
+            #[cfg(not(feature = "catch-handler-panics"))]
+            {
+                handler(self, envelope, err.as_ref()).await;
+            }
+            self.error_handler_map
+                .insert((message_type_id, error_type_id), handler);
         } else {
             error!(
                 actor_id = %self.id(),
@@ -307,80 +355,97 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
 
         match reactor {
             ReactorItem::ReadOnly(fut) => {
-                // Protect the closure invocation from panics
-                let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    fut(self, envelope)
-                }));
-
-                match future_result {
-                    Ok(future) => {
-                        // Wrap handler with panic catching for the async execution
-                        read_only_futures.push(Box::pin(async move {
-                            let result = AssertUnwindSafe(future).catch_unwind().await;
-                            if let Err(panic_payload) = result {
-                                let panic_msg = extract_panic_message(&panic_payload);
-                                error!(
-                                    actor_id = %actor_id,
-                                    message_type = ?message_type_id,
-                                    panic_message = %panic_msg,
-                                    "Panic in read-only message handler (during await)"
-                                );
-                            }
-                        }));
-                    }
-                    Err(panic_payload) => {
-                        let panic_msg = extract_panic_message(&panic_payload);
-                        error!(
-                            actor_id = %actor_id,
-                            message_type = ?message_type_id,
-                            panic_message = %panic_msg,
-                            "Panic in read-only message handler (during closure invocation)"
-                        );
-                    }
-                }
-            }
-            ReactorItem::ReadOnlyFallible(fut) => {
-                // Protect the closure invocation from panics
-                let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    fut(self, envelope)
-                }));
-
-                match future_result {
-                    Ok(future) => {
-                        // Wrap fallible handler with panic catching and error logging
-                        read_only_futures.push(Box::pin(async move {
-                            let result = AssertUnwindSafe(future).catch_unwind().await;
-                            match result {
-                                Ok(Ok(_)) => { /* Handler succeeded */ }
-                                Ok(Err((err, _error_type_id))) => {
-                                    error!(
-                                        actor_id = %actor_id,
-                                        message_type = ?message_type_id,
-                                        error = ?err,
-                                        "Unhandled error from read-only message handler"
-                                    );
-                                }
-                                Err(panic_payload) => {
+                #[cfg(feature = "catch-handler-panics")]
+                {
+                    let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        fut(self, envelope)
+                    }));
+                    match future_result {
+                        Ok(future) => {
+                            read_only_futures.push(Box::pin(async move {
+                                if let Err(panic_payload) =
+                                    AssertUnwindSafe(future).catch_unwind().await
+                                {
                                     let panic_msg = extract_panic_message(&panic_payload);
                                     error!(
                                         actor_id = %actor_id,
                                         message_type = ?message_type_id,
                                         panic_message = %panic_msg,
-                                        "Panic in read-only fallible message handler (during await)"
+                                        "Panic in read-only message handler"
                                     );
                                 }
-                            }
-                        }));
+                            }));
+                        }
+                        Err(panic_payload) => {
+                            log_handler_panic(
+                                &actor_id,
+                                message_type_id,
+                                &panic_payload,
+                                "Panic in read-only message handler (during closure invocation)",
+                            );
+                        }
                     }
-                    Err(panic_payload) => {
-                        let panic_msg = extract_panic_message(&panic_payload);
-                        error!(
-                            actor_id = %actor_id,
-                            message_type = ?message_type_id,
-                            panic_message = %panic_msg,
-                            "Panic in read-only fallible message handler (during closure invocation)"
-                        );
+                }
+                #[cfg(not(feature = "catch-handler-panics"))]
+                {
+                    let _ = (actor_id, message_type_id);
+                    read_only_futures.push(fut(self, envelope));
+                }
+            }
+            ReactorItem::ReadOnlyFallible(fut) => {
+                #[cfg(feature = "catch-handler-panics")]
+                {
+                    let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        fut(self, envelope)
+                    }));
+                    match future_result {
+                        Ok(future) => {
+                            read_only_futures.push(Box::pin(async move {
+                                match AssertUnwindSafe(future).catch_unwind().await {
+                                    Ok(Ok(_)) => { /* Handler succeeded */ }
+                                    Ok(Err((err, _error_type_id))) => {
+                                        error!(
+                                            actor_id = %actor_id,
+                                            message_type = ?message_type_id,
+                                            error = ?err,
+                                            "Unhandled error from read-only message handler"
+                                        );
+                                    }
+                                    Err(panic_payload) => {
+                                        let panic_msg = extract_panic_message(&panic_payload);
+                                        error!(
+                                            actor_id = %actor_id,
+                                            message_type = ?message_type_id,
+                                            panic_message = %panic_msg,
+                                            "Panic in read-only fallible message handler"
+                                        );
+                                    }
+                                }
+                            }));
+                        }
+                        Err(panic_payload) => {
+                            log_handler_panic(
+                                &actor_id,
+                                message_type_id,
+                                &panic_payload,
+                                "Panic in read-only fallible message handler (during closure invocation)",
+                            );
+                        }
                     }
+                }
+                #[cfg(not(feature = "catch-handler-panics"))]
+                {
+                    let future = fut(self, envelope);
+                    read_only_futures.push(Box::pin(async move {
+                        if let Err((err, _error_type_id)) = future.await {
+                            error!(
+                                actor_id = %actor_id,
+                                message_type = ?message_type_id,
+                                error = ?err,
+                                "Unhandled error from read-only message handler"
+                            );
+                        }
+                    }));
                 }
             }
             _ => {

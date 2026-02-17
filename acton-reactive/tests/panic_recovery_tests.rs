@@ -19,6 +19,10 @@
 //! These tests verify that panics in message handlers are caught and the actor
 //! continues processing subsequent messages without crashing.
 //!
+//! These tests only run when the `catch-handler-panics` feature is enabled,
+//! since without it panics propagate and abort the actor task.
+#![cfg(feature = "catch-handler-panics")]
+//!
 //! Note: These tests use `#[tokio::test]` instead of `#[acton_test]` because
 //! the `acton_test` macro's panic detection would fail the test when we
 //! intentionally trigger panics to verify they are caught by the framework.
