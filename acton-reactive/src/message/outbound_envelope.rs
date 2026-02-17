@@ -238,56 +238,46 @@ impl OutboundEnvelope {
     /// This method uses a fast-path optimization: it first attempts `try_reserve()` which
     /// is non-blocking and avoids async overhead when the channel has capacity (common case).
     /// Only when the channel is full does it fall back to the async `reserve()` path.
+    ///
+    /// Clones are minimized on the fast path: `sender`/`recipient` identifiers are borrowed
+    /// from the address structs for logging rather than cloned upfront.
     async fn send_message_inner(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
-        self.send_message_inner_impl(message).await;
-    }
-
-    /// Internal implementation without instrumentation to avoid lifetime issues with Permit.
-    async fn send_message_inner_impl(&self, message: Arc<dyn ActonMessage + Send + Sync>) {
-        // Clone everything upfront
         let target_address = self
             .recipient_address
             .as_ref()
             .unwrap_or(&self.return_address)
             .clone();
         let return_address = self.return_address.clone();
-        let sender_id = return_address.sender.clone();
-        let target_id = target_address.sender.clone();
         let channel_sender = target_address.address.clone();
 
         // Check if cancelled before attempting send
         if self.cancellation_token.is_cancelled() {
-            error!(sender = %sender_id, recipient = %target_id, "Send aborted: cancellation_token triggered");
+            error!(sender = %return_address.sender, recipient = %target_address.sender, "Send aborted: cancellation_token triggered");
             return;
         }
 
         // Fast path: try non-blocking reserve first (common case when channel has capacity)
         match channel_sender.try_reserve() {
             Ok(permit) => {
-                // Success! Send without any async overhead
-                let internal_envelope = Envelope::new(message, return_address, target_address);
-                permit.send(internal_envelope);
+                permit.send(Envelope::new(message, return_address, target_address));
                 return;
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
-                error!(sender = %sender_id, recipient = %target_id, "Recipient channel is closed");
+                error!(sender = %return_address.sender, recipient = %target_address.sender, "Recipient channel is closed");
                 return;
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {
                 // Channel is full, fall through to slow path
-                trace!(sender = %sender_id, recipient = %target_id, "Channel full, using slow path");
             }
         }
 
         // Slow path: channel is full, need to wait for capacity
         match channel_sender.reserve().await {
             Ok(permit) => {
-                let internal_envelope = Envelope::new(message, return_address, target_address);
-                trace!(sender = %sender_id, recipient = %target_id, "Sending message via slow-path permit");
-                permit.send(internal_envelope);
+                permit.send(Envelope::new(message, return_address, target_address));
             }
             Err(e) => {
-                error!(sender = %sender_id, recipient = %target_id, error = %e, "Failed to reserve channel capacity");
+                error!(sender = %return_address.sender, recipient = %target_address.sender, error = %e, "Failed to reserve channel capacity");
             }
         };
     }
