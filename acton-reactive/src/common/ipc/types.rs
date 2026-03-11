@@ -854,7 +854,6 @@ pub struct IpcSubscriptionResponse {
     pub success: bool,
 
     /// Error message if `success` is `false`.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 
     /// List of message types the client is currently subscribed to after this operation.
