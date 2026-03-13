@@ -94,7 +94,8 @@ type WriterHandle = mpsc::Sender<WriteCommand>;
 #[derive(Clone, Copy)]
 struct ConnectionLimits {
     /// Read timeout for connections without subscriptions.
-    read_timeout: Duration,
+    /// `None` means no timeout.
+    read_timeout: Option<Duration>,
     /// Read timeout for connections with active subscriptions.
     /// `None` means no timeout for subscribers.
     subscription_read_timeout: Option<Duration>,
@@ -987,7 +988,7 @@ async fn run_connection_loop(
         let effective_timeout = if has_subscriptions {
             limits.subscription_read_timeout
         } else {
-            Some(limits.read_timeout)
+            limits.read_timeout
         };
 
         tokio::select! {

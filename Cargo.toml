@@ -5,7 +5,7 @@ members = ["acton-macro", "acton-test", "acton-reactive", "acton-test-macro"]
 
 # Shared package metadata
 [workspace.package]
-version = "8.0.0"
+version = "8.0.1"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 homepage = "https://github.com/Govcraft/acton-reactive"

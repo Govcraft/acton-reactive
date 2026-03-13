@@ -330,10 +330,17 @@ impl IpcConfig {
         std::time::Duration::from_millis(self.timeouts.request)
     }
 
-    /// Get the read timeout as a `Duration`.
+    /// Get the read timeout as an `Option<Duration>`.
+    ///
+    /// Returns `None` if the timeout is 0 (no timeout),
+    /// otherwise returns `Some(Duration)`.
     #[must_use]
-    pub const fn read_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.timeouts.read)
+    pub const fn read_timeout(&self) -> Option<std::time::Duration> {
+        if self.timeouts.read == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_millis(self.timeouts.read))
+        }
     }
 
     /// Get the write timeout as a `Duration`.
