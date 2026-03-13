@@ -354,7 +354,7 @@ impl Format {
         match self {
             Self::Json => serde_json::to_vec(value).map_err(IpcError::from),
             #[cfg(feature = "ipc-messagepack")]
-            Self::MessagePack => rmp_serde::to_vec(value).map_err(|e| {
+            Self::MessagePack => rmp_serde::to_vec_named(value).map_err(|e| {
                 IpcError::SerializationError(format!("MessagePack serialization failed: {e}"))
             }),
         }
