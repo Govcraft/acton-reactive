@@ -108,10 +108,12 @@ mod panic_helpers {
 }
 
 #[cfg(feature = "catch-handler-panics")]
-use panic_helpers::*;
+use panic_helpers::{
+    extract_panic_message, log_error_handler_panic, log_handler_panic, log_lifecycle_panic,
+};
 
 /// Runs a lifecycle hook with optional panic protection.
-/// Uses two-layer catch_unwind because hooks take `&self` (shared ref), which
+/// Uses two-layer `catch_unwind` because hooks take `&self` (shared ref), which
 /// requires `State: Sync` for a merged async block to be `Send`.
 macro_rules! run_lifecycle_hook {
     ($self:expr, $hook:ident, $hook_name:literal) => {{

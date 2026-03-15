@@ -756,7 +756,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// - [`ActorRuntime::ipc_expose`](crate::prelude::ActorRuntime::ipc_expose) for manual IPC exposure with custom names
     /// - [`ActorRuntime::ipc_hide`](crate::prelude::ActorRuntime::ipc_hide) for removing IPC exposure
     #[cfg(feature = "ipc")]
-    pub fn expose_for_ipc(&mut self) -> &mut Self {
+    pub const fn expose_for_ipc(&mut self) -> &mut Self {
         self.expose_for_ipc = true;
         self
     }

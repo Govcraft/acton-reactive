@@ -78,11 +78,11 @@ pub(crate) mod traits;
 #[cfg(feature = "ipc")]
 pub mod ipc {
     pub use crate::common::ipc::{
-        socket_exists, socket_is_alive, start_listener, ActorInfo, IpcConfig, IpcDiscoverRequest,
-        IpcDiscoverResponse, IpcEnvelope, IpcError, IpcListenerHandle, IpcListenerStats,
-        IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
-        IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest, ProtocolCapabilities,
-        ProtocolVersionInfo, ShutdownResult,
+        socket_exists, socket_is_alive, start_listener, ActorInfo, IpcClient, IpcClientConfig,
+        IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
+        IpcListenerHandle, IpcListenerStats, IpcPushNotification, IpcResponse, IpcStreamFrame,
+        IpcSubscribeRequest, IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest,
+        ProtocolCapabilities, ProtocolVersionInfo, ShutdownResult,
     };
 
     /// Wire protocol for IPC message framing.
@@ -177,7 +177,7 @@ pub mod prelude {
     // IPC types (feature-gated)
     #[cfg(feature = "ipc")]
     pub use crate::common::ipc::{
-        IpcConfig, IpcEnvelope, IpcError, IpcListenerHandle, IpcListenerStats, IpcResponse,
-        IpcTypeRegistry, ShutdownResult,
+        IpcClient, IpcClientConfig, IpcConfig, IpcEnvelope, IpcError, IpcListenerHandle,
+        IpcListenerStats, IpcResponse, IpcTypeRegistry, ShutdownResult,
     };
 }

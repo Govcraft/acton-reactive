@@ -99,6 +99,9 @@ pub use types::{
     IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
 };
 
+// IPC client - channel-based client for connecting to an acton-reactive server
+pub use client::{IpcClient, IpcClientConfig};
+
 // Re-export config types for users who want to customize defaults
 pub use config::{RateLimitConfig, ShutdownConfig};
 
@@ -111,6 +114,9 @@ const _: () = {
 };
 
 // --- Submodules ---
+
+/// Channel-based IPC client for connecting to an acton-reactive server.
+pub mod client;
 
 /// IPC configuration with XDG-compliant socket path handling.
 mod config;
