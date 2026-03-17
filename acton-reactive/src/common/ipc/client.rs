@@ -239,7 +239,10 @@ pub struct IpcClient {
     reader_handle: JoinHandle<()>,
 
     /// Handle to the writer task (for cleanup on drop).
-    writer_handle: JoinHandle<()>,
+    ///
+    /// Wrapped in `Mutex<Option<>>` so `disconnect()` can take ownership
+    /// and await the task to drain pending writes before closing.
+    writer_handle: std::sync::Mutex<Option<JoinHandle<()>>>,
 
     /// Whether the client has been shut down.
     shutdown: AtomicBool,
@@ -305,7 +308,7 @@ impl IpcClient {
             format: config.format,
             default_timeout: config.default_timeout,
             reader_handle,
-            writer_handle,
+            writer_handle: std::sync::Mutex::new(Some(writer_handle)),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -487,7 +490,14 @@ impl IpcClient {
     /// Returns `false` if the client has been shut down or the writer task has exited.
     #[must_use]
     pub fn is_connected(&self) -> bool {
-        !self.shutdown.load(Ordering::Relaxed) && !self.writer_handle.is_finished()
+        if self.shutdown.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.writer_handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
     }
 
     /// Gracefully disconnect from the server.
@@ -524,11 +534,22 @@ impl IpcClient {
         // when the connection drops.
         drop(payload); // Not needed — server cleans up on disconnect
 
-        // Signal the writer task to exit
+        // Signal the writer task to exit and wait for it to drain pending writes
         let _ = self
             .writer_tx
             .send(ClientWriteCommand::Shutdown)
             .await;
+
+        // Await the writer task so all pending frames (including large ones)
+        // are flushed to the socket before we close the connection.
+        if let Some(handle) = self
+            .writer_handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            let _ = handle.await;
+        }
 
         // Abort the reader task (it will exit when the socket closes)
         self.reader_handle.abort();
@@ -540,10 +561,17 @@ impl IpcClient {
 
 impl Drop for IpcClient {
     fn drop(&mut self) {
-        // Abort both tasks if not already shut down
-        if !self.shutdown.load(Ordering::Relaxed) {
-            self.reader_handle.abort();
-            self.writer_handle.abort();
+        // Abort the reader task unconditionally (it exits when the socket closes)
+        self.reader_handle.abort();
+
+        // Only abort the writer if disconnect() didn't already drain it
+        if let Some(handle) = self
+            .writer_handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            handle.abort();
         }
     }
 }
