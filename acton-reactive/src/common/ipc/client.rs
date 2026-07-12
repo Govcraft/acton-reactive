@@ -32,6 +32,8 @@
 //!                                              ┌──────────────┐
 //!                        pending_requests      │  Reader Task │ ── OwnedReadHalf
 //!  oneshot::Receiver <── DashMap<corr_id> ──── │              │
+//!                        active_streams        │              │
+//!  mpsc::Receiver    <── DashMap<corr_id> ──── │              │
 //!                                              │  push_tx ────│──> mpsc::Receiver
 //!                                              └──────────────┘
 //! ```
@@ -52,6 +54,16 @@
 //! // Request-response
 //! let envelope = IpcEnvelope::new_request("my_actor", "MyQuery", payload);
 //! let response = client.request(envelope).await?;
+//!
+//! // Request-stream (multiple frames per request)
+//! let envelope = IpcEnvelope::new_stream_request("my_actor", "MyStreamQuery", payload);
+//! let mut stream_rx = client.request_stream(envelope).await?;
+//! while let Some(frame) = stream_rx.recv().await {
+//!     println!("Got frame #{}: {:?}", frame.sequence, frame.payload);
+//!     if frame.is_final {
+//!         break;
+//!     }
+//! }
 //!
 //! // Subscribe to push notifications
 //! let sub_response = client.subscribe(vec!["PriceUpdate".into()]).await?;
@@ -74,12 +86,13 @@ use tracing::{debug, error, trace, warn};
 
 use super::protocol::{
     read_frame, write_frame, Format, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_ERROR,
-    MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE, MSG_TYPE_SUBSCRIBE,
-    MSG_TYPE_UNSUBSCRIBE,
+    MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE, MSG_TYPE_STREAM,
+    MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
 };
 use super::types::{
     IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
-    IpcResponse, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
+    IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
+    IpcUnsubscribeRequest,
 };
 
 // ============================================================================
@@ -91,6 +104,9 @@ const DEFAULT_WRITER_CHANNEL_CAPACITY: usize = 64;
 
 /// Default capacity for the push notification channel.
 const DEFAULT_PUSH_CHANNEL_CAPACITY: usize = 256;
+
+/// Default capacity for each per-stream frame channel.
+const DEFAULT_STREAM_CHANNEL_CAPACITY: usize = 64;
 
 /// Default timeout for request-response operations.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -104,6 +120,9 @@ type RawResponse = Result<(Format, Vec<u8>), IpcError>;
 
 /// Map of correlation IDs to pending response channels.
 type PendingRequests = DashMap<String, oneshot::Sender<RawResponse>>;
+
+/// Map of correlation IDs to active stream frame channels.
+type ActiveStreams = DashMap<String, mpsc::Sender<IpcStreamFrame>>;
 
 /// Commands sent to the client's dedicated writer task.
 ///
@@ -120,6 +139,11 @@ enum ClientWriteCommand {
         format: Format,
         reply_tx: oneshot::Sender<RawResponse>,
     },
+
+    /// Send a streaming request (`MSG_TYPE_REQUEST` with `expects_stream`).
+    /// The reader routes each `MSG_TYPE_STREAM` frame to the per-correlation-id
+    /// channel registered in `active_streams`.
+    StreamRequest { envelope: IpcEnvelope, format: Format },
 
     /// Send a subscribe request.
     Subscribe {
@@ -216,9 +240,10 @@ impl Default for IpcClientConfig {
 /// 1. [`connect`](Self::connect) establishes the socket and spawns reader/writer tasks
 /// 2. Use [`send`](Self::send) for fire-and-forget messages
 /// 3. Use [`request`](Self::request) for request-response patterns
-/// 4. Use [`subscribe`](Self::subscribe) + [`take_push_receiver`](Self::take_push_receiver)
+/// 4. Use [`request_stream`](Self::request_stream) for request-stream patterns
+/// 5. Use [`subscribe`](Self::subscribe) + [`take_push_receiver`](Self::take_push_receiver)
 ///    for push notifications
-/// 5. [`disconnect`](Self::disconnect) or drop to clean up
+/// 6. [`disconnect`](Self::disconnect) or drop to clean up
 pub struct IpcClient {
     /// Sender for write commands to the writer task.
     writer_tx: mpsc::Sender<ClientWriteCommand>,
@@ -228,6 +253,12 @@ pub struct IpcClient {
     /// Behind `std::sync::Mutex` for one-time extraction via `take_push_receiver()`.
     /// This is NOT contended during normal operation — only accessed once.
     push_rx: std::sync::Mutex<Option<mpsc::Receiver<IpcPushNotification>>>,
+
+    /// Map of correlation IDs to active stream frame channels.
+    ///
+    /// Shared with the reader task, which routes incoming `MSG_TYPE_STREAM`
+    /// frames to the matching channel.
+    active_streams: std::sync::Arc<ActiveStreams>,
 
     /// Wire format for this connection.
     format: Format,
@@ -289,15 +320,28 @@ impl IpcClient {
             std::sync::Arc::new(DashMap::new());
         let pending_for_writer = std::sync::Arc::clone(&pending_requests);
 
+        // Shared active streams map for stream frame routing
+        let active_streams: std::sync::Arc<ActiveStreams> = std::sync::Arc::new(DashMap::new());
+        let streams_for_writer = std::sync::Arc::clone(&active_streams);
+        let streams_for_reader = std::sync::Arc::clone(&active_streams);
+
         // Spawn the writer task (exclusively owns the write half)
         let writer_handle = tokio::spawn(async move {
-            run_client_writer_task(writer, writer_rx, pending_for_writer).await;
+            run_client_writer_task(writer, writer_rx, pending_for_writer, streams_for_writer)
+                .await;
         });
 
         // Spawn the reader task (exclusively owns the read half)
         let max_frame_size = config.max_frame_size;
         let reader_handle = tokio::spawn(async move {
-            run_client_reader_task(reader, pending_requests, push_tx, max_frame_size).await;
+            run_client_reader_task(
+                reader,
+                pending_requests,
+                streams_for_reader,
+                push_tx,
+                max_frame_size,
+            )
+            .await;
         });
 
         debug!(path = %path.display(), "IPC client connected");
@@ -305,6 +349,7 @@ impl IpcClient {
         Ok(Self {
             writer_tx,
             push_rx: std::sync::Mutex::new(Some(push_rx)),
+            active_streams,
             format: config.format,
             default_timeout: config.default_timeout,
             reader_handle,
@@ -370,6 +415,105 @@ impl IpcClient {
             .map_err(|_| IpcError::ConnectionClosed)??;
 
         format.deserialize(&bytes)
+    }
+
+    /// Send a streaming request and receive the response frames through a channel.
+    ///
+    /// The server replies with multiple [`IpcStreamFrame`]s for a single request.
+    /// Every frame is delivered through the returned receiver, in order and
+    /// without gaps. The channel closes after a frame with `is_final: true` is
+    /// delivered — server errors arrive as a final frame with the `error` field
+    /// set, whether the actor's stream failed mid-flight or the server rejected
+    /// the request before dispatching it (shutdown drain, rate limiting).
+    ///
+    /// Uses the client's default timeout as the maximum time to wait **between
+    /// consecutive frames** (and for the first frame). If the channel closes
+    /// before an `is_final` frame arrives, the stream terminated abnormally:
+    /// either the inter-frame timeout elapsed, the connection was closed, or
+    /// the client was dropped.
+    ///
+    /// The envelope's `expects_stream` flag is set automatically, so any
+    /// envelope constructor works; [`IpcEnvelope::new_stream_request`] is the
+    /// idiomatic choice.
+    ///
+    /// # Backpressure
+    ///
+    /// Frames are never dropped. When the receiver's buffer fills, the client's
+    /// shared connection reader blocks until the consumer catches up, applying
+    /// backpressure through the connection exactly like TCP flow control. A
+    /// slow stream consumer therefore stalls **everything** the reader
+    /// delivers: responses to concurrent [`request`](Self::request) calls and
+    /// push notifications queue behind the stalled stream. Drain the receiver
+    /// promptly (or from a dedicated task) — in particular, don't await a
+    /// `request()` on the same client while leaving a mid-flight stream
+    /// undrained, or that request may time out waiting for a response the
+    /// reader can't reach. The same applies to other concurrent streams on
+    /// this client: their frames also queue behind the stalled stream, so a
+    /// healthy stream can hit its inter-frame timeout and terminate without
+    /// an error frame while another stream is left undrained.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed before the request is enqueued.
+    pub async fn request_stream(
+        &self,
+        envelope: IpcEnvelope,
+    ) -> Result<mpsc::Receiver<IpcStreamFrame>, IpcError> {
+        self.request_stream_with_timeout(envelope, self.default_timeout)
+            .await
+    }
+
+    /// Send a streaming request with a custom inter-frame timeout.
+    ///
+    /// See [`request_stream`](Self::request_stream) for the stream and
+    /// backpressure semantics. `frame_timeout` bounds the wait between
+    /// consecutive frames, not the total stream duration — the server bounds
+    /// the latter via the envelope's `response_timeout_ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed before the request is enqueued.
+    pub async fn request_stream_with_timeout(
+        &self,
+        mut envelope: IpcEnvelope,
+        frame_timeout: Duration,
+    ) -> Result<mpsc::Receiver<IpcStreamFrame>, IpcError> {
+        // The server only streams when the envelope asks for it.
+        envelope.expects_stream = true;
+        envelope.expects_reply = false;
+
+        let correlation_id = envelope.correlation_id.clone();
+        let (frame_tx, frame_rx) = mpsc::channel(DEFAULT_STREAM_CHANNEL_CAPACITY);
+        let (out_tx, out_rx) = mpsc::channel(DEFAULT_STREAM_CHANNEL_CAPACITY);
+
+        // Register the routing entry **before** writing the frame, preventing
+        // a race with the reader task (mirrors `write_correlated_frame`).
+        self.active_streams.insert(correlation_id.clone(), frame_tx);
+
+        if self
+            .writer_tx
+            .send(ClientWriteCommand::StreamRequest {
+                envelope,
+                format: self.format,
+            })
+            .await
+            .is_err()
+        {
+            self.active_streams.remove(&correlation_id);
+            return Err(IpcError::ConnectionClosed);
+        }
+
+        // The forwarder applies the inter-frame timeout and completes the
+        // stream on the final frame or on abnormal termination.
+        tokio::spawn(run_stream_forwarder(
+            correlation_id,
+            frame_rx,
+            out_tx,
+            frame_timeout,
+            std::sync::Arc::clone(&self.active_streams),
+        ));
+
+        Ok(out_rx)
     }
 
     /// Subscribe to message types.
@@ -576,6 +720,12 @@ impl Drop for IpcClient {
         if let Some(handle) = writer_handle {
             handle.abort();
         }
+
+        // Aborted tasks never reach their post-loop cleanup, so terminate any
+        // in-flight streams here. Dropping the frame senders makes each
+        // forwarder observe end-of-stream and close its consumer's channel
+        // promptly instead of waiting out the inter-frame timeout.
+        self.active_streams.clear();
     }
 }
 
@@ -635,6 +785,7 @@ async fn run_client_writer_task(
     mut writer: tokio::net::unix::OwnedWriteHalf,
     mut receiver: mpsc::Receiver<ClientWriteCommand>,
     pending_requests: std::sync::Arc<PendingRequests>,
+    active_streams: std::sync::Arc<ActiveStreams>,
 ) {
     trace!("IPC client writer task started");
 
@@ -657,6 +808,24 @@ async fn run_client_writer_task(
                     &mut writer, &pending_requests, cid, reply_tx,
                     MSG_TYPE_REQUEST, format, &envelope,
                 ).await
+            }
+
+            ClientWriteCommand::StreamRequest { envelope, format } => {
+                let payload = match format.serialize(&envelope) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!(error = %e, "Failed to serialize stream request");
+                        // Drop the routing entry so the stream terminates
+                        // instead of waiting for frames that will never come.
+                        active_streams.remove(&envelope.correlation_id);
+                        continue;
+                    }
+                };
+                let result = write_frame(&mut writer, MSG_TYPE_REQUEST, format, &payload).await;
+                if result.is_err() {
+                    active_streams.remove(&envelope.correlation_id);
+                }
+                Some(result)
             }
 
             ClientWriteCommand::Subscribe { request, format, reply_tx } => {
@@ -699,6 +868,10 @@ async fn run_client_writer_task(
     // causes `RecvError` on the receiver side, which callers map to `ConnectionClosed`.
     pending_requests.clear();
 
+    // Terminate all active streams. Dropping the frame senders closes the
+    // per-stream channels so consumers observe end-of-stream instead of hanging.
+    active_streams.clear();
+
     trace!("IPC client writer task finished");
 }
 
@@ -711,12 +884,14 @@ async fn run_client_writer_task(
 /// Routes incoming frames by message type:
 /// - `MSG_TYPE_RESPONSE` / `MSG_TYPE_ERROR`: Matches by correlation ID to pending
 ///   requests. Unclaimed responses (fire-and-forget acks) are drained.
+/// - `MSG_TYPE_STREAM`: Matches by correlation ID to active streams.
 /// - `MSG_TYPE_PUSH`: Forwarded through the push notification channel.
 /// - `MSG_TYPE_HEARTBEAT`: Ignored.
 /// - Other: Logged as warning.
 async fn run_client_reader_task(
     mut reader: tokio::net::unix::OwnedReadHalf,
     pending_requests: std::sync::Arc<PendingRequests>,
+    active_streams: std::sync::Arc<ActiveStreams>,
     push_tx: mpsc::Sender<IpcPushNotification>,
     max_frame_size: usize,
 ) {
@@ -726,7 +901,11 @@ async fn run_client_reader_task(
         match read_frame(&mut reader, max_frame_size).await {
             Ok((msg_type, format, payload)) => match msg_type {
                 MSG_TYPE_RESPONSE | MSG_TYPE_ERROR => {
-                    handle_response_frame(&pending_requests, format, payload);
+                    handle_response_frame(&pending_requests, &active_streams, format, payload)
+                        .await;
+                }
+                MSG_TYPE_STREAM => {
+                    handle_stream_frame(&active_streams, format, &payload).await;
                 }
                 MSG_TYPE_PUSH => {
                     handle_push_frame(&push_tx, format, &payload);
@@ -757,16 +936,24 @@ async fn run_client_reader_task(
         }
     }
 
+    // Terminate any streams still in flight so consumers don't hang.
+    active_streams.clear();
+
     trace!("IPC client reader task finished");
 }
 
 /// Handle an incoming response or error frame.
 ///
 /// Peeks at the `correlation_id` field via minimal deserialization, then routes
-/// to the matching pending request. Unclaimed responses (from fire-and-forget
+/// to the matching pending request. When the correlation ID instead matches an
+/// active stream, the server rejected the stream request before dispatching it
+/// (shutdown drain, rate limiting, or an envelope-parse failure) — the stream
+/// is terminated by delivering a synthesized final [`IpcStreamFrame`] carrying
+/// the response's error (or payload). Unclaimed responses (from fire-and-forget
 /// sends) are silently drained.
-fn handle_response_frame(
+async fn handle_response_frame(
     pending_requests: &PendingRequests,
+    active_streams: &ActiveStreams,
     format: Format,
     payload: Vec<u8>,
 ) {
@@ -783,10 +970,163 @@ fn handle_response_frame(
     if let Some((_, reply_tx)) = pending_requests.remove(&correlation_id) {
         // Send raw bytes — the caller will deserialize to the expected type
         let _ = reply_tx.send(Ok((format, payload)));
-    } else {
-        // Fire-and-forget response or unknown correlation — drain silently
-        trace!(correlation_id, "Draining unclaimed response");
+        return;
     }
+
+    // A plain response for an active stream is a pre-dispatch rejection —
+    // terminate the stream instead of leaving the consumer to time out.
+    // Clone the sender out of the map so no shard lock is held while sending.
+    if let Some(frame_tx) = active_streams
+        .get(&correlation_id)
+        .map(|entry| entry.value().clone())
+    {
+        debug!(correlation_id, "Server rejected stream request, terminating stream");
+        let frame = synthesize_stream_termination(&correlation_id, format, &payload);
+        let _ = frame_tx.send(frame).await;
+        active_streams.remove(&correlation_id);
+        return;
+    }
+
+    // Fire-and-forget response or unknown correlation — drain silently
+    trace!(correlation_id, "Draining unclaimed response");
+}
+
+/// Build the final [`IpcStreamFrame`] that terminates a stream whose request
+/// the server rejected with a plain response frame.
+///
+/// The response's error and payload are carried over so the consumer observes
+/// why the stream ended (e.g. `RATE_LIMITED`, `SHUTTING_DOWN`). If the response
+/// cannot be deserialized, a generic error frame is synthesized instead.
+fn synthesize_stream_termination(
+    correlation_id: &str,
+    format: Format,
+    payload: &[u8],
+) -> IpcStreamFrame {
+    match format.deserialize::<IpcResponse>(payload) {
+        Ok(response) if response.success => IpcStreamFrame {
+            correlation_id: correlation_id.to_string(),
+            sequence: 0,
+            is_final: true,
+            error: None,
+            error_code: None,
+            payload: response.payload,
+        },
+        Ok(response) => IpcStreamFrame {
+            correlation_id: correlation_id.to_string(),
+            sequence: 0,
+            is_final: true,
+            error: Some(response.error.unwrap_or_else(|| {
+                "Server rejected the stream request".to_string()
+            })),
+            error_code: response.error_code,
+            payload: response.payload,
+        },
+        Err(e) => IpcStreamFrame::error(
+            correlation_id,
+            0,
+            format!("Server rejected the stream request with an undecodable response: {e}"),
+        ),
+    }
+}
+
+/// Handle an incoming stream frame.
+///
+/// Routes the frame to the matching active stream by correlation ID. Frames
+/// for unknown (or expired) correlation IDs are warned about and dropped.
+/// When the receiving side is gone, the routing entry is removed so late
+/// frames don't accumulate.
+///
+/// The send is **awaited**: when the per-stream channel is full, the reader
+/// task blocks here until the consumer drains it, applying backpressure
+/// through the connection exactly like TCP flow control. Frames are never
+/// silently dropped — a slow stream consumer instead stalls the shared
+/// connection reader (see [`IpcClient::request_stream`]).
+async fn handle_stream_frame(active_streams: &ActiveStreams, format: Format, payload: &[u8]) {
+    let frame = match format.deserialize::<IpcStreamFrame>(payload) {
+        Ok(frame) => frame,
+        Err(e) => {
+            warn!(error = %e, "Failed to deserialize stream frame");
+            return;
+        }
+    };
+
+    let correlation_id = frame.correlation_id.clone();
+    let is_final = frame.is_final;
+
+    // Clone the sender out of the map so no shard lock is held while sending
+    let Some(frame_tx) = active_streams
+        .get(&correlation_id)
+        .map(|entry| entry.value().clone())
+    else {
+        warn!(correlation_id, "Received stream frame for unknown correlation_id, dropping");
+        return;
+    };
+
+    if frame_tx.send(frame).await.is_err() {
+        // The forwarder exited (receiver dropped or timed out) — clean up
+        debug!(correlation_id, "Stream frame channel closed, removing stream");
+        active_streams.remove(&correlation_id);
+        return;
+    }
+
+    if is_final {
+        // The stream is complete — release the routing entry
+        active_streams.remove(&correlation_id);
+    }
+}
+
+/// Per-stream forwarder that applies the inter-frame timeout.
+///
+/// Receives frames routed by the reader task and forwards them to the
+/// consumer's channel, exiting (and closing the consumer's channel) when:
+/// - a frame with `is_final: true` has been delivered (clean completion),
+/// - no frame arrives within `frame_timeout` (client-side read timeout),
+/// - the consumer drops its receiver (stream cancelled), or
+/// - the routing entry is dropped (connection closed or client shut down).
+///
+/// On exit, the routing entry is removed so late frames for this correlation
+/// ID are warned about and dropped rather than buffered forever.
+async fn run_stream_forwarder(
+    correlation_id: String,
+    mut frame_rx: mpsc::Receiver<IpcStreamFrame>,
+    out_tx: mpsc::Sender<IpcStreamFrame>,
+    frame_timeout: Duration,
+    active_streams: std::sync::Arc<ActiveStreams>,
+) {
+    trace!(correlation_id, "Stream forwarder started");
+
+    loop {
+        match tokio::time::timeout(frame_timeout, frame_rx.recv()).await {
+            Ok(Some(frame)) => {
+                let is_final = frame.is_final;
+                if out_tx.send(frame).await.is_err() {
+                    // Consumer dropped the receiver mid-stream
+                    debug!(correlation_id, "Stream receiver dropped, cancelling stream");
+                    break;
+                }
+                if is_final {
+                    trace!(correlation_id, "Stream completed with final frame");
+                    break;
+                }
+            }
+            Ok(None) => {
+                // All senders dropped: connection closed or client shut down
+                debug!(correlation_id, "Stream terminated before final frame");
+                break;
+            }
+            Err(_) => {
+                warn!(
+                    correlation_id,
+                    timeout = ?frame_timeout,
+                    "Stream timed out waiting for next frame"
+                );
+                break;
+            }
+        }
+    }
+
+    active_streams.remove(&correlation_id);
+    trace!(correlation_id, "Stream forwarder finished");
 }
 
 /// Handle an incoming push notification frame.
@@ -1074,6 +1414,261 @@ mod tests {
         accept_handle.await.expect("server task failed");
     }
 
+    /// Test that stream frames are routed to the `request_stream` receiver and
+    /// the channel closes cleanly after the final frame.
+    #[tokio::test]
+    async fn request_stream_receives_frames_until_final() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, mut writer) = stream.into_split();
+
+            // Read the stream request
+            let (msg_type, _, payload) = read_frame(&mut reader, MAX_FRAME_SIZE)
+                .await
+                .expect("should read frame");
+            assert_eq!(msg_type, MSG_TYPE_REQUEST);
+
+            let envelope: IpcEnvelope =
+                serde_json::from_slice(&payload).expect("should deserialize");
+            assert!(envelope.expects_stream);
+
+            // Send three data frames followed by a final frame
+            for sequence in 0..3_u32 {
+                let frame = IpcStreamFrame::data(
+                    &envelope.correlation_id,
+                    sequence,
+                    serde_json::json!({ "n": sequence }),
+                );
+                let frame_payload =
+                    serde_json::to_vec(&frame).expect("should serialize frame");
+                write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
+                    .await
+                    .expect("should write frame");
+            }
+
+            let final_frame = IpcStreamFrame::final_frame(&envelope.correlation_id, 3, None);
+            let final_payload =
+                serde_json::to_vec(&final_frame).expect("should serialize final frame");
+            write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &final_payload)
+                .await
+                .expect("should write final frame");
+
+            // Keep connection alive
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let mut stream_rx = client
+            .request_stream(envelope)
+            .await
+            .expect("should start stream");
+
+        let mut frames = Vec::new();
+        while let Some(frame) =
+            tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+                .await
+                .expect("should not timeout")
+        {
+            frames.push(frame);
+        }
+
+        assert_eq!(frames.len(), 4);
+        for (expected_sequence, frame) in (0_u32..).zip(frames.iter()) {
+            assert_eq!(frame.sequence, expected_sequence);
+        }
+        assert!(frames.last().expect("frames should not be empty").is_final);
+        assert!(frames[..3].iter().all(|f| !f.is_final));
+
+        // The routing entry is released after the final frame
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(client.active_streams.is_empty());
+
+        accept_handle.await.expect("server task failed");
+    }
+
+    /// Test that the stream terminates when no frame arrives within the timeout.
+    #[tokio::test]
+    async fn request_stream_times_out_without_frames() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, _writer) = stream.into_split();
+
+            // Read the request but never respond
+            let _ = read_frame(&mut reader, MAX_FRAME_SIZE).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let mut stream_rx = client
+            .request_stream_with_timeout(envelope, Duration::from_millis(100))
+            .await
+            .expect("should start stream");
+
+        // The channel closes without an `is_final` frame once the timeout elapses
+        let result = tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+            .await
+            .expect("stream should terminate before the outer timeout");
+        assert!(result.is_none());
+
+        // The routing entry is cleaned up
+        assert!(client.active_streams.is_empty());
+
+        accept_handle.await.expect("server task failed");
+    }
+
+    /// Test that a stream terminates (rather than hanging) when the connection
+    /// closes mid-stream.
+    #[tokio::test]
+    async fn request_stream_terminates_on_connection_close() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, mut writer) = stream.into_split();
+
+            let (_, _, payload) = read_frame(&mut reader, MAX_FRAME_SIZE)
+                .await
+                .expect("should read frame");
+            let envelope: IpcEnvelope =
+                serde_json::from_slice(&payload).expect("should deserialize");
+
+            // Send two data frames, then drop the connection without a final frame
+            for sequence in 0..2_u32 {
+                let frame = IpcStreamFrame::data(
+                    &envelope.correlation_id,
+                    sequence,
+                    serde_json::json!({ "n": sequence }),
+                );
+                let frame_payload =
+                    serde_json::to_vec(&frame).expect("should serialize frame");
+                write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
+                    .await
+                    .expect("should write frame");
+            }
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let mut stream_rx = client
+            .request_stream(envelope)
+            .await
+            .expect("should start stream");
+
+        let mut frames = Vec::new();
+        while let Some(frame) =
+            tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+                .await
+                .expect("stream should terminate, not hang")
+        {
+            frames.push(frame);
+        }
+
+        // Both data frames arrived, then the channel closed without `is_final`
+        assert_eq!(frames.len(), 2);
+        assert!(frames.iter().all(|f| !f.is_final));
+
+        accept_handle.await.expect("server task failed");
+    }
+
+    /// Test that dropping the stream receiver cleans up the routing entry.
+    #[tokio::test]
+    async fn request_stream_receiver_drop_cleans_up() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, mut writer) = stream.into_split();
+
+            let (_, _, payload) = read_frame(&mut reader, MAX_FRAME_SIZE)
+                .await
+                .expect("should read frame");
+            let envelope: IpcEnvelope =
+                serde_json::from_slice(&payload).expect("should deserialize");
+
+            // Send a frame after the client has dropped its receiver
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let frame = IpcStreamFrame::data(
+                &envelope.correlation_id,
+                0,
+                serde_json::json!({ "n": 0 }),
+            );
+            let frame_payload =
+                serde_json::to_vec(&frame).expect("should serialize frame");
+            write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
+                .await
+                .expect("should write frame");
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let stream_rx = client
+            .request_stream(envelope)
+            .await
+            .expect("should start stream");
+        assert_eq!(client.active_streams.len(), 1);
+
+        // Drop the receiver mid-stream
+        drop(stream_rx);
+
+        // Once the forwarder notices the dropped receiver, the entry is removed
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(client.active_streams.is_empty());
+
+        accept_handle.await.expect("server task failed");
+    }
+
     /// Test that `take_push_receiver` returns `None` on second call.
     #[tokio::test]
     async fn take_push_receiver_once() {
@@ -1095,6 +1690,208 @@ mod tests {
 
         assert!(client.take_push_receiver().is_some());
         assert!(client.take_push_receiver().is_none());
+
+        accept_handle.await.expect("server task failed");
+    }
+
+    /// Test that a slow consumer receives every frame, in order and without
+    /// gaps, via reader backpressure rather than frame drops.
+    #[tokio::test]
+    async fn request_stream_slow_consumer_receives_all_frames() {
+        // Well beyond the combined per-stream channel capacities, so the
+        // reader task must block on the full channel while the consumer lags.
+        const FRAME_COUNT: u32 = 300;
+
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, mut writer) = stream.into_split();
+
+            let (_, _, payload) = read_frame(&mut reader, MAX_FRAME_SIZE)
+                .await
+                .expect("should read frame");
+            let envelope: IpcEnvelope =
+                serde_json::from_slice(&payload).expect("should deserialize");
+
+            // Flood the client with frames as fast as the socket accepts them
+            for sequence in 0..FRAME_COUNT - 1 {
+                let frame = IpcStreamFrame::data(
+                    &envelope.correlation_id,
+                    sequence,
+                    serde_json::json!({ "n": sequence }),
+                );
+                let frame_payload =
+                    serde_json::to_vec(&frame).expect("should serialize frame");
+                write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
+                    .await
+                    .expect("should write frame");
+            }
+
+            let final_frame =
+                IpcStreamFrame::final_frame(&envelope.correlation_id, FRAME_COUNT - 1, None);
+            let final_payload =
+                serde_json::to_vec(&final_frame).expect("should serialize final frame");
+            write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &final_payload)
+                .await
+                .expect("should write final frame");
+
+            // Keep connection alive until the consumer has drained everything
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let mut stream_rx = client
+            .request_stream(envelope)
+            .await
+            .expect("should start stream");
+
+        // Lag behind the server long enough for every buffer to fill
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let mut frames = Vec::new();
+        while let Some(frame) =
+            tokio::time::timeout(Duration::from_secs(5), stream_rx.recv())
+                .await
+                .expect("stream should terminate, not hang")
+        {
+            frames.push(frame);
+        }
+
+        // Every frame arrived, in order, with no sequence gaps
+        assert_eq!(frames.len(), FRAME_COUNT as usize);
+        for (expected_sequence, frame) in (0_u32..).zip(frames.iter()) {
+            assert_eq!(frame.sequence, expected_sequence);
+        }
+        assert!(frames.last().expect("frames should not be empty").is_final);
+
+        accept_handle.await.expect("server task failed");
+    }
+
+    /// Test that a pre-dispatch server rejection (e.g. rate limiting) reaches
+    /// the stream consumer as a final error frame instead of stalling the
+    /// stream until the inter-frame timeout.
+    #[tokio::test]
+    async fn request_stream_terminated_by_rate_limit_rejection() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, mut writer) = stream.into_split();
+
+            let (_, _, payload) = read_frame(&mut reader, MAX_FRAME_SIZE)
+                .await
+                .expect("should read frame");
+            let envelope: IpcEnvelope =
+                serde_json::from_slice(&payload).expect("should deserialize");
+
+            // Reject the stream request exactly like the listener's rate
+            // limiter does: a plain error response on the same correlation ID.
+            let response = IpcResponse::error(
+                &envelope.correlation_id,
+                &IpcError::RateLimited { retry_after_ms: 100 },
+            );
+            let resp_payload =
+                serde_json::to_vec(&response).expect("should serialize response");
+            write_frame(&mut writer, MSG_TYPE_ERROR, Format::Json, &resp_payload)
+                .await
+                .expect("should write response");
+
+            // Keep connection alive
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let mut stream_rx = client
+            .request_stream(envelope)
+            .await
+            .expect("should start stream");
+
+        // The rejection arrives as a synthesized final error frame
+        let frame = tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+            .await
+            .expect("stream should terminate, not hang")
+            .expect("should receive the rejection frame");
+        assert!(frame.is_final);
+        assert_eq!(frame.error_code.as_deref(), Some("RATE_LIMITED"));
+        assert!(frame.error.is_some());
+
+        // The channel closes and the routing entry is released
+        let next = tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+            .await
+            .expect("stream should terminate, not hang");
+        assert!(next.is_none());
+        assert!(client.active_streams.is_empty());
+
+        accept_handle.await.expect("server task failed");
+    }
+
+    /// Test that dropping the client terminates in-flight streams promptly
+    /// instead of leaving consumers to wait out the inter-frame timeout.
+    #[tokio::test]
+    async fn drop_client_closes_stream_channel() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let socket_path = dir.path().join("test.sock");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .expect("failed to bind socket");
+
+        let accept_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("failed to accept");
+            let (mut reader, _writer) = stream.into_split();
+
+            // Read the request but never send any frames
+            let _ = read_frame(&mut reader, MAX_FRAME_SIZE).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = IpcClient::connect(&socket_path)
+            .await
+            .expect("should connect");
+
+        let envelope = IpcEnvelope::new_stream_request(
+            "test_actor",
+            "TestStream",
+            serde_json::json!({}),
+        );
+        let mut stream_rx = client
+            .request_stream(envelope)
+            .await
+            .expect("should start stream");
+
+        // Drop the client with the stream still in flight. The default
+        // inter-frame timeout is 30s, so a prompt close proves the Drop
+        // cleanup (not the timeout) terminated the stream.
+        drop(client);
+
+        let result = tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+            .await
+            .expect("stream should close promptly after drop, not hang");
+        assert!(result.is_none());
 
         accept_handle.await.expect("server task failed");
     }

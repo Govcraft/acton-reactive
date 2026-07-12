@@ -148,7 +148,20 @@ async fn main() -> anyhow::Result<()> {
 `IpcEnvelope::new` builds a **fire-and-forget** message: the server routes it to the actor and immediately replies `{"status": "delivered"}`, discarding whatever the actor sends back. Only `IpcEnvelope::new_request` (or `new_request_with_timeout`) sets `expects_reply`, which is what makes the listener wait for the actor's reply and forward it.
 {% /callout %}
 
-`IpcClient` also covers fire-and-forget (`send`), subscriptions (`subscribe` + `take_push_receiver`), and discovery (`discover`). See [IPC Patterns](/docs/ipc-patterns) for each. Request-stream is the one pattern it does not decode — read those frames with `protocol::read_frame` directly.
+`IpcClient` also covers fire-and-forget (`send`), request-stream (`request_stream`), subscriptions (`subscribe` + `take_push_receiver`), and discovery (`discover`). See [IPC Patterns](/docs/ipc-patterns) for each. For request-stream, `request_stream` returns a channel that yields every frame in order and closes after the frame with `is_final: true`:
+
+```rust
+let envelope = IpcEnvelope::new_stream_request(
+    "my-service",
+    "ListValues",
+    serde_json::json!({}),
+);
+
+let mut stream_rx = client.request_stream(envelope).await?;
+while let Some(frame) = stream_rx.recv().await {
+    println!("Frame #{}: {:?}", frame.sequence, frame.payload);
+}
+```
 
 ---
 

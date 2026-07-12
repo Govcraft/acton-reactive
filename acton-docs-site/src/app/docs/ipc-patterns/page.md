@@ -152,9 +152,32 @@ RECEIVE: IpcStreamFrame { correlation_id: "str_01h9...", sequence: 2, payload: {
 
 Stream frames arrive as message type `0x09`. Keep reading frames until one has `is_final: true`.
 
-{% callout type="note" title="Streaming needs the raw protocol" %}
-`IpcClient` does not decode stream frames — it covers request-response, fire-and-forget, subscriptions, and discovery. For request-stream, read frames directly with `protocol::read_frame` and `protocol::is_stream`, as the `ipc_streaming` example does.
+From Rust, `IpcClient::request_stream` handles all of this: it sends the request and returns a channel that yields every stream frame, in order and without gaps. The channel closes after the frame with `is_final: true` arrives — server errors are delivered as a final frame with the `error` field set, whether the actor's stream failed mid-flight or the server rejected the request before dispatching it (shutdown drain, rate limiting):
+
+```rust
+use acton_reactive::ipc::{IpcClient, IpcEnvelope};
+
+let client = IpcClient::connect("/run/user/1000/acton/ipc.sock").await?;
+
+let envelope = IpcEnvelope::new_stream_request(
+    "list_service",
+    "ListRequest",
+    serde_json::json!({ "page_size": 10 }),
+);
+
+let mut stream_rx = client.request_stream(envelope).await?;
+while let Some(frame) = stream_rx.recv().await {
+    println!("Frame #{}: {:?}", frame.sequence, frame.payload);
+}
+```
+
+If the channel closes before an `is_final` frame arrives, the stream terminated abnormally: the inter-frame timeout elapsed, the connection closed, or the client was dropped. Use `request_stream_with_timeout` to customize how long the client waits between consecutive frames.
+
+{% callout type="warning" title="Slow consumers stall the connection reader" %}
+Stream frames are never dropped. When a consumer falls behind, the client's shared connection reader blocks until the receiver is drained — backpressure flows through the connection like TCP flow control. While a stream is stalled, responses to concurrent `request()` calls, push notifications, and frames for **other concurrent streams** all queue behind it (a healthy sibling stream can even hit its inter-frame timeout), so drain stream receivers promptly (or from a dedicated task) instead of awaiting other calls on the same client first.
 {% /callout %}
+
+Non-Rust clients (or code that needs direct control of the socket) read the frames with `protocol::read_frame` and `protocol::is_stream`, as the `ipc_streaming` example does:
 
 ```rust
 use acton_reactive::ipc::protocol::{is_stream, read_frame, write_envelope, MAX_FRAME_SIZE};
@@ -500,7 +523,7 @@ Available counters:
 
 `IpcClient` is the supported way to talk to an acton-reactive server from Rust. It owns the socket, runs dedicated reader and writer tasks, and matches responses to requests by correlation ID — so you never hand-roll framing.
 
-It is exported from the prelude, and covers request-response, fire-and-forget, subscriptions, and discovery. (Request-stream needs the raw protocol — see [Pattern 2](#pattern-2-request-stream).)
+It is exported from the prelude, and covers request-response, request-stream, fire-and-forget, subscriptions, and discovery.
 
 ### Connecting
 
@@ -561,6 +584,17 @@ let response = client
     .await?;
 ```
 
+### Request-Stream
+
+`request_stream` returns a channel that yields every frame in order and closes after the `is_final` frame; `request_stream_with_timeout` overrides the inter-frame timeout. See [Pattern 2](#pattern-2-request-stream) for the full semantics, including error frames and backpressure.
+
+```rust
+let mut stream_rx = client.request_stream(envelope).await?;
+while let Some(frame) = stream_rx.recv().await {
+    println!("Frame #{}: {:?}", frame.sequence, frame.payload);
+}
+```
+
 ### Fire-and-Forget
 
 `send` enqueues the message and returns as soon as it is buffered. Build it with `IpcEnvelope::new` (which sets `expects_reply: false`); the server acknowledges with `{"status": "delivered"}` and the client drains that ack for you.
@@ -611,7 +645,7 @@ if let Some(types) = discovery.message_types {
 
 ### Disconnecting
 
-`disconnect` drains pending writes before closing. Dropping the client aborts its tasks instead, so prefer an explicit disconnect for a clean shutdown.
+`disconnect` drains pending writes before closing. Dropping the client aborts its tasks instead, so prefer an explicit disconnect for a clean shutdown. Either way, in-flight stream channels close promptly so stream consumers observe end-of-stream rather than waiting out the inter-frame timeout.
 
 ```rust
 if client.is_connected() {
@@ -626,7 +660,7 @@ if client.is_connected() {
 | Pattern | When to Use | Response Count | `IpcClient` support |
 |---------|-------------|----------------|---------------------|
 | Request-Response | RPC calls, queries | 1 | `request()` |
-| Request-Stream | Pagination, countdowns, feeds | N | raw protocol |
+| Request-Stream | Pagination, countdowns, feeds | N | `request_stream()` |
 | Subscriptions | Events, real-time updates | Continuous | `subscribe()` + `take_push_receiver()` |
 
 ---
