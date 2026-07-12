@@ -16,10 +16,12 @@
 
 //! Restart policies for supervised actors.
 //!
-//! This module provides Erlang/Elixir-style restart policies that determine
-//! how actors should be handled when they terminate. These policies are
-//! evaluated by the supervision system to decide whether to restart a child
-//! actor.
+//! This module provides Erlang/Elixir-style restart policies that describe
+//! whether an actor should be restarted when it terminates. The configured
+//! policy is carried on the `ChildTerminated` notification delivered to the
+//! parent, whose handler evaluates it (via [`RestartPolicy::should_restart`]
+//! or `SupervisionStrategy::decide`) when deciding whether to restart the
+//! child. The framework itself performs no automatic restarts.
 //!
 //! # Policies
 //!
@@ -31,30 +33,34 @@ use serde::{Deserialize, Serialize};
 
 /// Restart policy for supervised actors.
 ///
-/// Determines whether and when an actor should be restarted after termination.
-/// These policies follow Erlang/Elixir supervision patterns.
+/// Describes whether and when an actor should be restarted after termination.
+/// The policy is a decision helper: it is delivered to the supervising parent
+/// inside a `ChildTerminated` notification, and the parent's handler applies
+/// it (via [`RestartPolicy::should_restart`]) when performing restarts
+/// manually. These policies follow Erlang/Elixir supervision patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum RestartPolicy {
-    /// Always restart the actor when it terminates.
+    /// The actor should always be restarted when it terminates.
     ///
-    /// The actor will be restarted regardless of whether it terminated normally
-    /// or abnormally. This is appropriate for actors that must always be running.
+    /// A restart is warranted regardless of whether the actor terminated
+    /// normally or abnormally. This is appropriate for actors that must
+    /// always be running.
     ///
-    /// **Exception**: The actor will NOT be restarted during a parent-initiated
+    /// **Exception**: A restart is NOT warranted during a parent-initiated
     /// cascading shutdown.
     #[default]
     Permanent,
 
-    /// Never restart the actor when it terminates.
+    /// The actor should never be restarted when it terminates.
     ///
-    /// The actor will not be restarted under any circumstances. This is appropriate
+    /// A restart is not warranted under any circumstances. This is appropriate
     /// for actors that represent one-time operations or where the caller handles
     /// failure explicitly.
     Temporary,
 
-    /// Restart only on abnormal termination.
+    /// The actor should be restarted only on abnormal termination.
     ///
-    /// The actor will be restarted if it terminated due to a panic or error,
+    /// A restart is warranted if the actor terminated due to a panic or error,
     /// but not if it terminated normally (via shutdown signal) or due to
     /// parent shutdown.
     Transient,

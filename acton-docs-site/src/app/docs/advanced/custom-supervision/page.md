@@ -24,9 +24,9 @@ This is the single most important thing to internalize before building custom su
 | Provides `SupervisionStrategy::decide()`, `RestartPolicy::should_restart()`, and `RestartLimiter` as helpers | **Call** those helpers and act on what they return |
 
 {% callout type="warning" title="Configuration is input, not behavior" %}
-`ActorConfig::with_supervision_strategy()` and `ActorConfig::with_restart_limiter()` record your intent on the actor's configuration. They do **not** cause the runtime to restart anything on their own — Acton has no automatic restart loop. Treat them as values you read back and feed into your own `ChildTerminated` handler.
+`ActorConfig::with_supervision_strategy()` and `ActorConfig::with_restart_limiter()` record your intent on the actor's configuration. They do **not** cause the runtime to restart anything on their own — Acton has no automatic restart loop. Both methods are **deprecated** for exactly this reason; see [issue #7](https://github.com/govcraft/acton-reactive/issues/7).
 
-If you configure a restart limiter and never call it, nothing is rate-limited.
+Instead, hold the strategy or a `RestartLimiter` in your supervisor's own state and apply it in your `ChildTerminated` handler. If you configure a restart limiter and never call it, nothing is rate-limited.
 {% /callout %}
 
 ---
@@ -360,15 +360,13 @@ Use a circuit breaker when you need to stop *all* operations to a subsystem, not
 ```rust
 let mut runtime = ActonApp::launch_async().await;
 
-// Create the supervisor. The strategy is recorded on the config so the
-// supervisor's own handler can read it back — it does not restart anything
-// by itself.
+// Create the supervisor. The OneForOne policy lives in the handler you
+// register below — the framework does not restart anything by itself.
 let supervisor_config = ActorConfig::new(
     Ern::with_root("pool-supervisor")?,
     None,
     None,
-)?
-.with_supervision_strategy(SupervisionStrategy::OneForOne);
+)?;
 
 let mut supervisor = runtime.new_actor_with_config::<PoolSupervisor>(supervisor_config);
 supervisor.mutate_on::<ChildTerminated>(restart_one_worker);  // you write this
@@ -399,8 +397,7 @@ let pipeline_config = ActorConfig::new(
     Ern::with_root("pipeline")?,
     None,
     None,
-)?
-.with_supervision_strategy(SupervisionStrategy::RestForOne);
+)?;
 
 let mut pipeline = runtime.new_actor_with_config::<Pipeline>(pipeline_config);
 let pipeline_handle = pipeline.start().await;

@@ -16,25 +16,40 @@
 
 //! Restart limiter for supervised actors with exponential backoff.
 //!
-//! This module provides Erlang/OTP-style restart limiting that prevents
-//! restart loops by tracking restart attempts within a sliding time window
-//! and applying exponential backoff between restarts.
+//! This module provides an Erlang/OTP-style restart limiting *helper* that
+//! prevents restart loops by tracking restart attempts within a sliding time
+//! window and applying exponential backoff between restarts.
+//!
+//! The framework does not restart actors automatically, so it never drives a
+//! [`RestartLimiter`] on its own. A supervising actor keeps a limiter in its
+//! state and consults it from its `ChildTerminated` handler before performing
+//! a restart itself.
 //!
 //! # Example
 //!
 //! ```rust,ignore
 //! use acton_reactive::prelude::*;
 //!
-//! // Configure an actor with custom restart limits
-//! let config = ActorConfig::new(Ern::with_root("worker")?, None, None)?
-//!     .with_restart_limiter(RestartLimiterConfig {
-//!         enabled: true,
-//!         max_restarts: 3,
-//!         window_secs: 30,
-//!         initial_backoff_ms: 100,
-//!         max_backoff_ms: 5000,
-//!         backoff_multiplier: 2.0,
-//!     });
+//! // Keep a limiter in the supervising actor's state...
+//! let mut limiter = RestartLimiter::new(RestartLimiterConfig {
+//!     enabled: true,
+//!     max_restarts: 3,
+//!     window_secs: 30,
+//!     initial_backoff_ms: 100,
+//!     max_backoff_ms: 5000,
+//!     backoff_multiplier: 2.0,
+//! });
+//!
+//! // ...and consult it from a `mutate_on::<ChildTerminated>` handler.
+//! match limiter.can_restart() {
+//!     Ok(()) => {
+//!         let backoff = limiter.record_restart();
+//!         // Sleep for `backoff`, then re-create and re-supervise the child.
+//!     }
+//!     Err(exceeded) => {
+//!         // Limit hit: stop restarting and escalate or alert instead.
+//!     }
+//! }
 //! ```
 
 use std::time::{Duration, Instant};
@@ -138,6 +153,11 @@ impl RestartLimiterConfig {
 /// Uses a sliding window to count restarts within a configurable time period.
 /// When the limit is exceeded, signals that the failure should be escalated
 /// to the parent supervisor.
+///
+/// This is a decision helper: the framework never drives a `RestartLimiter`
+/// itself. A supervising actor owns one in its state and calls
+/// [`RestartLimiter::can_restart`] / [`RestartLimiter::record_restart`] when
+/// it restarts children manually.
 #[derive(Debug)]
 pub struct RestartLimiter {
     /// Configuration for restart limits and backoff.

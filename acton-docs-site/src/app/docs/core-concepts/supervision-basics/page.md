@@ -86,20 +86,13 @@ This gives you fine-grained control over failure recovery.
 
 Acton provides three Erlang/OTP-style strategies. A strategy is a **decision helper**: calling `strategy.decide(&notification, child_index)` in your `ChildTerminated` handler tells you which children should be restarted, and your handler carries it out.
 
+{% callout type="warning" title="No Automatic Restarts" %}
+`ActorConfig::with_supervision_strategy()` and `ActorConfig::with_restart_limiter()` record intent only — the framework never reads those values and performs no automatic restarts. Both methods are deprecated; see [issue #7](https://github.com/govcraft/acton-reactive/issues/7). Hold the strategy in your supervisor's own state and apply it in a `ChildTerminated` handler instead.
+{% /callout %}
+
 ### OneForOne (Default)
 
 Restart only the failed child. Other children continue running.
-
-```rust
-use acton_reactive::prelude::*;
-
-let config = ActorConfig::new(
-    Ern::with_root("supervisor")?,
-    None,
-    None,
-)?
-.with_supervision_strategy(SupervisionStrategy::OneForOne);
-```
 
 **Use when**: Children are independent and their failures don't affect each other.
 
@@ -107,19 +100,11 @@ let config = ActorConfig::new(
 
 Restart all children when any child fails. This ensures all children start from a consistent state.
 
-```rust
-.with_supervision_strategy(SupervisionStrategy::OneForAll)
-```
-
 **Use when**: Children are interdependent and one child's failure could leave others in an inconsistent state.
 
 ### RestForOne
 
 Restart the failed child and all children started after it, preserving start order.
-
-```rust
-.with_supervision_strategy(SupervisionStrategy::RestForOne)
-```
 
 **Use when**: Children have sequential dependencies (later children depend on earlier ones).
 

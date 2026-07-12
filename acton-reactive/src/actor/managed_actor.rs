@@ -109,8 +109,9 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// The restart policy for this actor when supervised.
     /// Determines whether and when the actor should be restarted after termination.
     pub(crate) restart_policy: RestartPolicy,
-    /// The supervision strategy for managing child actors.
-    /// Determines how to handle child terminations (`OneForOne`, `OneForAll`, `RestForOne`).
+    /// The supervision strategy recorded for this actor.
+    /// Currently recorded from `ActorConfig` but never read by the runtime;
+    /// see <https://github.com/govcraft/acton-reactive/issues/7>.
     pub(crate) supervision_strategy: SupervisionStrategy,
     /// Whether to automatically expose this actor for IPC access when started.
     /// When `true`, the actor will be registered with the IPC system using its ERN root name.

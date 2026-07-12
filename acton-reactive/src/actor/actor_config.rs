@@ -46,12 +46,16 @@ pub struct ActorConfig {
     /// The restart policy for this actor when supervised.
     /// Defaults to `RestartPolicy::Permanent`.
     restart_policy: RestartPolicy,
-    /// The supervision strategy for managing child actors.
+    /// The supervision strategy recorded for this actor.
     /// Defaults to `SupervisionStrategy::OneForOne`.
+    ///
+    /// NOTE: This value is recorded but never read by the runtime; see
+    /// <https://github.com/govcraft/acton-reactive/issues/7>.
     supervision_strategy: SupervisionStrategy,
-    /// Optional restart limiter configuration for this actor.
-    /// When `Some`, the supervisor will use this configuration to limit
-    /// restart frequency and apply exponential backoff.
+    /// Optional restart limiter configuration recorded for this actor.
+    ///
+    /// NOTE: This value is recorded but never read by the runtime; see
+    /// <https://github.com/govcraft/acton-reactive/issues/7>.
     restart_limiter_config: Option<RestartLimiterConfig>,
 }
 
@@ -131,10 +135,17 @@ impl ActorConfig {
 
     /// Sets the restart policy for this actor when supervised.
     ///
-    /// The restart policy determines how the supervisor handles actor termination:
-    /// - [`RestartPolicy::Permanent`]: Always restart (except during parent shutdown)
-    /// - [`RestartPolicy::Temporary`]: Never restart
-    /// - [`RestartPolicy::Transient`]: Restart only on abnormal termination (panic, inbox closed)
+    /// The policy is delivered to the parent inside the
+    /// [`ChildTerminated`](crate::message::ChildTerminated) notification when this
+    /// actor terminates, so the parent's handler can decide whether to restart it:
+    /// - [`RestartPolicy::Permanent`]: Restart is warranted (except during parent shutdown)
+    /// - [`RestartPolicy::Temporary`]: Restart is never warranted
+    /// - [`RestartPolicy::Transient`]: Restart is warranted only on abnormal termination
+    ///   (panic, inbox closed)
+    ///
+    /// The framework itself does not restart actors automatically; the parent applies
+    /// the policy manually (typically via [`RestartPolicy::should_restart`] or
+    /// [`SupervisionStrategy::decide`]).
     ///
     /// # Arguments
     ///
@@ -203,21 +214,50 @@ impl ActorConfig {
         self.restart_policy
     }
 
-    /// Sets the supervision strategy for managing child actors.
+    /// Records a supervision strategy for this actor.
     ///
-    /// The supervision strategy determines how the supervisor handles child terminations:
-    /// - [`SupervisionStrategy::OneForOne`]: Restart only the failed child
-    /// - [`SupervisionStrategy::OneForAll`]: Restart all children when one fails
-    /// - [`SupervisionStrategy::RestForOne`]: Restart the failed child and all children started after it
+    /// **This method records intent only and has no runtime effect.** The framework
+    /// never reads the recorded strategy and never restarts child actors
+    /// automatically. When a supervised child terminates, the parent only receives
+    /// a [`ChildTerminated`](crate::message::ChildTerminated) notification; acting
+    /// on it is up to you.
+    ///
+    /// To apply a strategy, register a `mutate_on::<ChildTerminated>` handler on
+    /// the parent and call [`SupervisionStrategy::decide`] yourself:
+    ///
+    /// ```rust,ignore
+    /// use acton_reactive::prelude::*;
+    ///
+    /// let strategy = SupervisionStrategy::OneForOne;
+    /// supervisor.mutate_on::<ChildTerminated>(move |actor, ctx| {
+    ///     let notification = ctx.message().clone();
+    ///     match strategy.decide(&notification, 0) {
+    ///         SupervisionDecision::RestartChild => {
+    ///             // Re-create and re-supervise the failed child here.
+    ///         }
+    ///         _ => { /* NoRestart, RestartAll, RestartFrom, Escalate */ }
+    ///     }
+    ///     Reply::ready()
+    /// });
+    /// ```
+    ///
+    /// See <https://github.com/govcraft/acton-reactive/issues/7> for the status of
+    /// full supervision integration.
     ///
     /// # Arguments
     ///
-    /// * `strategy` - The supervision strategy to use for this actor.
+    /// * `strategy` - The supervision strategy to record for this actor.
     ///
     /// # Returns
     ///
     /// Returns `self` for method chaining.
     #[must_use]
+    #[deprecated(
+        note = "records intent only and has no runtime effect; the framework never restarts \
+                actors automatically. Register `mutate_on::<ChildTerminated>` on the parent and \
+                call `SupervisionStrategy::decide()` yourself. \
+                See https://github.com/govcraft/acton-reactive/issues/7"
+    )]
     pub const fn with_supervision_strategy(mut self, strategy: SupervisionStrategy) -> Self {
         self.supervision_strategy = strategy;
         self
@@ -229,16 +269,35 @@ impl ActorConfig {
         self.supervision_strategy
     }
 
-    /// Sets the restart limiter configuration for this actor.
+    /// Records a restart limiter configuration for this actor.
     ///
-    /// The restart limiter controls how frequently an actor can be restarted
-    /// and applies exponential backoff between restart attempts:
-    /// - Tracks restarts within a sliding time window
-    /// - Limits the maximum number of restarts within that window
-    /// - Applies exponential backoff delays between restarts
+    /// **This method records intent only and has no runtime effect.** The framework
+    /// never reads the recorded configuration and never restarts child actors
+    /// automatically, so no restart limiting or backoff is applied on your behalf.
     ///
-    /// When the restart limit is exceeded, the supervisor should escalate
-    /// the failure to its parent rather than continuing to restart.
+    /// To limit restarts manually, keep a [`RestartLimiter`](crate::actor::RestartLimiter)
+    /// in the supervising actor's state and consult it from a
+    /// `mutate_on::<ChildTerminated>` handler before restarting a child:
+    ///
+    /// ```rust,ignore
+    /// use acton_reactive::prelude::*;
+    ///
+    /// supervisor.mutate_on::<ChildTerminated>(|actor, _ctx| {
+    ///     match actor.model.limiter.can_restart() {
+    ///         Ok(()) => {
+    ///             let backoff = actor.model.limiter.record_restart();
+    ///             // Sleep for `backoff`, then re-create and re-supervise the child.
+    ///         }
+    ///         Err(exceeded) => {
+    ///             // Limit hit: stop restarting and escalate or alert instead.
+    ///         }
+    ///     }
+    ///     Reply::ready()
+    /// });
+    /// ```
+    ///
+    /// See <https://github.com/govcraft/acton-reactive/issues/7> for the status of
+    /// full supervision integration.
     ///
     /// # Arguments
     ///
@@ -248,16 +307,23 @@ impl ActorConfig {
     ///
     /// Returns `self` for method chaining.
     #[must_use]
+    #[deprecated(
+        note = "records intent only and has no runtime effect; the framework never reads this \
+                configuration. Keep a `RestartLimiter` in the supervising actor's state and \
+                consult it from a `mutate_on::<ChildTerminated>` handler. \
+                See https://github.com/govcraft/acton-reactive/issues/7"
+    )]
     pub const fn with_restart_limiter(mut self, config: RestartLimiterConfig) -> Self {
         self.restart_limiter_config = Some(config);
         self
     }
 
-    /// Returns the optional restart limiter configuration for this actor.
+    /// Returns the optional restart limiter configuration recorded for this actor.
     ///
-    /// Used by the supervision system when creating restart limiters for child actors.
+    /// Not yet read by the runtime; retained for the eventual supervision
+    /// integration tracked in <https://github.com/govcraft/acton-reactive/issues/7>.
     #[inline]
-    #[allow(dead_code)] // Will be used when supervision fully integrates restart limiting
+    #[allow(dead_code)] // Reserved for the supervision integration tracked in issue #7
     pub(crate) const fn restart_limiter_config(&self) -> Option<&RestartLimiterConfig> {
         self.restart_limiter_config.as_ref()
     }

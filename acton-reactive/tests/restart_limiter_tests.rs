@@ -200,8 +200,13 @@ async fn test_restart_limit_exceeded_display() {
     assert!(display.contains("60 seconds"));
 }
 
-/// Tests that `ActorConfig` can be configured with a restart limiter.
+/// Tests that `ActorConfig` still accepts a restart limiter configuration.
+///
+/// `with_restart_limiter` is deprecated (it records intent only and has no
+/// runtime effect; see <https://github.com/govcraft/acton-reactive/issues/7>),
+/// but it must keep compiling and running for existing callers.
 #[tokio::test]
+#[allow(deprecated)] // Intentionally exercises the deprecated builder method
 async fn test_actor_config_with_restart_limiter() -> anyhow::Result<()> {
     let _config = ActorConfig::new(Ern::with_root("worker")?, None, None)?
         .with_restart_limiter(RestartLimiterConfig {

@@ -14,12 +14,15 @@
  * limitations under that License.
  */
 
-//! Supervision strategies for managing actor restarts.
+//! Supervision strategies for deciding how to respond to child terminations.
 //!
-//! This module provides Erlang/OTP-style supervision strategies that determine
-//! how a supervisor should respond when one of its supervised child actors
-//! terminates. These strategies work in conjunction with [`RestartPolicy`] to
-//! provide comprehensive fault-tolerance capabilities.
+//! This module provides Erlang/OTP-style supervision strategies as *decision
+//! helpers*: given a [`ChildTerminated`] notification, a strategy tells a
+//! supervising actor which children it should restart. The framework itself
+//! does not restart actors automatically — it only delivers the notification
+//! to the parent, which applies the strategy manually in its own handler.
+//! These strategies work in conjunction with [`RestartPolicy`] to provide
+//! comprehensive fault-tolerance capabilities.
 //!
 //! # Strategies
 //!
@@ -32,32 +35,42 @@
 //! ```rust,ignore
 //! use acton_reactive::prelude::*;
 //!
-//! // Configure a supervisor with OneForOne strategy
-//! let supervisor_config = ActorConfig::new(
-//!     Ern::with_root("supervisor")?,
-//!     None,
-//!     None,
-//! )?
-//! .with_supervision_strategy(SupervisionStrategy::OneForOne);
+//! // Apply a strategy manually from the parent's ChildTerminated handler.
+//! let strategy = SupervisionStrategy::OneForOne;
+//! supervisor.mutate_on::<ChildTerminated>(move |actor, ctx| {
+//!     let notification = ctx.message().clone();
+//!     match strategy.decide(&notification, 0) {
+//!         SupervisionDecision::RestartChild => {
+//!             // Re-create and re-supervise the failed child here.
+//!         }
+//!         _ => { /* NoRestart, RestartAll, RestartFrom, Escalate */ }
+//!     }
+//!     Reply::ready()
+//! });
 //! ```
 
 use serde::{Deserialize, Serialize};
 
 use crate::message::ChildTerminated;
 
-/// Supervision strategy for managing child actor restarts.
+/// Supervision strategy for deciding which children to restart.
 ///
 /// When a supervised child actor terminates, the supervision strategy determines
 /// which children should be restarted (if any). This decision is made in
 /// conjunction with the child's [`RestartPolicy`].
+///
+/// A strategy is a decision helper, not an engine: the supervising actor calls
+/// [`SupervisionStrategy::decide`] from its own [`ChildTerminated`] handler and
+/// performs any restarts itself. The framework does not restart actors
+/// automatically.
 ///
 /// These strategies follow Erlang/OTP supervision patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum SupervisionStrategy {
     /// Restart only the terminated child actor.
     ///
-    /// When a child terminates, only that specific child is restarted
-    /// (if its restart policy allows). Other children are unaffected.
+    /// When a child terminates, the decision is to restart only that specific
+    /// child (if its restart policy allows). Other children are unaffected.
     ///
     /// This is the most common strategy and is appropriate when children
     /// are independent and their failures don't affect each other.
@@ -73,8 +86,8 @@ pub enum SupervisionStrategy {
     /// Restart all children when any child terminates.
     ///
     /// When any child terminates (and its restart policy allows a restart),
-    /// all children are stopped and restarted. This ensures all children
-    /// start from a consistent state.
+    /// the decision is to stop and restart all children. This ensures all
+    /// children start from a consistent state.
     ///
     /// This is appropriate when children are interdependent and one child's
     /// failure could leave others in an inconsistent state.
@@ -89,8 +102,8 @@ pub enum SupervisionStrategy {
     /// Restart the terminated child and all children started after it.
     ///
     /// When a child terminates (and its restart policy allows a restart),
-    /// that child and all children that were started after it are stopped
-    /// and restarted, in start order.
+    /// the decision is to stop and restart that child and all children that
+    /// were started after it, in start order.
     ///
     /// This is appropriate when children have sequential dependencies,
     /// where later children depend on earlier ones but not vice versa.

@@ -155,8 +155,13 @@ async fn test_requires_group_restart() {
     );
 }
 
-/// Tests that `ActorConfig` can be configured with a supervision strategy.
+/// Tests that `ActorConfig` still accepts a supervision strategy.
+///
+/// `with_supervision_strategy` is deprecated (it records intent only and has no
+/// runtime effect; see <https://github.com/govcraft/acton-reactive/issues/7>),
+/// but it must keep compiling and running for existing callers.
 #[tokio::test]
+#[allow(deprecated)] // Intentionally exercises the deprecated builder method
 async fn test_actor_config_with_supervision_strategy() -> anyhow::Result<()> {
     // Test that the builder method works (we can't check the value since it's pub(crate),
     // but we verify the builder pattern compiles and runs without error)
