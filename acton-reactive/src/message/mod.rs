@@ -49,7 +49,7 @@ pub use envelope::Envelope;
 pub use message_context::MessageContext;
 pub use message_error::MessageError;
 pub use subscribe_broker::SubscribeBroker;
-pub use unsubscribe_broker::UnsubscribeBroker;
+pub use unsubscribe_broker::{RemoveAllSubscriptions, RemoveSubscription};
 
 // --- Submodules ---
 
@@ -71,5 +71,5 @@ mod outbound_envelope;
 mod signal;
 /// Defines [`SubscribeBroker`] message.
 mod subscribe_broker;
-/// Defines [`UnsubscribeBroker`] message.
+/// Defines the [`RemoveSubscription`] and [`RemoveAllSubscriptions`] messages.
 mod unsubscribe_broker;

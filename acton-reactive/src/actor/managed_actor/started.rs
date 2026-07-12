@@ -31,7 +31,9 @@ use crate::common::{
     Envelope, FutureBoxReadOnlyOutcome, OutboundEnvelope, ReactorItem, ReactorMap,
     ReadOnlyHandlerError,
 };
-use crate::message::{BrokerRequestEnvelope, ChildTerminated, MessageAddress, SystemSignal};
+use crate::message::{
+    BrokerRequestEnvelope, ChildTerminated, MessageAddress, RemoveAllSubscriptions, SystemSignal,
+};
 use crate::traits::ActorHandleInterface;
 
 /// Type-state marker for a [`ManagedActor`] that is actively running and processing messages.
@@ -645,6 +647,24 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
 
         trace!("Message loop finished for actor: {}. Initiating final termination.", self.id());
         self.flush_read_only_handlers(&mut read_only_futures).await;
+
+        // Remove this actor from all broker subscriptions so subsequent broadcasts
+        // are no longer sent to its (now closing) inbox. Skipped when no live broker
+        // is reachable (e.g. the broker actor itself, or the broker already stopped).
+        //
+        // Note: this cleanup only runs on graceful shutdown. If a handler panic
+        // unwinds the actor task (with `catch-handler-panics` disabled), execution
+        // never reaches this point and the actor's subscriptions leak until the
+        // process exits. Routing panic terminations through this shutdown path is
+        // tracked by issue #11.
+        if !self.broker.outbox.is_closed() {
+            trace!("Unsubscribing actor {} from all broker subscriptions.", self.id());
+            let unsubscription = RemoveAllSubscriptions {
+                subscriber_id: self.id.clone(),
+            };
+            self.broker.send(unsubscription).await;
+        }
+
         terminate_children(&self.handle, self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
 

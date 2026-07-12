@@ -18,9 +18,9 @@ use std::any::TypeId;
 use std::future::Future;
 
 use async_trait::async_trait;
-use tracing::{error, instrument, trace, warn};
+use tracing::{error, instrument, trace};
 
-use crate::message::{SubscribeBroker, UnsubscribeBroker};
+use crate::message::{RemoveSubscription, SubscribeBroker};
 use crate::traits::subscriber::Subscriber;
 use crate::traits::{ActonMessage, ActorHandleInterface};
 
@@ -60,11 +60,16 @@ pub trait Subscribable: Send + Sync + 'static {
 
     /// Sends a request to unsubscribe the actor associated with this handle from messages of type `M`.
     ///
-    /// After unsubscribing, the actor will no longer receive broadcast messages of type `M`.
+    /// After the broker processes the request, the actor no longer receives broadcast
+    /// messages of type `M`. Other subscriptions held by the actor are unaffected. Note
+    /// that actors are also automatically unsubscribed from all message types when they
+    /// stop gracefully (until [issue #11](https://github.com/Govcraft/acton-reactive/issues/11)
+    /// lands, a handler panic that unwinds the actor task skips this cleanup).
     ///
-    /// Note: The default blanket implementation currently spawns a Tokio task to send the
-    /// unsubscribe request asynchronously. The `UnsubscribeBroker` message itself might be incomplete
-    /// in the current implementation (commented-out fields).
+    /// This method is fire-and-forget: it queues the removal request on a background
+    /// task and returns immediately. When subsequent operations must observe the
+    /// removal (for example, broadcasting again right away), use
+    /// [`unsubscribe_async`](Subscribable::unsubscribe_async) instead.
     ///
     /// # Type Parameters
     ///
@@ -77,13 +82,40 @@ pub trait Subscribable: Send + Sync + 'static {
     where
         // These bounds are requirements for *calling* the method, enforced by the blanket impl.
         Self: ActorHandleInterface + Subscriber;
+
+    /// Asynchronously unsubscribes the actor associated with this handle from messages of type `M`.
+    ///
+    /// Behaves like [`unsubscribe`](Subscribable::unsubscribe) but returns a `Future`
+    /// (mirroring [`subscribe`](Subscribable::subscribe)) so callers can await delivery
+    /// of the removal request to the broker. Because the broker processes its inbox in
+    /// order, a broadcast sent after this future completes can no longer be delivered
+    /// under the removed subscription.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M`: The concrete message type to unsubscribe from. Must implement [`ActonMessage`]
+    ///   and be `Send + Sync + 'static`.
+    ///
+    /// # Returns
+    ///
+    /// A `Future` that completes once the unsubscribe request has been sent to the broker.
+    ///
+    /// # Requirements
+    ///
+    /// The implementing type `Self` must also implement [`ActorHandleInterface`] and [`Subscriber`].
+    fn unsubscribe_async<M: ActonMessage + Send + Sync + 'static>(
+        &self,
+    ) -> impl Future<Output = ()> + Send + Sync + '_
+    where
+        // These bounds are requirements for *calling* the method, enforced by the blanket impl.
+        Self: ActorHandleInterface + Subscriber;
 }
 
 /// Blanket implementation of `Subscribable` for types implementing necessary traits.
 ///
 /// This implementation provides the `subscribe` and `unsubscribe` methods for any type `T`
 /// that implements [`ActorHandleInterface`] and [`Subscriber`]. It works by sending the
-/// appropriate internal messages ([`SubscribeBroker`] or [`UnsubscribeBroker`]) to the
+/// appropriate internal messages (`SubscribeBroker` or `RemoveSubscription`) to the
 /// broker obtained via the [`Subscriber::get_broker`] method.
 #[async_trait]
 impl<T> Subscribable for T
@@ -122,8 +154,7 @@ where
         }
     }
 
-    /// Spawns a task to send an [`UnsubscribeBroker`] message to the broker.
-    /// Note: The current `UnsubscribeBroker` message structure might be incomplete.
+    /// Spawns a task to send a `RemoveSubscription` message to the broker.
     #[instrument(skip(self), fields(message_type = std::any::type_name::<M>(), subscriber = %self.id()))]
     fn unsubscribe<M: ActonMessage>(&self)
     // No need for where clause here as it's enforced by the impl block's bounds
@@ -136,19 +167,50 @@ where
         trace!(type_id = ?type_id, subscriber = %subscriber_id, "Initiating unsubscribe request for type {}", type_name);
 
         if let Some(broker_handle) = broker_option {
-            // Create the unsubscribe message (currently seems incomplete based on commented fields).
-            let unsubscription = UnsubscribeBroker {
-                // ern: subscriber_id, // Assuming these fields will be added later
-                // message_type_id: type_id,
-                // subscriber_ref: self.clone_ref(),
+            // Create the removal message with the actor's handle as context.
+            let unsubscription = RemoveSubscription {
+                subscriber_id,
+                message_type_id: type_id,
+                subscriber_context: self.clone_ref(),
             };
             // Spawn a task to send the message asynchronously.
             tokio::spawn(async move {
-                trace!(broker = %broker_handle.id(), type_id = ?type_id, "Sending UnsubscribeBroker message");
+                trace!(broker = %broker_handle.id(), type_id = ?type_id, "Sending RemoveSubscription message");
                 broker_handle.send(unsubscription).await;
             });
         } else {
             error!(subscriber = %subscriber_id, message_type = %type_name, "Cannot unsubscribe: No broker found.");
+        }
+    }
+
+    /// Sends a `RemoveSubscription` message to the broker.
+    #[instrument(skip(self), fields(message_type = std::any::type_name::<M>(), subscriber = %self.id()))]
+    fn unsubscribe_async<M: ActonMessage + Send + Sync + 'static>(
+        &self,
+    ) -> impl Future<Output = ()> + Send + Sync + '_
+// No need for where clause here as it's enforced by the impl block's bounds
+    {
+        let subscriber_id = self.id();
+        let message_type_id = TypeId::of::<M>();
+        let message_type_name = std::any::type_name::<M>().to_string();
+        // Create the removal message with the actor's handle as context.
+        let unsubscription = RemoveSubscription {
+            subscriber_id,
+            message_type_id,
+            subscriber_context: self.clone_ref(), // Clone the handle
+        };
+        let broker_option = self.get_broker(); // Get Option<BrokerRef>
+
+        async move {
+            trace!(type_id = ?message_type_id, subscriber = %unsubscription.subscriber_id, "Sending unsubscribe request");
+            if let Some(broker_handle) = broker_option {
+                trace!(broker = %broker_handle.id(), "Sending RemoveSubscription message");
+                // Send the removal message to the broker.
+                broker_handle.send(unsubscription).await;
+            } else {
+                // Log an error if no broker is available.
+                error!(subscriber = %unsubscription.subscriber_id, message_type = %message_type_name, "Cannot unsubscribe: No broker found.");
+            }
         }
     }
 }

@@ -177,8 +177,35 @@ sequenceDiagram
 
 ---
 
-{% callout type="warning" title="Subscriptions last for the process lifetime" %}
-There is currently no working unsubscribe: the broker never removes entries from its subscriber map, including when an actor stops. Design subscribers to live as long as their subscriptions, or route broadcasts through a long-lived actor that forwards selectively.
+## Unsubscribing
+
+Actors can unsubscribe from message types:
+
+```rust
+handle.unsubscribe::<PriceUpdate>();
+```
+
+The call is fire-and-forget: it queues the removal request with the broker and
+returns immediately. When you need to know the request has reached the broker
+before continuing (for example, before broadcasting again in a test), use the
+awaitable variant:
+
+```rust
+handle.unsubscribe_async::<PriceUpdate>().await;
+```
+
+Either way, only the subscription for the given message type is removed; any
+other subscriptions held by the actor keep delivering.
+
+Actors automatically unsubscribe from everything when they stop, so stopped
+actors never linger in the broker's subscription registry.
+
+{% callout type="warning" title="Panics skip subscription cleanup" %}
+Automatic cleanup runs during graceful shutdown. If a message handler panics
+and panic-catching is disabled, the actor's task unwinds without reaching the
+cleanup step, so its subscriptions remain registered until the process exits.
+Routing panic terminations through the normal shutdown path is tracked by
+[issue #11](https://github.com/Govcraft/acton-reactive/issues/11).
 {% /callout %}
 
 ---

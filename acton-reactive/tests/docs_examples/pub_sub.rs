@@ -153,12 +153,7 @@ async fn test_price_feed_example() -> anyhow::Result<()> {
 /// Tests unsubscribing from messages.
 ///
 /// From: docs/pub-sub/page.md - "`Unsubscribing`"
-///
-/// NOTE: This test is ignored because the unsubscribe feature is not fully
-/// implemented in acton-reactive. The `UnsubscribeBroker` message has all its
-/// fields commented out. See: acton-reactive/src/message/unsubscribe_broker.rs
 #[acton_test]
-#[ignore = "unsubscribe feature not fully implemented"]
 async fn test_unsubscribing() -> anyhow::Result<()> {
     #[acton_actor]
     struct Subscriber {
@@ -193,7 +188,7 @@ async fn test_unsubscribing() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Unsubscribe
-    handle.unsubscribe::<Event>();
+    handle.unsubscribe_async::<Event>().await;
 
     // Second broadcast - should NOT receive
     broker.broadcast(Event).await;

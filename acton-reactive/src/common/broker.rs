@@ -26,7 +26,10 @@ use tracing::{instrument, trace};
 
 use crate::actor::{ActorConfig, Idle, ManagedActor};
 use crate::common::{ActorHandle, ActorRuntime, BrokerRef};
-use crate::message::{BrokerRequest, BrokerRequestEnvelope, SubscribeBroker};
+use crate::message::{
+    BrokerRequest, BrokerRequestEnvelope, RemoveAllSubscriptions, RemoveSubscription,
+    SubscribeBroker,
+};
 use crate::traits::ActorHandleInterface;
 
 #[cfg(feature = "ipc")]
@@ -43,8 +46,16 @@ use parking_lot::RwLock;
 /// to that message's type and forwards the message to them concurrently.
 ///
 /// Internally, the `Broker` runs as a specialized [`ManagedActor`] that handles
-/// [`SubscribeBroker`] messages to manage its subscription list and [`BrokerRequest`]
-/// messages to trigger broadcasts.
+/// [`SubscribeBroker`], `RemoveSubscription`, and `RemoveAllSubscriptions` messages
+/// to manage its subscription list and [`BrokerRequest`] messages to trigger broadcasts.
+/// Actors are removed from the subscription list explicitly via
+/// [`Subscribable::unsubscribe`](crate::traits::Subscribable::unsubscribe) (or its
+/// awaitable variant
+/// [`Subscribable::unsubscribe_async`](crate::traits::Subscribable::unsubscribe_async))
+/// or automatically when they stop gracefully. A handler panic that unwinds the actor
+/// task skips this automatic cleanup until
+/// [issue #11](https://github.com/Govcraft/acton-reactive/issues/11) routes panic
+/// terminations through the normal shutdown path.
 ///
 /// It also dereferences ([`Deref`] and [`DerefMut`]) to its underlying [`ActorHandle`],
 /// allowing direct use of handle methods where appropriate.
@@ -94,8 +105,15 @@ impl Broker {
     /// Initializes the broker actor and starts its processing loop.
     ///
     /// This internal function creates the `ManagedActor` for the broker, configures
-    /// its message handlers for `BrokerRequest` (triggering `broadcast`) and
-    /// `SubscribeBroker` (adding subscribers), and starts the actor.
+    /// its message handlers for `BrokerRequest` (triggering `broadcast`),
+    /// `SubscribeBroker` (adding subscribers), `RemoveSubscription` (removing a
+    /// single subscription), and `RemoveAllSubscriptions` (removing an actor from
+    /// all subscriptions), and starts the actor.
+    ///
+    /// The subscription-bookkeeping handlers are registered with `mutate_on` so the
+    /// broker processes them sequentially, in arrival order. This makes the ordering
+    /// between subscribe, unsubscribe, and broadcast requests contractual rather than
+    /// dependent on how concurrent read-only handlers happen to be drained.
     ///
     /// Returns the `ActorHandle` of the initialized broker actor.
     #[instrument]
@@ -144,7 +162,7 @@ impl Broker {
                     Self::forward_to_ipc(&ipc_sub_mgr, &ipc_type_reg, &message_to_broadcast);
                 })
             })
-            .act_on::<SubscribeBroker>(|actor, event| {
+            .mutate_on::<SubscribeBroker>(|actor, event| {
                 // Handler for subscription requests.
                 let subscription_msg = event.message.clone();
                 let type_id = subscription_msg.message_type_id;
@@ -160,6 +178,35 @@ impl Broker {
                         .entry(type_id)
                         .or_default() // Get the HashSet or create a new one
                         .insert((subscriber_id, subscriber_handle)); // Moved, no clone
+                })
+            })
+            .mutate_on::<RemoveSubscription>(|actor, event| {
+                // Handler for single-subscription removal requests.
+                let unsubscription_msg = event.message.clone();
+                let type_id = unsubscription_msg.message_type_id;
+                let subscriber_handle = unsubscription_msg.subscriber_context.clone();
+                let subscriber_id = unsubscription_msg.subscriber_id;
+                trace!(subscriber = %subscriber_id, message_type = ?type_id, "Broker received RemoveSubscription");
+
+                let subscribers_map = actor.model.subscribers.clone(); // Clone Arc<DashMap>
+                Box::pin(async move {
+                    Self::remove_subscription(
+                        &subscribers_map,
+                        type_id,
+                        &(subscriber_id.clone(), subscriber_handle),
+                    );
+                    trace!(subscriber = %subscriber_id, message_type = ?type_id, "Subscription removed");
+                })
+            })
+            .mutate_on::<RemoveAllSubscriptions>(|actor, event| {
+                // Handler for full removal requests, sent automatically when an actor stops.
+                let subscriber_id = event.message.subscriber_id.clone();
+                trace!(subscriber = %subscriber_id, "Broker received RemoveAllSubscriptions");
+
+                let subscribers_map = actor.model.subscribers.clone(); // Clone Arc<DashMap>
+                Box::pin(async move {
+                    Self::remove_all_subscriptions(&subscribers_map, &subscriber_id);
+                    trace!(subscriber = %subscriber_id, "All subscriptions removed");
                 })
             });
 
@@ -227,6 +274,47 @@ impl Broker {
         }
     }
 
+    /// Removes a single subscription entry from the subscriber map.
+    ///
+    /// Looks up the subscriber set for `type_id` and removes the matching
+    /// `(Ern, ActorHandle)` entry. If the set becomes empty as a result, the
+    /// map entry for `type_id` is removed entirely so the map does not
+    /// accumulate empty sets over time.
+    ///
+    /// # Arguments
+    ///
+    /// * `subscribers`: The subscriber map to remove the entry from.
+    /// * `type_id`: The `TypeId` of the message type being unsubscribed.
+    /// * `subscriber`: The `(Ern, ActorHandle)` entry identifying the subscriber.
+    fn remove_subscription(
+        subscribers: &Subscribers,
+        type_id: TypeId,
+        subscriber: &(Ern, ActorHandle),
+    ) {
+        if let Some(mut entry) = subscribers.get_mut(&type_id) {
+            entry.value_mut().remove(subscriber);
+        }
+        // Drop the now-empty set (the guard above is released before this call).
+        subscribers.remove_if(&type_id, |_, set| set.is_empty());
+    }
+
+    /// Removes an actor from every subscriber set in the map.
+    ///
+    /// Used during actor shutdown to ensure a stopped actor's handle no longer
+    /// receives broadcasts. Any subscriber sets left empty by the removal are
+    /// dropped from the map entirely.
+    ///
+    /// # Arguments
+    ///
+    /// * `subscribers`: The subscriber map to remove the actor from.
+    /// * `subscriber_id`: The `Ern` identifying the actor to remove.
+    fn remove_all_subscriptions(subscribers: &Subscribers, subscriber_id: &Ern) {
+        subscribers.retain(|_, set| {
+            set.retain(|(id, _)| id != subscriber_id);
+            !set.is_empty()
+        });
+    }
+
     /// Forwards a broadcast message to IPC clients subscribed to this message type.
     ///
     /// This method checks if there's an active IPC subscription manager and, if so,
@@ -272,5 +360,92 @@ impl Broker {
         let notification = IpcPushNotification::new(type_name.clone(), None, payload_json);
         sub_mgr.forward_to_subscribers(&notification);
         trace!(type_name, "Forwarded broadcast to IPC subscribers");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Creates an `ActorHandle` with the given identifier for use as a test subscriber.
+    fn handle_with_id(id: &Ern) -> ActorHandle {
+        let (outbox, _inbox) = tokio::sync::mpsc::channel(8);
+        ActorHandle::new(id.clone(), outbox)
+    }
+
+    /// Creates a fresh, unique `Ern` with the given root name.
+    fn new_id(root: &str) -> Ern {
+        Ern::with_root(root).expect("valid ERN root")
+    }
+
+    /// Inserts a subscriber entry for the given type into the map.
+    fn insert_subscriber(subscribers: &Subscribers, type_id: TypeId, id: &Ern) {
+        subscribers
+            .entry(type_id)
+            .or_default()
+            .insert((id.clone(), handle_with_id(id)));
+    }
+
+    #[test]
+    fn remove_subscription_removes_only_the_matching_entry() {
+        let subscribers: Subscribers = Arc::default();
+        let type_id = TypeId::of::<u32>();
+        let first_id = new_id("first");
+        let second_id = new_id("second");
+        insert_subscriber(&subscribers, type_id, &first_id);
+        insert_subscriber(&subscribers, type_id, &second_id);
+
+        Broker::remove_subscription(
+            &subscribers,
+            type_id,
+            &(first_id.clone(), handle_with_id(&first_id)),
+        );
+
+        let remaining = subscribers.get(&type_id).expect("set should remain");
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining.iter().all(|(id, _)| id == &second_id));
+        drop(remaining);
+    }
+
+    #[test]
+    fn remove_subscription_drops_empty_sets() {
+        let subscribers: Subscribers = Arc::default();
+        let type_id = TypeId::of::<u32>();
+        let subscriber_id = new_id("solo");
+        insert_subscriber(&subscribers, type_id, &subscriber_id);
+
+        Broker::remove_subscription(
+            &subscribers,
+            type_id,
+            &(subscriber_id.clone(), handle_with_id(&subscriber_id)),
+        );
+
+        assert!(
+            !subscribers.contains_key(&type_id),
+            "empty subscriber sets should be removed from the map"
+        );
+    }
+
+    #[test]
+    fn remove_all_subscriptions_removes_actor_from_every_type() {
+        let subscribers: Subscribers = Arc::default();
+        let first_type = TypeId::of::<u32>();
+        let second_type = TypeId::of::<String>();
+        let stopping_id = new_id("stopping");
+        let surviving_id = new_id("surviving");
+        insert_subscriber(&subscribers, first_type, &stopping_id);
+        insert_subscriber(&subscribers, second_type, &stopping_id);
+        insert_subscriber(&subscribers, second_type, &surviving_id);
+
+        Broker::remove_all_subscriptions(&subscribers, &stopping_id);
+
+        assert!(
+            !subscribers.contains_key(&first_type),
+            "sets left empty by the removal should be dropped"
+        );
+        let remaining = subscribers.get(&second_type).expect("set should remain");
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining.iter().all(|(id, _)| id == &surviving_id));
+        drop(remaining);
     }
 }

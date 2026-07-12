@@ -79,6 +79,10 @@ builder.mutate_on::<Event>(|actor, envelope| {
 });
 builder.handle().subscribe::<Event>().await;
 let handle = builder.start().await;
+
+// Stop receiving Event broadcasts (automatic on actor stop);
+// use unsubscribe_async::<Event>().await to await delivery to the broker
+handle.unsubscribe::<Event>();
 ```
 
 ---

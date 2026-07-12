@@ -91,7 +91,8 @@ handle.stop().await.ok();
 | `broadcast(msg).await` | Publish to the broker for all subscribers |
 | `stop().await` | Stop the actor |
 | `subscribe::<M>().await` | Subscribe to broadcast messages |
-| `unsubscribe::<M>()` | Unsubscribe from broadcast messages |
+| `unsubscribe::<M>()` | Unsubscribe from broadcast messages (fire-and-forget) |
+| `unsubscribe_async::<M>().await` | Unsubscribe, awaiting delivery of the request to the broker |
 | `reply_address()` | Get this actor's address, for use as a return address |
 | `create_envelope(recipient)` | Create an envelope **from** this actor **to** `recipient` |
 | `supervise(child).await` | Start a child and register it under this actor |
