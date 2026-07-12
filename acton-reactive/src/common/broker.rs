@@ -52,10 +52,9 @@ use parking_lot::RwLock;
 /// [`Subscribable::unsubscribe`](crate::traits::Subscribable::unsubscribe) (or its
 /// awaitable variant
 /// [`Subscribable::unsubscribe_async`](crate::traits::Subscribable::unsubscribe_async))
-/// or automatically when they stop gracefully. A handler panic that unwinds the actor
-/// task skips this automatic cleanup until
-/// [issue #11](https://github.com/Govcraft/acton-reactive/issues/11) routes panic
-/// terminations through the normal shutdown path.
+/// or automatically when they stop. The automatic cleanup covers every termination
+/// path, including panic terminations when the `catch-handler-panics` feature is
+/// disabled.
 ///
 /// It also dereferences ([`Deref`] and [`DerefMut`]) to its underlying [`ActorHandle`],
 /// allowing direct use of handle methods where appropriate.

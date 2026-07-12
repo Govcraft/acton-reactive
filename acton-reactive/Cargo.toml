@@ -45,7 +45,8 @@ default = ["catch-handler-panics"]
 ## Wraps every handler dispatch in `catch_unwind` so that a panicking handler
 ## cannot crash the actor task. Enabled by default for safety; disable for
 ## production workloads with well-tested handlers to eliminate the (small)
-## overhead.
+## overhead. When disabled, a handler panic terminates the actor cleanly and
+## its parent is notified with `TerminationReason::Panic`.
 catch-handler-panics = []
 ## IPC (Inter-Process Communication) support for external process messaging.
 ##

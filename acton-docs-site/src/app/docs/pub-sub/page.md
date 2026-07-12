@@ -200,12 +200,12 @@ other subscriptions held by the actor keep delivering.
 Actors automatically unsubscribe from everything when they stop, so stopped
 actors never linger in the broker's subscription registry.
 
-{% callout type="warning" title="Panics skip subscription cleanup" %}
-Automatic cleanup runs during graceful shutdown. If a message handler panics
-and panic-catching is disabled, the actor's task unwinds without reaching the
-cleanup step, so its subscriptions remain registered until the process exits.
-Routing panic terminations through the normal shutdown path is tracked by
-[issue #11](https://github.com/Govcraft/acton-reactive/issues/11).
+{% callout type="note" title="Cleanup covers panics too" %}
+Automatic cleanup runs on every termination path. With the default
+`catch-handler-panics` feature a panicking handler never terminates the actor
+in the first place; with the feature disabled, a handler panic terminates the
+actor through the normal shutdown path, which removes its subscriptions before
+the parent is notified.
 {% /callout %}
 
 ---

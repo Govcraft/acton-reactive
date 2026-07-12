@@ -63,8 +63,8 @@ pub trait Subscribable: Send + Sync + 'static {
     /// After the broker processes the request, the actor no longer receives broadcast
     /// messages of type `M`. Other subscriptions held by the actor are unaffected. Note
     /// that actors are also automatically unsubscribed from all message types when they
-    /// stop gracefully (until [issue #11](https://github.com/Govcraft/acton-reactive/issues/11)
-    /// lands, a handler panic that unwinds the actor task skips this cleanup).
+    /// stop — on every termination path, including panic terminations when the
+    /// `catch-handler-panics` feature is disabled.
     ///
     /// This method is fire-and-forget: it queues the removal request on a background
     /// task and returns immediately. When subsequent operations must observe the

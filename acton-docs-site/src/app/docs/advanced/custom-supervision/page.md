@@ -185,7 +185,7 @@ pub enum TerminationReason {
     /// Normal graceful shutdown via `SystemSignal::Terminate`
     Normal,
 
-    /// Reserved — see the note below. Not currently produced by the runtime.
+    /// Actor panicked (only with `catch-handler-panics` disabled — see below).
     Panic(String),
 
     /// Actor inbox closed unexpectedly (all handles dropped)
@@ -196,10 +196,11 @@ pub enum TerminationReason {
 }
 ```
 
-{% callout type="note" title="Panic is reserved and not currently emitted" %}
-The runtime only produces `Normal`, `InboxClosed`, and `ParentShutdown`. With the default `catch-handler-panics` feature, a panicking handler is caught, logged, and **the actor keeps running** — so it never terminates and never reports `Panic`.
+{% callout type="note" title="When is Panic produced?" %}
+Whether a handler panic produces `TerminationReason::Panic` depends on the `catch-handler-panics` feature:
 
-Keep a `Panic(_)` arm for forward compatibility if you like, but don't build recovery logic that depends on it firing. To react to failures, return errors from `try_mutate_on` / `try_act_on` and handle them with `on_error` instead.
+- **Enabled (default)**: the panic is caught at the handler dispatch site and logged, and the actor keeps running. No termination occurs, so no `ChildTerminated` notification is sent. To react to failures in this mode, return errors from `try_mutate_on` / `try_act_on` and handle them with `on_error`.
+- **Disabled** (`default-features = false`): a handler panic terminates the actor cleanly — its broker subscriptions are removed, its children are stopped — and its parent receives `ChildTerminated` with `TerminationReason::Panic` carrying the panic message. The notification is guaranteed: even if the `after_stop` hook panics during cleanup, the parent is still notified. Panics in `after_start` and `before_stop` report the same way; a panic in `before_start` propagates to the `start()` caller instead.
 {% /callout %}
 
 ### Using Termination Reasons
@@ -220,7 +221,7 @@ supervisor.mutate_on::<ChildTerminated>(|actor, ctx| {
             tracing::debug!("Child stopped due to parent shutdown");
         }
         TerminationReason::Panic(msg) => {
-            // Reserved; not currently produced by the runtime
+            // Only produced with catch-handler-panics disabled
             tracing::error!("Child panicked: {}", msg);
         }
     }
@@ -448,7 +449,7 @@ pipeline.mutate_on::<ChildTerminated>(|actor, ctx| {
 5. **Monitor restart patterns** for systemic issues
 6. **Fail gracefully** when limits are exceeded (alert, degrade, escalate)
 7. **Keep state external** so restarts can recover — actors always start from `Default`
-8. **Don't wait for panics** — they're caught by default and never terminate an actor. Use `try_mutate_on` + `on_error` for expected failures.
+8. **Don't wait for panics** — with the default `catch-handler-panics` feature they're caught and never terminate an actor (disable the feature if you want panics to terminate and notify the parent with `Panic`). Use `try_mutate_on` + `on_error` for expected failures.
 
 ---
 

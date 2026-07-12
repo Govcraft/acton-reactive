@@ -15,13 +15,11 @@
  */
 
 use std::fmt::Debug;
-#[cfg(feature = "catch-handler-panics")]
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
-#[cfg(feature = "catch-handler-panics")]
 use futures::FutureExt;
 use tracing::{error, instrument, trace};
 
@@ -48,7 +46,6 @@ use crate::traits::ActorHandleInterface;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Started;
 
-#[cfg(feature = "catch-handler-panics")]
 mod panic_helpers {
     use std::any::Any;
 
@@ -68,6 +65,7 @@ mod panic_helpers {
     }
 
     /// Logs a panic that occurred in a handler.
+    #[cfg(feature = "catch-handler-panics")]
     pub(super) fn log_handler_panic(
         actor_id: &acton_ern::Ern,
         message_type_id: std::any::TypeId,
@@ -84,6 +82,7 @@ mod panic_helpers {
     }
 
     /// Logs a panic that occurred in an error handler.
+    #[cfg(feature = "catch-handler-panics")]
     pub(super) fn log_error_handler_panic(
         actor_id: &acton_ern::Ern,
         message_type_id: std::any::TypeId,
@@ -102,6 +101,7 @@ mod panic_helpers {
     }
 
     /// Logs a panic that occurred in a lifecycle hook.
+    #[cfg(feature = "catch-handler-panics")]
     pub(super) fn log_lifecycle_panic(
         actor_id: &acton_ern::Ern,
         panic_payload: &Box<dyn Any + Send>,
@@ -112,10 +112,9 @@ mod panic_helpers {
     }
 }
 
+use panic_helpers::extract_panic_message;
 #[cfg(feature = "catch-handler-panics")]
-use panic_helpers::{
-    extract_panic_message, log_error_handler_panic, log_handler_panic, log_lifecycle_panic,
-};
+use panic_helpers::{log_error_handler_panic, log_handler_panic, log_lifecycle_panic};
 
 /// Runs a lifecycle hook with optional panic protection.
 /// Uses two-layer `catch_unwind` because hooks take `&self` (shared ref), which
@@ -568,6 +567,113 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         mutable_reactors: ReactorMap<Actor>,
         read_only_reactors: ReactorMap<Actor>,
     ) {
+        // With `catch-handler-panics` enabled, panics are caught (and logged) at each
+        // handler dispatch site, so the message loop itself cannot unwind and the
+        // actor keeps running after a panicking handler.
+        #[cfg(feature = "catch-handler-panics")]
+        let termination_reason = self
+            .run_message_loop(&mutable_reactors, &read_only_reactors)
+            .await;
+
+        // Without `catch-handler-panics`, a panicking handler unwinds the message
+        // loop. Catch it here, at the actor-task boundary, so the actor terminates
+        // cleanly and its parent is notified with `TerminationReason::Panic`.
+        //
+        // `AssertUnwindSafe` is sound here because the actor never processes another
+        // message after the catch: only the shutdown path below runs (broker
+        // cleanup, terminate children, `after_stop` hook, parent notification) and
+        // then the task exits, dropping the actor state. The one piece of user code
+        // that still observes the post-panic state is the `after_stop` hook — see
+        // the cleanup guard below, which keeps a panic there from swallowing the
+        // parent notification.
+        #[cfg(not(feature = "catch-handler-panics"))]
+        let termination_reason = match AssertUnwindSafe(
+            self.run_message_loop(&mutable_reactors, &read_only_reactors),
+        )
+        .catch_unwind()
+        .await
+        {
+            Ok(reason) => reason,
+            Err(panic_payload) => {
+                let panic_msg = extract_panic_message(&panic_payload);
+                error!(
+                    actor_id = %self.id(),
+                    panic_message = %panic_msg,
+                    "Actor terminated due to panic in message handler"
+                );
+                TerminationReason::Panic(panic_msg)
+            }
+        };
+
+        trace!("Message loop finished for actor: {}. Initiating final termination.", self.id());
+
+        // The cleanup runs user code (`after_stop`) against whatever state the
+        // terminated actor was left in — after a caught handler panic, that
+        // includes state the handler abandoned mid-mutation. Guard the whole
+        // cleanup so a second panic there cannot swallow the parent notification:
+        // the notification below is sent regardless, a handler panic's reason is
+        // preserved over a subsequent cleanup panic, and a cleanup panic during an
+        // otherwise clean termination is reported as `Panic` itself.
+        #[cfg(not(feature = "catch-handler-panics"))]
+        let termination_reason = match AssertUnwindSafe(self.shutdown_cleanup())
+            .catch_unwind()
+            .await
+        {
+            Ok(()) => termination_reason,
+            Err(panic_payload) => {
+                let panic_msg = extract_panic_message(&panic_payload);
+                error!(
+                    actor_id = %self.id(),
+                    panic_message = %panic_msg,
+                    "Panic during actor shutdown cleanup; parent notification is still sent"
+                );
+                if matches!(termination_reason, TerminationReason::Panic(_)) {
+                    termination_reason
+                } else {
+                    TerminationReason::Panic(panic_msg)
+                }
+            }
+        };
+
+        // With `catch-handler-panics` enabled, `run_lifecycle_hook!` already
+        // catches and logs hook panics, so the cleanup cannot unwind.
+        #[cfg(feature = "catch-handler-panics")]
+        self.shutdown_cleanup().await;
+
+        // Notify parent of termination if we have a parent
+        // We extract everything we need before the await to avoid holding &self across await
+        if let Some(parent) = &self.parent {
+            let notification = ChildTerminated::new(
+                self.id.clone(),
+                termination_reason,
+                self.restart_policy,
+            );
+
+            trace!(
+                "Notifying parent {} of child {} termination: {:?}",
+                parent.id(),
+                self.id(),
+                notification
+            );
+
+            // Clone the parent handle to avoid borrowing self across await
+            let parent_clone = parent.clone();
+            parent_clone.send(notification).await;
+        }
+
+        trace!("Actor {} stopped.", self.id());
+    }
+
+    /// Runs the actor's message loop until it terminates, returning the reason.
+    ///
+    /// Encapsulating the loop lets [`wake`](Self::wake) wrap it in `catch_unwind`
+    /// when `catch-handler-panics` is disabled, so a panicking handler still
+    /// produces a parent notification.
+    async fn run_message_loop(
+        &mut self,
+        mutable_reactors: &ReactorMap<Actor>,
+        read_only_reactors: &ReactorMap<Actor>,
+    ) -> TerminationReason {
         run_lifecycle_hook!(self, after_start, "after_start");
         assert!(
             self.cancellation_token.is_some(),
@@ -645,18 +751,27 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             }
         }
 
-        trace!("Message loop finished for actor: {}. Initiating final termination.", self.id());
+        // Drain any in-flight read-only handlers (dispatching their collected
+        // errors) before reporting the reason.
         self.flush_read_only_handlers(&mut read_only_futures).await;
+
+        termination_reason
+    }
+
+    /// Final cleanup shared by every termination path: purge this actor's broker
+    /// subscriptions, stop its children, and run the `after_stop` hook.
+    ///
+    /// With `catch-handler-panics` disabled this also runs after a panic
+    /// termination, so a panicked actor's broker subscriptions do not leak.
+    async fn shutdown_cleanup(&mut self) {
+        // Stop accepting new messages on every termination path. The graceful
+        // path has already closed the inbox; closing again is a no-op, but the
+        // panic and cancellation paths reach here with it still open.
+        self.inbox.close();
 
         // Remove this actor from all broker subscriptions so subsequent broadcasts
         // are no longer sent to its (now closing) inbox. Skipped when no live broker
         // is reachable (e.g. the broker actor itself, or the broker already stopped).
-        //
-        // Note: this cleanup only runs on graceful shutdown. If a handler panic
-        // unwinds the actor task (with `catch-handler-panics` disabled), execution
-        // never reaches this point and the actor's subscriptions leak until the
-        // process exits. Routing panic terminations through this shutdown path is
-        // tracked by issue #11.
         if !self.broker.outbox.is_closed() {
             trace!("Unsubscribing actor {} from all broker subscriptions.", self.id());
             let unsubscription = RemoveAllSubscriptions {
@@ -667,29 +782,6 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
 
         terminate_children(&self.handle, self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
-
-        // Notify parent of termination if we have a parent
-        // We extract everything we need before the await to avoid holding &self across await
-        if let Some(parent) = &self.parent {
-            let notification = ChildTerminated::new(
-                self.id.clone(),
-                termination_reason,
-                self.restart_policy,
-            );
-
-            trace!(
-                "Notifying parent {} of child {} termination: {:?}",
-                parent.id(),
-                self.id(),
-                notification
-            );
-
-            // Clone the parent handle to avoid borrowing self across await
-            let parent_clone = parent.clone();
-            parent_clone.send(notification).await;
-        }
-
-        trace!("Actor {} stopped.", self.id());
     }
 }
 

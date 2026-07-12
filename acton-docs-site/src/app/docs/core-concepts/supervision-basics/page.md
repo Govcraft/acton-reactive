@@ -60,7 +60,7 @@ When a child actor terminates:
 1. **The child stops** processing messages
 2. **The parent is notified** via a `ChildTerminated` message (if the child was created with a parent reference) containing:
    - Which child terminated (`child_id`)
-   - Why it terminated (`TerminationReason`: `Normal`, `InboxClosed`, `ParentShutdown`, ...)
+   - Why it terminated (`TerminationReason`: `Normal`, `InboxClosed`, `ParentShutdown`, or — with `catch-handler-panics` disabled — `Panic`)
    - The child's restart policy
 3. **Your parent actor decides what to do** — register a `mutate_on::<ChildTerminated>` handler and recreate the child, escalate, or move on. `SupervisionStrategy::decide()` turns the notification into a `SupervisionDecision` for you, but acting on it is your code's job.
 4. **Children stop** when their parent stops (cascading shutdown)
@@ -79,6 +79,13 @@ parent.mutate_on::<ChildTerminated>(|actor, ctx| {
 ```
 
 This gives you fine-grained control over failure recovery.
+
+{% callout type="note" title="Panics and the catch-handler-panics feature" %}
+How a handler panic is reported depends on the `catch-handler-panics` feature:
+
+- **Enabled (default)**: the panic is caught and logged and the actor keeps running — it does not terminate, so no `ChildTerminated` notification is sent.
+- **Disabled** (`default-features = false`): a handler panic terminates the actor and its parent is notified with `TerminationReason::Panic` carrying the panic message, so restart policies like `Transient` can react to it.
+{% /callout %}
 
 ---
 
@@ -141,17 +148,13 @@ Should never be restarted when it terminates.
 
 ### Transient
 
-Should be restarted only on abnormal termination (e.g., an unexpectedly closed inbox), not on normal shutdown.
+Should be restarted only on abnormal termination (a panic with `catch-handler-panics` disabled, or an unexpectedly closed inbox), not on normal shutdown.
 
 ```rust
 .with_restart_policy(RestartPolicy::Transient)
 ```
 
 **Use for**: Workers that may complete normally but should restart on unexpected failures.
-
-{% callout type="note" title="Panics don't terminate actors by default" %}
-With the default `catch-handler-panics` feature enabled, a panicking handler is caught and logged and the actor keeps running — a panic doesn't trigger the supervision flow at all.
-{% /callout %}
 
 ---
 

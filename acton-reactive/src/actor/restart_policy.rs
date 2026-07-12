@@ -77,9 +77,22 @@ pub enum TerminationReason {
     /// The actor received a shutdown signal and terminated cleanly.
     Normal,
 
-    /// Actor panicked during message handling or lifecycle hook.
+    /// Actor panicked during message handling or a lifecycle hook.
     ///
-    /// The panic was caught and the actor terminated abnormally.
+    /// Produced only when the `catch-handler-panics` feature is **disabled**:
+    /// the panic unwinds the actor task, is caught at the task boundary, and
+    /// the actor terminates abnormally, notifying its parent with this reason.
+    /// Panics in message handlers and in the `after_start` / `before_stop`
+    /// hooks report this way; a panic during shutdown cleanup (including the
+    /// `after_stop` hook) also produces this reason, unless a handler panic
+    /// already set one, in which case the original message is preserved. The
+    /// parent notification is sent in every case. A panic in `before_start`
+    /// instead propagates to the `start()` caller, since the actor task has
+    /// not been spawned yet.
+    ///
+    /// With the feature **enabled** (the default), handler panics are caught
+    /// and logged at each dispatch site and the actor keeps running, so no
+    /// termination occurs and this variant is not produced.
     /// The string contains the panic message if available.
     Panic(String),
 
