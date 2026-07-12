@@ -9,6 +9,15 @@
     "lint": "next lint"
   },
   "browserslist": "defaults, not ie <= 11",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp",
+      "unrs-resolver"
+    ],
+    "overrides": {
+      "postcss@<8.5.10": ">=8.5.10"
+    }
+  },
   "dependencies": {
     "@algolia/autocomplete-core": "^1.19.2",
     "@headlessui/react": "^2.2.6",
