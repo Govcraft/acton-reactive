@@ -5,6 +5,26 @@ description: Strategies for testing actor-based code.
 
 Actors are inherently testable. Their message-based interface makes it clear what inputs you can send and what behaviors to verify.
 
+## The acton_test Helper
+
+The workspace ships a companion crate, `acton_test`, which acton-reactive's own test suite uses. Its `#[acton_test]` attribute runs your async test on a Tokio runtime and installs a panic hook that captures panics from spawned actor tasks, so a panicking handler fails the test with the original message and location instead of going unnoticed.
+
+```toml
+[dev-dependencies]
+acton_test = "8"
+```
+
+```rust
+use acton_test::prelude::*;
+
+#[acton_test]
+async fn test_counter_increments() {
+    // test body as usual
+}
+```
+
+Plain `#[tokio::test]` also works — the examples below use it — but `#[acton_test]` gives better failure reporting when actors panic.
+
 ## Basic Test Setup
 
 Each test creates its own runtime:
@@ -268,7 +288,7 @@ async fn test_two() {
 
 ## Summary
 
-- Use `#[tokio::test]` for async tests
+- Use `#[acton_test]` (or plain `#[tokio::test]`) for async tests
 - Each test creates its own `ActorRuntime`
 - Use probe actors with atomic counters to verify responses
 - Create helper functions for common setup

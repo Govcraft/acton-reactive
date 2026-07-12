@@ -17,7 +17,7 @@ Acton provides six handler types to cover different combinations of state access
 | `mutate_on` | Mutable | No | Sequential | Yes |
 | `mutate_on_sync` | Mutable | No | Sequential | No |
 | `act_on` | Read-only | No | Concurrent | Yes |
-| `act_on_sync` | Read-only | No | Concurrent | No |
+| `act_on_sync` | Read-only | No | Inline (serial) | No |
 | `try_mutate_on` | Mutable | Yes | Sequential | Yes |
 | `try_act_on` | Read-only | Yes | Concurrent | Yes |
 
@@ -170,7 +170,7 @@ actor.act_on_sync::<GetStatus>(|actor, ctx| {
 The maximum concurrent handlers is configurable:
 
 ```toml
-# config.toml
+# ~/.config/acton/config.toml
 [limits]
 concurrent_handlers_high_water_mark = 100
 ```
@@ -265,14 +265,14 @@ actor.try_act_on::<CheckCache>(|actor, ctx| {
 **Characteristics:**
 - Read-only access with error handling
 - Concurrent execution (like `act_on`)
-- Requires error handler registration
+- Errors are logged and dropped — `on_error` handlers do **not** fire for `try_act_on`
 - Use for fallible queries
 
 ---
 
 ## Error Handler Registration
 
-When using `try_*` handlers, register error handlers with `on_error`:
+For `try_mutate_on` handlers, register error handlers with `on_error`. (Errors from `try_act_on` are logged and dropped; `on_error` does not apply to them.)
 
 ```rust
 // Define error type
@@ -419,6 +419,5 @@ struct Increment;  // Sending this 1000 times
 
 ## Next Steps
 
-- [Replies & Context](/docs/replies-and-context) - Full reply and context API
-- [Error Handling](/docs/error-handling) - Comprehensive error handling patterns
-- [Request-Response](/docs/request-response) - Complex coordination patterns
+- [Error Handling](/docs/building-apps/error-handling) - Comprehensive error handling patterns
+- [Request-Response](/docs/building-apps/request-response) - Complex coordination patterns

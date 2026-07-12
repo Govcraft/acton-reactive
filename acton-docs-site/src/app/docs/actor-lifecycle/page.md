@@ -18,15 +18,16 @@ flowchart TD
     B --> C["Configure: mutate_on, act_on, hooks"]
     C --> D["start().await"]
     D --> E["before_start()"]
-    E --> F["Message Loop Begins"]
-    F --> G["after_start()"]
+    E --> F["after_start()"]
+    F --> G["Message Loop Begins"]
     G --> H{"Processing Messages"}
     H --> H
     H --> I["stop() or shutdown_all()"]
     I --> J["before_stop()"]
     J --> K["Message Loop Ends"]
-    K --> L["after_stop()"]
-    L --> M["Actor Terminated"]
+    K --> L["Children stopped"]
+    L --> M["after_stop()"]
+    M --> N["Actor Terminated"]
 ```
 
 ---
@@ -64,13 +65,14 @@ sequenceDiagram
     participant HT_L as Loop
     HT_U->>HT_A: start().await
     HT_A->>HT_A: before_start()
-    HT_A->>HT_L: Enter message loop
     HT_A->>HT_A: after_start()
+    HT_A->>HT_L: Enter message loop
     Note over HT_L: Processing messages...
     HT_U->>HT_A: stop()
-    HT_L->>HT_A: Exit message loop
     HT_A->>HT_A: before_stop()
-    HT_A->>HT_A: Close channels
+    HT_A->>HT_A: Close inbox
+    HT_L->>HT_A: Exit message loop
+    HT_A->>HT_A: Stop children
     HT_A->>HT_A: after_stop()
     HT_A->>HT_U: Actor stopped
 ```
@@ -79,10 +81,10 @@ sequenceDiagram
 
 | Hook | Runs | Use For |
 |------|------|---------|
-| `before_start` | Before message loop | Logging, sync validation (cannot send messages yet) |
-| `after_start` | After loop starts | Async init, send messages, notify others, start timers |
-| `before_stop` | When stop requested | Cleanup, save state, flush buffers |
-| `after_stop` | After fully stopped | Final logging, assertions in tests |
+| `before_start` | Inside `start().await`, before the actor task is spawned | Logging, sync validation (cannot send messages yet) |
+| `after_start` | As the actor task begins, immediately before the message loop | Async init, send messages, notify others, start timers |
+| `before_stop` | When a graceful stop is requested (skipped on forced shutdown) | Cleanup, save state, flush buffers |
+| `after_stop` | After the loop exits and children have stopped (always runs) | Final logging, assertions in tests |
 
 {% callout type="warning" title="before_start cannot send messages" %}
 The message loop isn't active during `before_start`. If you need to send initialization messages (including to yourself), use `after_start` instead.
@@ -250,21 +252,21 @@ sequenceDiagram
     participant ST_A as Actor
     participant ST_C as Channel
     ST_U->>ST_B: start().await
-    ST_B->>ST_C: Create MPSC channel
+    Note over ST_C: MPSC channel already created by new_actor()
+    ST_B->>ST_B: before_start()
     ST_B->>ST_A: Spawn actor task
-    ST_A->>ST_A: before_start()
-    ST_A->>ST_A: Enter message loop
+    ST_B-->>ST_U: ActorHandle
     ST_A->>ST_A: after_start()
-    ST_A-->>ST_U: ActorHandle
+    ST_A->>ST_A: Enter message loop
     Note over ST_A: Ready to receive messages
 ```
 
 **Key points:**
-- `start()` spawns a Tokio task for the actor
-- `before_start` runs inside that task
-- The message loop starts immediately after
-- `after_start` runs once the loop is active
-- The handle is returned after everything is ready
+- The actor's MPSC channel is created earlier, when `new_actor()` builds the actor
+- `before_start` runs inline inside `start().await`, in the caller's task, before anything is spawned
+- `start()` then spawns a Tokio task for the actor and returns the handle immediately
+- `after_start` runs as the actor task begins, immediately before the message loop — it may still be running when `start()` returns
+- Messages sent right after `start()` queue in the channel and are processed once the loop begins
 
 ---
 
@@ -279,21 +281,20 @@ sequenceDiagram
     participant SD_Ch as Children
     participant SD_C as Channel
     SD_U->>SD_A: stop() or shutdown_all()
-    Note over SD_A,SD_Ch: Children stop first
+    SD_A->>SD_A: before_stop()
+    SD_A->>SD_C: Close inbox
+    SD_A->>SD_A: Exit message loop
     SD_A->>SD_Ch: Propagate stop
     SD_Ch-->>SD_A: Children stopped
-    SD_A->>SD_A: Exit message loop
-    SD_A->>SD_A: before_stop()
-    SD_A->>SD_C: Close channel
     SD_A->>SD_A: after_stop()
     SD_A-->>SD_U: Shutdown complete
 ```
 
 **Key points:**
-- Stop propagates to children first (if any)
-- Children stop before parent completes
-- Channels close after `before_stop`
-- `after_stop` runs last
+- `before_stop` runs first, then the inbox closes and the loop drains and exits
+- Children are stopped after the loop exits, before `after_stop` — so children finish before the parent completes
+- `before_stop` only runs on a graceful stop (`stop()` / terminate signal); on a forced shutdown (cancellation) or an unexpectedly closed inbox, it is skipped
+- `after_stop` always runs, last
 
 ---
 
@@ -321,7 +322,7 @@ runtime.shutdown_all().await?;
 
 ### Shutdown Timeout
 
-Configure in `config.toml`:
+Configure in `~/.config/acton/config.toml`:
 
 ```toml
 [timeouts]
@@ -329,7 +330,7 @@ actor_shutdown = 5000    # 5 seconds per actor
 system_shutdown = 15000  # 15 seconds total
 ```
 
-If an actor doesn't stop within the timeout, it's forcefully terminated.
+The two timeouts behave differently: if the whole system doesn't stop within `system_shutdown`, remaining actors are forcefully cancelled. The per-child `actor_shutdown` timeout only logs an error for a child that fails to stop in time — it does not force-kill it.
 
 ---
 
@@ -354,7 +355,7 @@ actor.before_start(|actor| {
 ```
 
 {% callout type="warning" title="Hooks don't fail startup" %}
-Even if a hook errors or panics, the actor still starts. Design your handlers to handle missing initialization gracefully.
+Even if a hook errors or panics, the actor still starts — provided the default `catch-handler-panics` feature is enabled. With `default-features = false`, a panicking `before_start` propagates out of `start().await` into the caller. Design your handlers to handle missing initialization gracefully.
 {% /callout %}
 
 ---
@@ -398,6 +399,6 @@ async fn test_actor_processes_all_messages() {
 
 ## Next Steps
 
-- [Supervision](/docs/supervision) - Parent-child relationships and cascading shutdown
+- [Supervision](/docs/core-concepts/supervision-basics) - Parent-child relationships and cascading shutdown
 - [Handler Types](/docs/handler-types) - How handlers execute within the lifecycle
 - [Configuration](/docs/configuration) - Configuring timeouts and other settings

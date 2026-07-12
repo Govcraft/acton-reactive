@@ -22,7 +22,7 @@ Both are actor frameworks for Rust, but they have different goals:
 | **Message Types** | Any `Clone + Debug` type | Requires `actix::Message` trait |
 | **Learning Curve** | Gentler | Steeper |
 | **Ecosystem** | Standalone | actix-web, actix-rt, etc. |
-| **Maturity** | Pre-1.0, evolving | Mature, stable |
+| **Maturity** | Stable (8.x), actively developed | Mature, stable |
 
 **Choose acton-reactive if:** You want to learn actor patterns without fighting boilerplate, or you need a lightweight actor system for a specific use case.
 
@@ -42,15 +42,6 @@ actor.mutate_on::<RequestMessage>(|actor, ctx| {
     Reply::pending(async move {
         reply.send(ResponseMessage { data }).await;
     })
-});
-```
-
-Or for simple, synchronous replies:
-
-```rust
-actor.mutate_on::<RequestMessage>(|actor, ctx| {
-    ctx.reply(ResponseMessage { data: actor.model.data.clone() });
-    Reply::ready()
 });
 ```
 
@@ -81,17 +72,16 @@ Yes! Enable the `ipc` feature and use Unix Domain Sockets:
 {% $dep.ipc %}
 ```
 
-See the [IPC Communication](/docs/ipc) guide for details.
+See the [IPC Setup](/docs/ipc-setup) guide for details.
 
 ---
 
 ### Is acton-reactive production ready?
 
-`acton-reactive` is pre-1.0 software. The core functionality is stable and well-tested, but the API may change in minor versions. We recommend:
+Yes. `acton-reactive` is stable, well-tested, and follows semantic versioning: breaking changes only land in major releases. We recommend:
 
-- Pinning to a specific version in production
-- Reviewing changelogs before upgrading
-- Using it for appropriate use cases (not mission-critical systems without thorough testing)
+- Pinning to a major version in production (e.g. `acton-reactive = "8"`)
+- Reviewing changelogs before upgrading across major versions
 
 ---
 
@@ -390,7 +380,7 @@ High-throughput actors might benefit from larger inbox buffers:
 ```toml
 # ~/.config/acton/config.toml
 [limits]
-actor_inbox_capacity = 1000  # Default is 255
+actor_inbox_capacity = 1000  # Default is 512
 ```
 
 ---
@@ -411,7 +401,7 @@ If you're using IPC heavily, MessagePack is faster and smaller than JSON:
 If you can't find the answer here:
 
 1. **Check the [Examples](/docs/examples)** - They cover most common patterns
-2. **Read the [API Reference](/docs/api-reference)** - Every type is documented
+2. **Read the [API Reference](/docs/reference/api-overview)** - Every type is documented
 3. **Look at the tests** in the `acton-reactive` repository - They're essentially documentation
 4. **Open an issue** on [GitHub](https://github.com/govcraft/acton-reactive) - We're happy to help
 

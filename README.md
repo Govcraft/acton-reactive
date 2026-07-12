@@ -52,12 +52,14 @@ Acton Reactive makes this pattern accessible with derive macros that eliminate b
 ## Features
 
 - **Derive macros** — `#[acton_actor]` and `#[acton_message]` generate the required trait implementations
-- **Two handler types** — `mutate_on` for state changes (sequential), `act_on` for reads (concurrent)
+- **Two handler types** — `mutate_on` for state changes (sequential), `act_on` for reads (concurrent), plus `_sync` variants that skip the per-message future allocation
 - **Async-native** — Built on Tokio for efficient, non-blocking operations
 - **Lifecycle hooks** — `before_start`, `after_stop` and more for resource management
 - **Pub/sub messaging** — Actors can subscribe to message types and receive broadcasts
 - **Request/reply** — Send a message and get a response using reply envelopes
-- **Supervision** — Parent actors can manage child actors for fault tolerance
+- **Supervision** — Parent actors can manage child actors, with configurable restart policies and limits
+- **IPC** — Talk to your actors from other processes over Unix domain sockets with the `ipc` feature: request/response, streaming, and push subscriptions, with optional MessagePack wire format (`ipc-messagepack`)
+- **Panic isolation** — A panicking handler can't crash its actor (`catch-handler-panics` feature, enabled by default)
 
 ---
 
@@ -67,7 +69,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-reactive = "7"
+acton-reactive = "8"
 ```
 
 Tokio is re-exported via `acton_reactive::prelude::*`, so no separate dependency is needed.
@@ -107,7 +109,7 @@ async fn main() {
         .mutate_on::<Greet>(|actor, envelope| {
             actor.model.greet_count += 1;
             println!("Hello, {}! (greeting #{})",
-                envelope.message.name,
+                envelope.message().name,
                 actor.model.greet_count);
             Reply::ready()
         })
@@ -173,9 +175,10 @@ Total greetings: 2
 
 ## Learn More
 
+- **[Documentation Site](https://govcraft.github.io/acton-reactive/)** — Guides, tutorials, and reference
 - **[API Documentation](https://docs.rs/acton-reactive)** — Complete reference
 - **[Examples](acton-reactive/examples/)** — Working code for common patterns
-- **[Configuration Guide](docs/CONFIGURATION.md)** — Customize timeouts, limits, and tracing
+- **[Configuration Guide](https://govcraft.github.io/acton-reactive/docs/configuration)** — Customize timeouts, limits, and tracing
 
 ---
 

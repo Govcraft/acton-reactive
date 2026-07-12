@@ -3,7 +3,7 @@ title: Pub/Sub Broadcasting
 nextjs:
   metadata:
     title: Pub/Sub Broadcasting - acton-reactive
-    description: Broadcasting messages to multiple actors using the ActorBroker.
+    description: Broadcasting messages to multiple actors using the Broker.
 ---
 
 Sometimes you need to notify multiple actors about an event. Instead of sending messages to each one individually, use the broker to broadcast to all subscribers.
@@ -130,7 +130,7 @@ graph TB
         Pub2["Alert Service"]
     end
 
-    subgraph Broker["ActorBroker"]
+    subgraph Broker["Broker"]
         Registry["Subscription Registry"]
     end
 
@@ -160,7 +160,7 @@ graph TB
 sequenceDiagram
     participant Actor
     participant Handle as ActorHandle
-    participant Broker as ActorBroker
+    participant Broker as Broker
     participant Registry
 
     Actor->>Handle: subscribe::<MsgType>()
@@ -177,15 +177,9 @@ sequenceDiagram
 
 ---
 
-## Unsubscribing
-
-Actors can unsubscribe from message types:
-
-```rust
-handle.unsubscribe::<PriceUpdate>().await;
-```
-
-Actors automatically unsubscribe from everything when they stop.
+{% callout type="warning" title="Subscriptions last for the process lifetime" %}
+There is currently no working unsubscribe: the broker never removes entries from its subscriber map, including when an actor stops. Design subscribers to live as long as their subscriptions, or route broadcasts through a long-lived actor that forwards selectively.
+{% /callout %}
 
 ---
 
@@ -413,6 +407,6 @@ struct DataDump {
 
 ## Next Steps
 
-- [Supervision](/docs/supervision) - Parent-child actor hierarchies
-- [Request-Response](/docs/request-response) - Coordinating between actors
-- [IPC Communication](/docs/ipc) - Pub/sub across process boundaries
+- [Supervision](/docs/core-concepts/supervision-basics) - Parent-child actor hierarchies
+- [Request-Response](/docs/building-apps/request-response) - Coordinating between actors
+- [IPC Communication](/docs/advanced/ipc) - Pub/sub across process boundaries

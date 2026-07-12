@@ -7,9 +7,9 @@ Solutions to common issues when working with Acton Reactive.
 
 ## Compilation Errors
 
-### "cannot find macro `acton_actor`"
+### "cannot find attribute `acton_actor` in this scope"
 
-**Problem**: The macro isn't in scope.
+**Problem**: The attribute macro isn't in scope.
 
 **Solution**: Import the prelude:
 
@@ -45,30 +45,70 @@ impl Default for MyActor {
 
 ---
 
-### "expected `Reply`, found `()`"
+### "expected `Pin<Box<dyn Future<Output = ()> + Send + Sync>>`, found `()`"
 
-**Problem**: Handler must return a `Reply`.
+**Problem**: `mutate_on` and `act_on` handlers must return a boxed future, not `()`. `Reply` is the helper that builds one.
 
-**Solution**: Return `Reply::ready()` for no response, or use a `_sync` variant that returns `()` directly:
+**Solution**: Return `Reply::ready()` for no async work, or use a `_sync` variant that returns `()` directly:
 
 ```rust
-// Async handler — must return Reply
-builder.mutate_on::<Message>(|actor, envelope| {
-    actor.model.value = envelope.message().value;
+// Async handler — must return a Reply::* value
+builder.mutate_on::<Message>(|actor, ctx| {
+    actor.model.value = ctx.message().value;
     Reply::ready()  // Don't forget this!
 });
 
 // Sync handler — returns () directly, no Reply needed
-builder.mutate_on_sync::<Message>(|actor, envelope| {
-    actor.model.value = envelope.message().value;
+builder.mutate_on_sync::<Message>(|actor, ctx| {
+    actor.model.value = ctx.message().value;
 });
 ```
 
 ---
 
+### "future cannot be shared between threads safely" / "future created by async block is not `Sync`"
+
+**Problem**: This is the most common — and most surprising — handler error.
+
+Handlers return `Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>`. Note the **`Sync`** bound: everything your `Reply::pending` async block holds *across an `.await`* must be `Sync`, not just `Send`. Plenty of perfectly good types (and plenty of third-party futures) are `Send` but not `Sync`.
+
+```rust
+// Bad: RefCell is Send but NOT Sync — held across an await
+builder.act_on::<Fetch>(|_actor, _ctx| {
+    let cell = std::cell::RefCell::new(0);
+    Reply::pending(async move {
+        do_work().await;
+        let _ = cell.borrow();  // error: future is not `Sync`
+    })
+});
+```
+
+**Solution 1 — don't hold the non-`Sync` value across the await.** Finish with it before the first `.await`, or swap it for a `Sync` equivalent (`Mutex` instead of `RefCell`, `Arc` instead of `Rc`).
+
+**Solution 2 — move the work off the handler.** This is the right answer when the *future itself* is not `Sync` (common with HTTP and database clients). Spawn the work with `tokio::spawn`, which only requires `Send`, and message the result back to the actor:
+
+```rust
+builder.mutate_on::<Fetch>(|actor, ctx| {
+    let handle = actor.handle().clone();
+    let url = ctx.message().url.clone();
+
+    tokio::spawn(async move {
+        // Any Send future works here — no Sync bound
+        let body = fetch(&url).await;
+        handle.send(FetchDone { body }).await;
+    });
+
+    Reply::ready()
+});
+```
+
+See [Integration](/docs/advanced/integration) for the full pattern.
+
+---
+
 ### "`Send` is not implemented for..."
 
-**Problem**: Something in your async block isn't thread-safe.
+**Problem**: Something in your async block isn't thread-safe at all.
 
 **Solution**: Ensure data moved into async blocks is `Send`:
 
@@ -84,38 +124,60 @@ let data = Arc::new(value);
 
 ## Runtime Errors
 
-### Actor stops unexpectedly
+### A handler panicked — did my actor die?
 
-**Problem**: A panic in a handler stops the actor.
+**No, not by default.** The `catch-handler-panics` feature is enabled by default. It wraps every handler dispatch in `catch_unwind`, so a panicking handler is caught and logged with `error!` and the actor **keeps processing messages**. A panic does not terminate the actor and does not trigger the supervision flow.
 
-**Solution**: Enable the `catch-handler-panics` feature (on by default). This wraps every handler dispatch in `catch_unwind` so a panicking handler is logged and skipped rather than crashing the actor task:
+If you're seeing a panic logged but the actor is still alive, that's working as designed. Look for the `Panic in ... message handler` log line to find it:
 
 ```toml
-# Enabled by default — panics in handlers are caught and logged
-acton-reactive = "8.0.0"
-
-# Disable for production workloads with well-tested handlers to
-# eliminate the (small) catch_unwind overhead
-acton-reactive = { version = "8.0.0", default-features = false }
+[dependencies]
+{% $dep.base %}
 ```
 
-If you need per-handler control instead, use `try_mutate_on` with proper error types, or catch panics manually:
+If you want a panicking handler to bring the actor down instead — or you've measured the `catch_unwind` overhead and want it gone in a well-tested production workload — turn the feature off:
+
+```toml
+[dependencies]
+acton-reactive = { version = "8", default-features = false }
+```
+
+For *expected* failures, don't rely on panics at all. Use `try_mutate_on` / `try_act_on` with a real error type and register an `on_error` handler:
 
 ```rust
-builder.mutate_on::<RiskyMessage>(|actor, envelope| {
-    let result = std::panic::catch_unwind(|| {
-        risky_operation()
+builder
+    .try_mutate_on::<RiskyMessage, Success, MyError>(|actor, ctx| {
+        Reply::try_pending(async move { do_risky_thing().await })
+    })
+    .on_error::<RiskyMessage, MyError>(|actor, ctx, err| {
+        tracing::error!("Risky op failed: {}", err);
+        Reply::ready()
     });
+```
 
-    match result {
-        Ok(_) => Reply::ready(),
-        Err(e) => {
-            tracing::error!("Panic caught: {:?}", e);
-            Reply::ready()
-        }
-    }
+---
+
+### Actor stops unexpectedly
+
+**Problem**: The actor's inbox closed, or its parent shut down.
+
+**Solution**: Check for these, in order:
+
+1. **Parent shutdown** — children stop when their parent stops (cascading shutdown). Terminating the parent is the most common cause.
+2. **Inbox closed** — every `ActorHandle` for the actor was dropped. Keep a handle alive for as long as you need the actor.
+3. **`shutdown_all()`** was called on the runtime.
+
+If the actor has a parent, the parent receives a `ChildTerminated` message carrying the `TerminationReason` (`Normal`, `InboxClosed`, or `ParentShutdown`). Handle it to find out why:
+
+```rust
+parent.mutate_on::<ChildTerminated>(|actor, ctx| {
+    let note = ctx.message();
+    tracing::warn!("Child {} terminated: {:?}", note.child_id, note.reason);
+    Reply::ready()
 });
 ```
+
+See [Supervision Basics](/docs/core-concepts/supervision-basics).
 
 ---
 
@@ -245,8 +307,9 @@ println!("IPC listener started");
 
 // Client - check socket exists
 let socket_path = IpcConfig::load().socket_path();
-if !std::path::Path::new(&socket_path).exists() {
-    eprintln!("Socket not found at: {}", socket_path);
+if !socket_path.exists() {
+    // socket_path is a PathBuf — use .display() to print it
+    eprintln!("Socket not found at: {}", socket_path.display());
 }
 ```
 
@@ -264,6 +327,34 @@ ls -la /run/user/$(id -u)/acton/
 
 # Socket should be writable by your user
 ```
+
+---
+
+### Subscriber clients keep getting disconnected
+
+**Problem**: A client that subscribes and then only *listens* (receiving push notifications without sending anything) gets dropped by the server after a period of silence.
+
+**Cause**: The listener applies a read timeout to idle connections. Two separate timeouts are in play, and which one you get depends on whether the connection has an active subscription:
+
+| Setting | Applies to | Default |
+|---------|-----------|---------|
+| `read_timeout_ms` | Connections with **no** active subscription | 60000 (60s) |
+| `subscription_read_timeout_ms` | Connections **with** an active subscription | 0 |
+
+**In both settings, `0` is a sentinel meaning "no timeout"** — the connection may stay idle indefinitely.
+
+Subscription connections already default to `0`, so a pure subscriber should not time out. If yours is being dropped, check that the subscription actually registered (the server only applies `subscription_read_timeout_ms` once the connection has a live subscription), or raise the plain read timeout:
+
+```toml
+# $XDG_CONFIG_HOME/acton/ipc.toml
+[timeouts]
+read_timeout_ms = 0               # 0 = never time out an idle connection
+subscription_read_timeout_ms = 0  # already the default
+```
+
+{% callout type="warning" title="0 disables the timeout entirely" %}
+Setting `read_timeout_ms = 0` means idle connections are never reaped. That's the right call for long-lived subscribers, but on a public-facing socket it lets dead connections accumulate. Prefer leaving `read_timeout_ms` alone and relying on the subscription-specific default.
+{% /callout %}
 
 ---
 

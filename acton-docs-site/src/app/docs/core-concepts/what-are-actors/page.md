@@ -30,7 +30,7 @@ When a message arrives, the actor wakes up to handle it.
 
 ### 2. Update State
 
-While handling a message, an actor can modify its private state. Because messages are processed one at a time, there's no risk of data races.
+While handling a message, an actor can modify its private state. Because state-modifying handlers (`mutate_on`) run one at a time, there's no risk of data races. (Read-only `act_on` handlers may run concurrently — safe, because they can't modify state.)
 
 ### 3. Send Messages
 
@@ -102,7 +102,7 @@ This means:
 If you've used Actix or other actor frameworks, Acton's approach will feel familiar with key differences:
 
 - **No async_trait boilerplate** — Handlers use `mutate_on` and `act_on` methods
-- **Envelope-based messaging** — Handlers receive envelopes, not raw messages
+- **Context-based messaging** — Handlers receive a `MessageContext`, not the raw message
 - **Tokio-native** — Built directly on Tokio, not a separate runtime
 
 The `mutate_on` vs `act_on` distinction is key — it determines sequential vs concurrent handler execution.

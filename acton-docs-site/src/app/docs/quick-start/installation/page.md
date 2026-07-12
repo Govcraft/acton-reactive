@@ -9,7 +9,7 @@ Getting started with Acton Reactive takes about 30 seconds.
 
 You need:
 
-- **Rust 1.70 or later** (Rust 2021 edition)
+- **A recent stable Rust toolchain** (Rust 2021 edition)
 - **Cargo** (comes with Rust)
 
 If you don't have Rust yet, visit [rustup.rs](https://rustup.rs). The default options work fine.
@@ -35,6 +35,10 @@ cargo add acton-reactive
 ```
 
 That's it. Cargo handles everything else.
+
+{% callout type="note" title="Optional Features" %}
+Planning to talk to your actors from other processes? Enable the IPC feature with `cargo add acton-reactive --features ipc` (add `ipc-messagepack` for a compact binary wire format). See [IPC Setup](/docs/ipc-setup) for details.
+{% /callout %}
 
 ## Verify It Works
 

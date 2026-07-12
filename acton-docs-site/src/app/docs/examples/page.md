@@ -196,10 +196,10 @@ Request-response patterns over IPC with multiple services.
 
 ```bash
 # Terminal 1
-cargo run --example ipc_bidirectional_demo --bin server --features ipc
+cargo run --example ipc_bidirectional_server --features ipc
 
 # Terminal 2
-cargo run --example ipc_bidirectional_demo --bin client --features ipc
+cargo run --example ipc_bidirectional_client --features ipc
 ```
 
 ### IPC Streaming
@@ -208,10 +208,10 @@ Multi-frame streaming responses (countdowns, pagination).
 
 ```bash
 # Terminal 1
-cargo run --example ipc_streaming --bin server --features ipc
+cargo run --example ipc_streaming_server --features ipc
 
 # Terminal 2
-cargo run --example ipc_streaming --bin client --features ipc
+cargo run --example ipc_streaming_client --features ipc
 ```
 
 ### IPC Subscriptions
@@ -220,24 +220,26 @@ Push notifications via broker subscriptions.
 
 ```bash
 # Terminal 1
-cargo run --example ipc_subscriptions --bin server --features ipc
+cargo run --example ipc_subscriptions_server --features ipc
 
 # Terminal 2
-cargo run --example ipc_subscriptions --bin client --features ipc
+cargo run --example ipc_subscriptions_client --features ipc
 ```
 
 ### IPC Client Libraries
 
-Polyglot clients in Python and Node.js.
+Polyglot clients in Python, Node.js (TypeScript), and Deno.
 
 ```bash
 # Terminal 1
-cargo run --example ipc_client_libraries --features ipc
+cargo run --example ipc_client_libraries_server --features ipc
 
-# Terminal 2
-cd examples/ipc_client_libraries/python && python client.py
-# or
-cd examples/ipc_client_libraries/node && node client.js
+# Terminal 2 — Python
+cd acton-reactive/examples/ipc_client_libraries/python && python example_client.py
+# or Node.js
+cd acton-reactive/examples/ipc_client_libraries/nodejs && npm install && npm run example
+# or Deno
+cd acton-reactive/examples/ipc_client_libraries/deno && deno task example
 ```
 
 ### IPC Fruit Market

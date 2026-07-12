@@ -1,9 +1,64 @@
 ---
 title: Migration Guide
-description: Coming to Acton Reactive from other actor frameworks.
+description: Upgrading Acton Reactive, and coming to it from other actor frameworks.
 ---
 
-If you've used actor systems before, this guide maps familiar concepts to Acton Reactive.
+Two kinds of migration live here: [upgrading between Acton versions](#upgrading-acton-reactive), and mapping concepts from another actor framework onto Acton.
+
+## Upgrading Acton Reactive
+
+### 8.0 → 8.1
+
+An additive release — existing code keeps working.
+
+**Channel-based `IpcClient`.** IPC clients no longer need to hand-roll the wire protocol. `IpcClient` splits the socket into reader and writer tasks and gives you `send`, `request`, `subscribe`, `discover`, and `disconnect` over channels:
+
+```rust
+use acton_reactive::ipc::{IpcClient, IpcConfig, IpcEnvelope};
+
+let client = IpcClient::connect(IpcConfig::load().socket_path()).await?;
+let response = client.request(IpcEnvelope::new_request(
+    "prices", "GetPrice", serde_json::json!({ "symbol": "ACTON" }),
+)).await?;
+```
+
+The lower-level `acton_reactive::ipc::protocol` functions still exist; you just rarely need them now.
+
+**`read_timeout_ms = 0` means "no timeout".** Zero is a sentinel in both `read_timeout_ms` and `subscription_read_timeout_ms` — an idle connection is never reaped. `subscription_read_timeout_ms` already defaults to `0`, so long-lived subscriber clients stay connected. See [Troubleshooting](/docs/reference/troubleshooting).
+
+**MessagePack serialization is named.** The `ipc-messagepack` feature now uses named field serialization, which makes it interoperate correctly with `skip_serializing_if`.
+
+### 7.x → 8.0
+
+**Sync handler variants.** `mutate_on_sync` and `act_on_sync` register handlers that return `()` instead of a boxed future, skipping the `Box::pin(async move {})` allocation on every dispatch. If a handler has no `.await` in it, switch:
+
+```rust
+// Before
+builder.mutate_on::<Increment>(|actor, _ctx| {
+    actor.model.count += 1;
+    Reply::ready()
+});
+
+// After — same behavior, no future allocated
+builder.mutate_on_sync::<Increment>(|actor, _ctx| {
+    actor.model.count += 1;
+});
+```
+
+The async variants are unchanged and still correct — this is an optimization, not a required migration.
+
+**Handler panics are now caught by default.** The new `catch-handler-panics` feature is **on by default**. A panicking handler is caught, logged, and the actor keeps running. If you relied on a panic taking an actor down, that no longer happens; opt out with:
+
+```toml
+[dependencies]
+acton-reactive = { version = "8", default-features = false }
+```
+
+**`acton-ern` 2.0.** ERNs come from `acton-ern` 2.x. If you depend on `acton-ern` directly, bump it to `2` to avoid two incompatible copies in your tree. It's re-exported from the prelude, so most code needs no change.
+
+**Internal reactor maps moved from `DashMap` to `HashMap`.** No API change — handler registration happens before start, so the lock-free map bought nothing. You may notice slightly lower dispatch overhead.
+
+---
 
 ## From Akka (Scala/Java)
 
@@ -16,7 +71,7 @@ If you've used actor systems before, this guide maps familiar concepts to Acton 
 | `tell` (!) | `handle.send(msg).await` |
 | `ask` (?) | Reply envelope pattern |
 | `Props` | Actor builder |
-| `context.spawn` | `actor.create_child()` + `supervise()` |
+| `context.spawn` | `runtime.new_actor_with_config()` + `parent_handle.supervise()` |
 | `PoisonPill` | `handle.stop()` |
 | `EventBus` | `runtime.broker()` |
 
@@ -46,7 +101,7 @@ builder.mutate_on::<Event>(|actor, envelope| {
 });
 ```
 
-**Supervision is simpler**: No complex supervision strategies. Parents are notified of child failures and decide how to respond.
+**Supervision is explicit, not automatic**: Acton has the same strategy vocabulary as Akka — `OneForOne`, `OneForAll`, `RestForOne` — plus `Permanent` / `Temporary` / `Transient` restart policies. The difference is who acts on them. Akka's supervisor restarts children for you; in Acton the framework sends the parent a `ChildTerminated` message and `SupervisionStrategy::decide()` tells you what *should* happen, but **your handler carries it out**. See [Supervision Basics](/docs/core-concepts/supervision-basics).
 
 **Reply envelope pattern**: Instead of `ask`, use reply envelopes for request-response.
 
@@ -61,7 +116,7 @@ builder.mutate_on::<Event>(|actor, envelope| {
 | `Addr<A>` | `ActorHandle` |
 | `do_send` | `handle.send(msg).await` |
 | `send().await` | Reply envelope pattern |
-| `Context` | `ManagedAgent` (in handler) |
+| `Context` | `ManagedActor` + `MessageContext` (the two handler args) |
 | `Arbiter` | Tokio runtime (implicit) |
 | `System::new()` | `ActonApp::launch_async().await` |
 
@@ -157,12 +212,17 @@ struct GetCount(oneshot::Sender<i32>);
 
 // Acton: use reply envelope
 builder.act_on::<GetCount>(|actor, envelope| {
+    let count = actor.model.count;          // copy out first
     let reply = envelope.reply_envelope();
     Reply::pending(async move {
-        reply.send(CountResponse(actor.model.count)).await;
+        reply.send(CountResponse(count)).await;
     })
 });
 ```
+
+{% callout type="warning" title="Copy state out before the async block" %}
+`Reply::pending` produces a `'static` boxed future, so you cannot borrow `actor` inside it — `reply.send(CountResponse(actor.model.count))` won't compile. Read what you need into a local *before* the `async move`, as above.
+{% /callout %}
 
 ---
 
@@ -211,7 +271,9 @@ struct SetValue { value: i32 }
 
 **No hot code reloading**: Rust is compiled. Actors can't change code at runtime.
 
-**Less supervision complexity**: No one-for-one, rest-for-one strategies. Implement custom logic in parent actors.
+**The OTP vocabulary is there, but you drive it**: Acton has `OneForOne`, `OneForAll`, and `RestForOne` strategies and `Permanent` / `Temporary` / `Transient` restart policies — the concepts port over directly. What doesn't port over is the supervisor process doing the restarting. Acton delivers a `ChildTerminated` message to the parent and gives you `SupervisionStrategy::decide()` and `RestartLimiter` as helpers; recreating the child is your handler's job.
+
+**No links/monitors**: There's no `link`/`monitor` distinction. A child notifies its parent — and only its parent — provided it was created with a parent reference in its `ActorConfig`.
 
 ---
 
@@ -220,9 +282,10 @@ struct SetValue { value: i32 }
 1. **Start small**: Port one actor at a time
 2. **Map your messages**: Create `#[acton_message]` structs for each message type
 3. **Identify mutation**: Separate read-only handlers (`act_on`) from state-changing ones (`mutate_on`)
-4. **Handle async differently**: Use `Reply::pending` for async work
-5. **Use envelope pattern**: Replace `ask` with reply envelopes
-6. **Simplify supervision**: Start with default behavior, add custom logic as needed
+4. **Skip the future when you can**: Handlers with no `.await` should use `mutate_on_sync` / `act_on_sync`
+5. **Handle async differently**: Use `Reply::pending` for async work — and remember the future must be `Send + Sync`
+6. **Use envelope pattern**: Replace `ask` with reply envelopes
+7. **Write your supervision**: Handle `ChildTerminated` in the parent; nothing restarts automatically
 
 ---
 

@@ -104,7 +104,7 @@ builder.mutate_on::<Increment>(|actor, _envelope| {
 
 ## Working with Message Data
 
-Handlers receive an **envelope**, not the raw message. Access the message through `envelope.message()`:
+Handlers receive a **message context** (`MessageContext`), not the raw message. Access the message through its `.message()` method:
 
 ```rust
 builder.mutate_on::<AddItem>(|actor, envelope| {

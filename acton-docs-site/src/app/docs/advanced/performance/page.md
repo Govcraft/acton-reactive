@@ -58,6 +58,66 @@ builder.act_on::<GetName>(|actor, envelope| {
 
 ---
 
+## Panic Protection Has a Cost
+
+The `catch-handler-panics` feature is **enabled by default**. It wraps every handler dispatch in `catch_unwind`, so a panicking handler is caught and logged instead of taking the actor down. That safety costs a small amount of overhead on the dispatch hot path.
+
+For a production workload with well-tested handlers, you can turn it off:
+
+```toml
+[dependencies]
+acton-reactive = { version = "8", default-features = false }
+```
+
+{% callout type="warning" title="Know what you're trading" %}
+With the feature disabled, a panic in a handler propagates and kills the actor's task. Only disable it if your handlers genuinely don't panic — and prefer `try_mutate_on` + `on_error` for failures you can anticipate.
+
+Measure before you reach for this. It is a hot-path constant, not an algorithmic win, and it will be dwarfed by anything your handler actually does.
+{% /callout %}
+
+---
+
+## Tuning Inbox Capacity
+
+Each actor's inbox is a bounded MPSC channel. When it fills, senders wait — that's backpressure, and usually you want it. But a high-throughput actor being fed in bursts can spend time blocked on a too-small inbox.
+
+Override it per actor:
+
+```rust
+let config = ActorConfig::new(Ern::with_root("ingest")?, None, None)?
+    .with_inbox_capacity(1024);
+
+let mut actor = runtime.new_actor_with_config::<Ingest>(config);
+```
+
+Larger inboxes trade memory for burst tolerance. They don't make a slow handler faster — if an actor is *persistently* behind, the inbox will fill regardless and you need a worker pool, not a bigger buffer.
+
+### System-Wide Knobs
+
+Runtime defaults come from Acton's configuration file, and several are performance-relevant:
+
+| Setting | Effect |
+|---------|--------|
+| `limits.actor_inbox_capacity` | Default inbox size for every actor |
+| `limits.concurrent_handlers_high_water_mark` | How many read-only handlers may be in flight before the actor forces a flush |
+| `timeouts.read_only_handler_flush` | How long pending read-only handlers may sit before being flushed |
+
+See [Configuration](/docs/configuration) for where the file lives and the full list.
+
+---
+
+## Measuring
+
+Don't tune on intuition. The repository ships a [Divan](https://docs.rs/divan) benchmark suite covering actor creation, single- and multi-actor message throughput, and ping-pong latency:
+
+```bash
+cargo bench --package acton-reactive
+```
+
+Run it before and after a change on your own hardware — absolute numbers vary far too much across machines to be worth quoting. For finding hot spots in *your* application rather than the framework, reach for `tracing` spans (below) or a sampling profiler such as `perf` or `samply`.
+
+---
+
 ## Batching Messages
 
 When processing many items, batch them:
@@ -111,19 +171,27 @@ Long chains of requests add latency:
 // actor1 responds, then actor2 processes, then actor3...
 ```
 
-**Solution: Parallelize Independent Requests**
+**Solution: Fan Out Independent Requests**
 
-When requests are independent, send them concurrently:
+When requests don't depend on each other, dispatch them all before waiting on any of them.
+
+`create_envelope` reads as *"from me, to them"*: the actor you call it on becomes the envelope's **return address**, and the argument is the **recipient**. So the envelope is built by the actor that wants the replies, addressed to the actor being queried:
 
 ```rust
-// Send independent requests in parallel
-let request1 = actor1_handle.create_envelope(Some(receiver.reply_address()));
-let request2 = actor2_handle.create_envelope(Some(receiver.reply_address()));
+// `receiver` is the actor collecting the responses.
+// Each envelope: from `receiver`, to the actor being queried.
+let request1 = receiver.create_envelope(Some(actor1_handle.reply_address()));
+let request2 = receiver.create_envelope(Some(actor2_handle.reply_address()));
 
 request1.send(Query1).await;
 request2.send(Query2).await;
-// Both process concurrently
 ```
+
+Both queries are now sitting in their target inboxes and are processed independently — `receiver` gets each answer as a normal message whenever it lands, rather than blocking on the first before issuing the second.
+
+{% callout type="note" title="These awaits are enqueues, not round-trips" %}
+`send().await` completes as soon as the message is in the recipient's inbox; it does not wait for the handler to run. Awaiting the two sends in sequence still gets both actors working concurrently. If a target's inbox is full, `send` applies backpressure and waits — use `try_send` if you'd rather fail fast.
+{% /callout %}
 
 ---
 
@@ -201,9 +269,11 @@ tracing_subscriber::fmt::init();
 - Use `mutate_on` only when modifying state (sequential)
 - Batch operations when possible
 - Avoid single-actor bottlenecks with worker pools
-- Send independent requests concurrently
+- Fan out independent requests before awaiting any of them
 - Use `Arc` for large data in messages
-- Profile with tracing to find bottlenecks
+- Tune `with_inbox_capacity` for bursty actors
+- Consider `default-features = false` to drop panic protection in well-tested production handlers
+- Measure with `cargo bench` and `tracing` — don't guess
 
 ---
 

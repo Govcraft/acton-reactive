@@ -33,7 +33,7 @@ flowchart TD
         Other["Other Client"]
     end
 
-    Py & Node & Rs & Other --> Socket["Unix Domain Socket<br/>/tmp/acton.sock"]
+    Py & Node & Rs & Other --> Socket["Unix Domain Socket<br/>$XDG_RUNTIME_DIR/acton/&lt;app_name&gt;/ipc.sock"]
 
     subgraph Acton["acton-reactive"]
         subgraph Listener["IPC Listener"]
@@ -76,10 +76,16 @@ For MessagePack serialization (smaller messages):
 
 ### Feature Comparison
 
-| Feature | Serialization | Message Size | Speed |
-|---------|---------------|--------------|-------|
-| `ipc` | JSON | Larger | Good |
-| `ipc-messagepack` | MessagePack | ~30-50% smaller | Better |
+| Feature | Serialization | Format byte | Message Size | Speed |
+|---------|---------------|-------------|--------------|-------|
+| `ipc` | JSON | `0x01` | Larger | Good |
+| `ipc-messagepack` | MessagePack | `0x02` | ~30-50% smaller | Better |
+
+`ipc-messagepack` is additive: it enables `ipc` and lets the server accept **both** formats. Each frame declares its own format byte, so JSON and MessagePack clients can talk to the same listener at the same time.
+
+{% callout type="warning" title="MessagePack uses named (map) encoding" %}
+As of 8.1, MessagePack payloads are encoded as **maps with named keys**, not positional arrays. Non-Rust clients must serialize structs as maps (`{"symbol": "ACME", "price": 1.0}`), not as arrays (`["ACME", 1.0]`). Array-style encoding will fail to deserialize.
+{% /callout %}
 
 ---
 
@@ -125,34 +131,87 @@ async fn main() -> anyhow::Result<()> {
 
 ## Configuration
 
-### Custom Configuration
+`start_ipc_listener()` loads configuration from `$XDG_CONFIG_HOME/acton/ipc.toml` (typically `~/.config/acton/ipc.toml`). If no file exists, defaults are used. See [Configuration](/docs/configuration) for the full reference.
+
+### ipc.toml
+
+```toml
+[socket]
+# Override the default socket path (optional).
+# Default: $XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock
+# path = "/run/user/1000/acton/my_app/ipc.sock"
+mode = 0o660             # Socket file permissions (Unix)
+# app_name = "my_app"    # Defaults to the binary name
+
+[limits]
+max_connections = 100
+max_message_size = 1048576   # 1 MiB
+push_buffer_size = 100       # Buffered push notifications per connection
+
+[rate_limit]
+enabled = true               # Rate limiting is ON by default
+requests_per_second = 100    # Token bucket refill rate, per connection
+burst_size = 50              # Token bucket capacity
+
+[timeouts]
+request_timeout_ms = 30000
+read_timeout_ms = 60000              # 0 = no timeout
+write_timeout_ms = 30000
+subscription_read_timeout_ms = 0     # 0 = no timeout (default for subscribers)
+
+[shutdown]
+drain_timeout_ms = 5000      # Max wait for in-flight requests on shutdown
+```
+
+### Configuring Programmatically
+
+`IpcConfig` is a nested struct. Start from `IpcConfig::load()` (which reads `ipc.toml` or falls back to defaults), adjust the fields you care about, and pass it to `start_ipc_listener_with_config`:
 
 ```rust
-use acton_reactive::common::ipc::{IpcConfig, RateLimitConfig};
+use acton_reactive::prelude::*;
 use std::path::PathBuf;
-use std::time::Duration;
 
-let config = IpcConfig {
-    socket_path: PathBuf::from("/var/run/myapp/acton.sock"),
-    max_connections: 100,
-    connection_timeout: Duration::from_secs(60),
-    rate_limit: Some(RateLimitConfig {
-        requests_per_second: 1000,
-        burst_size: 50,
-    }),
-};
+let mut config = IpcConfig::load();
+
+config.socket.path = Some(PathBuf::from("/run/user/1000/myapp/acton.sock"));
+config.limits.max_connections = 50;
+config.rate_limit.requests_per_second = 1000;
+config.rate_limit.burst_size = 200;
+config.timeouts.read = 0;  // no idle timeout
 
 let listener = runtime.start_ipc_listener_with_config(config).await?;
 ```
+
+{% callout type="note" title="Sub-config types are configured by field, not by import" %}
+`RateLimitConfig` and `ShutdownConfig` are reached through `config.rate_limit` and `config.shutdown` on a loaded `IpcConfig`. Set their fields directly (or in `ipc.toml`) — there is nothing extra to import beyond `IpcConfig`, which the prelude already provides.
+{% /callout %}
 
 ### Configuration Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `socket_path` | `PathBuf` | `/tmp/acton.sock` | Unix socket path |
-| `max_connections` | `usize` | `100` | Max concurrent connections |
-| `connection_timeout` | `Duration` | `30s` | Idle connection timeout |
-| `rate_limit` | `Option<RateLimitConfig>` | `None` | Request rate limiting |
+| `socket.path` | `Option<PathBuf>` | `$XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock` (falls back to `/tmp/acton/<app_name>/ipc.sock`) | Unix socket path |
+| `socket.mode` | `u32` | `0o660` | Socket file permissions |
+| `socket.app_name` | `Option<String>` | binary name | Shards the socket path per app |
+| `limits.max_connections` | `usize` | `100` | Max concurrent connections |
+| `limits.max_message_size` | `usize` | `1048576` (1 MiB) | Max message size in bytes |
+| `limits.push_buffer_size` | `usize` | `100` | Push notifications buffered per connection; overflow is dropped |
+| `rate_limit.enabled` | `bool` | **`true`** | Per-connection token-bucket rate limiting |
+| `rate_limit.requests_per_second` | `u32` | `100` | Sustained request rate |
+| `rate_limit.burst_size` | `u32` | `50` | Token bucket capacity |
+| `timeouts.request` | `u64` (ms) | `30000` | Per-request timeout |
+| `timeouts.read` | `u64` (ms) | `60000` | Idle read timeout (connections without subscriptions); `0` disables |
+| `timeouts.write` | `u64` (ms) | `30000` | Write timeout |
+| `timeouts.subscription_read` | `u64` (ms) | `0` | Read timeout for subscribed connections; `0` (default) lets subscribers stay connected indefinitely |
+| `shutdown.drain_timeout` | `u64` (ms) | `5000` | Max wait for in-flight requests during shutdown |
+
+{% callout type="warning" title="Rate limiting is ON by default" %}
+Unlike many opt-in limiters, IPC rate limiting is enabled out of the box at 100 requests/second per connection with a burst of 50. Clients that exceed it receive a `RATE_LIMITED` error response. Set `config.rate_limit.enabled = false` to turn it off.
+{% /callout %}
+
+{% callout type="note" title="Zero means no timeout" %}
+For `timeouts.read` and `timeouts.subscription_read`, `0` disables the timeout entirely. Connections with active subscriptions use `subscription_read`; all others use `read`.
+{% /callout %}
 
 ---
 
@@ -196,9 +255,9 @@ if registry.is_registered("MyRequest") {
     println!("Type is registered");
 }
 
-// List all registered types
-let types = registry.registered_types();
-println!("Registered types: {:?}", types);
+// List all registered types (type_names() returns an iterator)
+let types: Vec<String> = registry.type_names().collect();
+println!("Registered {} types: {:?}", registry.len(), types);
 ```
 
 ---
@@ -267,49 +326,65 @@ registry.register::<Response2>("Response2");
 let listener = runtime.start_ipc_listener().await?;
 ```
 
-### 2. Socket Cleanup
+### 2. Detecting Stale Sockets
+
+Use the exported `socket_exists` and `socket_is_alive` helpers rather than inspecting the filesystem yourself. A socket file can outlive the process that created it, so existence alone does not mean a server is listening:
 
 ```rust
-// Check for stale sockets before starting
-let socket_path = Path::new("/tmp/acton.sock");
-if socket_path.exists() {
-    std::fs::remove_file(socket_path)?;
+use acton_reactive::ipc::{socket_exists, socket_is_alive, IpcConfig};
+
+let config = IpcConfig::load();
+let socket_path = config.socket_path();
+
+// A leftover file from a crashed process is stale: it exists but nothing answers.
+if socket_exists(&socket_path) && !socket_is_alive(&socket_path).await {
+    std::fs::remove_file(&socket_path)?;
 }
 
-// Start listener
-let listener = runtime.start_ipc_listener().await?;
+let listener = runtime.start_ipc_listener_with_config(config).await?;
 
-// On shutdown
-listener.shutdown().await?;
+// On shutdown — drains in-flight requests, then force-closes.
+// Returns ShutdownResult, not a Result: no `?`.
+let result = listener.shutdown_gracefully().await;
+if !result.drained_gracefully {
+    eprintln!("Force-closed {} requests", result.forced_closed);
+}
 ```
+
+Clients can use the same two helpers to check whether a server is up before connecting.
 
 ### 3. Connection Timeouts
 
-```rust
-// Short timeout for request-response
-let config = IpcConfig {
-    connection_timeout: Duration::from_secs(30),
-    ..Default::default()
-};
+Timeouts are milliseconds on the nested `timeouts` struct. Subscribers get their own read timeout, which defaults to "never":
 
-// Longer for subscriptions
-let config = IpcConfig {
-    connection_timeout: Duration::from_secs(3600), // 1 hour
-    ..Default::default()
-};
+```rust
+let mut config = IpcConfig::load();
+
+config.timeouts.request = 30_000;          // 30s per request
+config.timeouts.read = 60_000;             // idle read timeout, non-subscribers
+config.timeouts.subscription_read = 0;     // 0 = subscribers never time out
+
+let listener = runtime.start_ipc_listener_with_config(config).await?;
 ```
 
 ### 4. Rate Limiting
 
+Rate limiting is **on by default** (100 rps, burst 50, per connection). Tune or disable it:
+
 ```rust
-let config = IpcConfig {
-    rate_limit: Some(RateLimitConfig {
-        requests_per_second: 100,
-        burst_size: 20,
-    }),
-    ..Default::default()
-};
+let mut config = IpcConfig::load();
+
+config.rate_limit.enabled = true;
+config.rate_limit.requests_per_second = 100;
+config.rate_limit.burst_size = 20;
+
+// Or turn it off entirely:
+// config.rate_limit.enabled = false;
+
+let listener = runtime.start_ipc_listener_with_config(config).await?;
 ```
+
+Clients that exceed the limit receive an error response with `error_code: "RATE_LIMITED"`.
 
 ### 5. Health Checks
 
@@ -333,8 +408,54 @@ actor.act_on::<HealthCheck>(|_, ctx| {
 
 ---
 
+## Wire Protocol
+
+Rust clients should use [`IpcClient`](/docs/ipc-patterns) and never touch the wire format. This section is for writing clients in other languages.
+
+Every message is a length-prefixed frame with a **7-byte header** (protocol v2):
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│ Frame Length  (4 bytes, big-endian u32, payload only)    │
+├──────────────────────────────────────────────────────────┤
+│ Version       (1 byte, 0x02)                             │
+├──────────────────────────────────────────────────────────┤
+│ Message Type  (1 byte)                                   │
+├──────────────────────────────────────────────────────────┤
+│ Format        (1 byte, 0x01 = JSON, 0x02 = MessagePack)  │
+├──────────────────────────────────────────────────────────┤
+│ Payload       (Frame Length bytes)                       │
+└──────────────────────────────────────────────────────────┘
+```
+
+The length field counts the **payload only** — it excludes the header.
+
+### Message Types
+
+| Byte | Type | Direction |
+|------|------|-----------|
+| `0x01` | Request | client → server |
+| `0x02` | Response | server → client |
+| `0x03` | Error | server → client |
+| `0x04` | Heartbeat | bidirectional |
+| `0x05` | Push notification | server → client |
+| `0x06` | Subscribe | client → server |
+| `0x07` | Unsubscribe | client → server |
+| `0x08` | Discover | client → server |
+| `0x09` | Stream frame | server → client |
+
+### Limits and Versioning
+
+- **Max frame size:** 16 MiB (hard limit). `limits.max_message_size` (default 1 MiB) applies first.
+- **Formats:** JSON (`0x01`) is always available. MessagePack (`0x02`) requires the `ipc-messagepack` feature on the server, and uses **named/map** encoding — see the warning above.
+- **Versions:** the server accepts protocol **v1** (6-byte header, no format byte, JSON only) and **v2** (7-byte header, the current version). Version negotiation picks the highest both sides support, so v1 clients keep working; new clients should send `0x02`.
+
+Send `Discover` (`0x08`) to ask a running server which actors are exposed, which types are registered, and what protocol capabilities it supports.
+
+---
+
 ## Next Steps
 
-- [IPC Protocol](/docs/ipc-protocol) - Wire format and message structures
-- [IPC Patterns](/docs/ipc-patterns) - Request-response, streaming, subscriptions
+- [IPC Patterns](/docs/ipc-patterns) - Request-response, streaming, subscriptions, and the `IpcClient`
+- [Configuration](/docs/configuration) - Full `ipc.toml` reference
 - [Examples](/docs/examples) - Working IPC examples

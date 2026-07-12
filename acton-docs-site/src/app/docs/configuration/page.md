@@ -68,7 +68,7 @@ Control capacity and resource limits.
 concurrent_handlers_high_water_mark = 100
 
 # MPSC channel buffer size for actor message inboxes
-actor_inbox_capacity = 255
+actor_inbox_capacity = 512
 
 # Size for dummy/placeholder channels
 dummy_channel_size = 1
@@ -77,7 +77,7 @@ dummy_channel_size = 1
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `concurrent_handlers_high_water_mark` | `usize` | `100` | Maximum number of concurrent `act_on` handlers before they're flushed |
-| `actor_inbox_capacity` | `usize` | `255` | Buffer size for actor message queues (backpressure threshold) |
+| `actor_inbox_capacity` | `usize` | `512` | Buffer size for actor message queues (backpressure threshold) |
 | `dummy_channel_size` | `usize` | `1` | Size for internal placeholder channels |
 
 #### Understanding Handler Limits
@@ -199,7 +199,7 @@ read_only_handler_flush = 10     # ms - Read-only handler flush timeout
 
 [limits]
 concurrent_handlers_high_water_mark = 100  # Max concurrent act_on handlers
-actor_inbox_capacity = 255                  # Actor message queue size
+actor_inbox_capacity = 512                  # Actor message queue size
 dummy_channel_size = 1                      # Placeholder channel size
 
 [defaults]
@@ -258,7 +258,8 @@ enable_metrics = true            # Enable for development insights
 Optimized for production with higher capacity and longer timeouts:
 
 ```toml
-# /etc/acton/config.toml (Production)
+# ~/.config/acton/config.toml (Production)
+# (or set XDG_CONFIG_HOME to point elsewhere, e.g. /etc/acton)
 
 [timeouts]
 actor_shutdown = 30000           # 30 seconds - graceful shutdown
@@ -330,58 +331,79 @@ fn custom_load() {
 
 ## IPC Configuration
 
-When the `ipc` feature is enabled, additional configuration options are available.
+When the `ipc` feature is enabled, the IPC listener reads its own configuration from a **separate file**: `$XDG_CONFIG_HOME/acton/ipc.toml` (typically `~/.config/acton/ipc.toml`). If no file is found, defaults are used.
 
-### IpcConfig Structure
+### ipc.toml Structure
 
-```rust
-pub struct IpcConfig {
-    /// Unix socket path for IPC listener
-    pub socket_path: PathBuf,
+```toml
+[socket]
+# Override the default socket path (optional).
+# Default: $XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock
+# path = "/run/user/1000/acton/my_app/ipc.sock"
+mode = 0o660             # Socket file permissions (Unix)
+# app_name = "my_app"    # Defaults to the binary name
 
-    /// Maximum concurrent connections
-    pub max_connections: usize,
+[limits]
+max_connections = 100
+max_message_size = 1048576   # 1 MiB
+push_buffer_size = 100       # Buffered push notifications per connection
 
-    /// Connection timeout
-    pub connection_timeout: Duration,
+[rate_limit]
+enabled = true               # Rate limiting is ON by default
+requests_per_second = 100    # Token bucket refill rate, per connection
+burst_size = 50              # Token bucket capacity
 
-    /// Rate limiting configuration
-    pub rate_limit: Option<RateLimitConfig>,
-}
+[timeouts]
+request_timeout_ms = 30000
+read_timeout_ms = 60000              # 0 = no timeout
+write_timeout_ms = 30000
+subscription_read_timeout_ms = 0     # 0 = no timeout (default for subscribers)
+
+[shutdown]
+drain_timeout_ms = 5000      # Max wait for in-flight requests on shutdown
 ```
 
 ### Default IPC Values
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `socket_path` | `/tmp/acton.sock` | Unix socket file path |
-| `max_connections` | `100` | Maximum simultaneous connections |
-| `connection_timeout` | `30s` | Idle connection timeout |
-| `rate_limit` | `None` | Optional rate limiting |
+| `socket.path` | `$XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock` (falls back to `/tmp/acton/<app_name>/ipc.sock`) | Unix socket file path |
+| `socket.mode` | `0o660` | Socket file permissions |
+| `limits.max_connections` | `100` | Maximum simultaneous connections |
+| `limits.max_message_size` | `1048576` (1 MiB) | Maximum message size in bytes |
+| `limits.push_buffer_size` | `100` | Push notifications buffered per connection; overflow is dropped |
+| `rate_limit.enabled` | `true` | Per-connection token-bucket rate limiting |
+| `rate_limit.requests_per_second` | `100` | Sustained request rate |
+| `rate_limit.burst_size` | `50` | Maximum burst above the sustained rate |
+| `timeouts.request_timeout_ms` | `30000` | Per-request timeout |
+| `timeouts.read_timeout_ms` | `60000` | Idle read timeout for connections without subscriptions; `0` disables it |
+| `timeouts.write_timeout_ms` | `30000` | Write timeout |
+| `timeouts.subscription_read_timeout_ms` | `0` | Read timeout for connections with active subscriptions; `0` (default) lets subscribers stay connected indefinitely |
+| `shutdown.drain_timeout_ms` | `5000` | Time to wait for in-flight requests during shutdown |
+
+{% callout type="note" title="Zero means no timeout" %}
+For `read_timeout_ms` and `subscription_read_timeout_ms`, a value of `0` disables the timeout entirely. Subscription connections use `subscription_read_timeout_ms`; all other connections use `read_timeout_ms`.
+{% /callout %}
 
 ### Configuring IPC Programmatically
+
+Pass a custom `IpcConfig` to `start_ipc_listener_with_config`. Calling `start_ipc_listener()` instead loads `ipc.toml` (or defaults) automatically.
 
 ```rust
 use acton_reactive::prelude::*;
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[cfg(feature = "ipc")]
-async fn setup_ipc(runtime: &mut ActorRuntime) {
-    use acton_reactive::common::ipc::IpcConfig;
+async fn setup_ipc(runtime: &ActorRuntime) {
+    let mut config = IpcConfig::load();  // start from ipc.toml / defaults
+    config.socket.path = Some(PathBuf::from("/run/user/1000/myapp/acton.sock"));
+    config.limits.max_connections = 50;
+    config.timeouts.read = 0;  // no idle timeout
 
-    let ipc_config = IpcConfig {
-        socket_path: PathBuf::from("/var/run/myapp/acton.sock"),
-        max_connections: 50,
-        connection_timeout: Duration::from_secs(60),
-        rate_limit: None,
-    };
-
-    // Configure IPC with custom settings
-    runtime.set_ipc_config(ipc_config);
-
-    // Start the listener
-    let listener = runtime.start_ipc_listener().await.expect("Failed to start IPC");
+    let listener = runtime
+        .start_ipc_listener_with_config(config)
+        .await
+        .expect("Failed to start IPC");
 }
 ```
 

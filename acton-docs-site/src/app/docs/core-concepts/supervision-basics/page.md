@@ -3,13 +3,13 @@ title: Supervision Basics
 description: How Acton keeps your application running when actors fail.
 ---
 
-When actors fail, supervision ensures your system keeps running. Instead of letting one error crash everything, Acton contains failures and provides strategies for recovery.
+When actors fail, supervision ensures your system keeps running. Instead of letting one error crash everything, Acton contains failures and gives you the building blocks for organized recovery.
 
 ## The Problem Supervision Solves
 
 In traditional programs, an unhandled error often crashes the whole process. With actors, failures are isolated — if one actor fails, others continue normally.
 
-Supervision adds organized recovery on top of this isolation.
+Supervision adds organized recovery on top of this isolation. Acton's approach is explicit: the framework delivers termination notifications and provides decision helpers (`SupervisionStrategy`, `RestartPolicy`), and **your parent actor decides what to do** — Acton does not restart actors automatically.
 
 ---
 
@@ -28,8 +28,13 @@ let mut runtime = ActonApp::launch_async().await;
 let parent = runtime.new_actor::<ParentState>();
 let parent_handle = parent.start().await;
 
-// Create and configure a child
-let mut child = runtime.new_actor::<ChildState>();
+// Create a child that knows its parent
+let config = ActorConfig::new(
+    Ern::with_root("worker")?,
+    Some(parent_handle.clone()),  // parent reference
+    None,
+)?;
+let mut child = runtime.new_actor_with_config::<ChildState>(config);
 child.mutate_on::<Task>(|actor, _ctx| {
     // Handle task
     Reply::ready()
@@ -41,10 +46,10 @@ let child_handle = parent_handle.supervise(child).await?;
 
 The `supervise()` method:
 1. **Starts** the child actor
-2. **Registers** it under the parent's supervision
+2. **Registers** it in the parent's children map (so it stops when the parent stops)
 3. **Returns** the child's handle for sending messages
 
-Children inherit their parent's broker and have hierarchical identifiers (e.g., `parent/worker`).
+The parent reference in `ActorConfig` is what makes the child a real child: it gives the child a hierarchical identifier (e.g., `parent/worker`) and is required for the child to notify the parent when it terminates. A child created with plain `new_actor()` and then passed to `supervise()` will still stop with the parent, but it will never send a `ChildTerminated` notification. (An actor that is still in the `Idle` state — before `start()` — can also call `create_child()`, which wires up the parent and broker for a child of the same state type.)
 
 ---
 
@@ -53,12 +58,25 @@ Children inherit their parent's broker and have hierarchical identifiers (e.g., 
 When a child actor terminates:
 
 1. **The child stops** processing messages
-2. **The parent is notified** via a `ChildTerminated` message containing:
-   - Which child terminated
-   - Why it terminated (panic, normal shutdown, etc.)
+2. **The parent is notified** via a `ChildTerminated` message (if the child was created with a parent reference) containing:
+   - Which child terminated (`child_id`)
+   - Why it terminated (`TerminationReason`: `Normal`, `InboxClosed`, `ParentShutdown`, ...)
    - The child's restart policy
-3. **The parent makes a decision** based on its supervision strategy and the child's restart policy
+3. **Your parent actor decides what to do** — register a `mutate_on::<ChildTerminated>` handler and recreate the child, escalate, or move on. `SupervisionStrategy::decide()` turns the notification into a `SupervisionDecision` for you, but acting on it is your code's job.
 4. **Children stop** when their parent stops (cascading shutdown)
+
+```rust
+parent.mutate_on::<ChildTerminated>(|actor, ctx| {
+    let note = ctx.message();
+    match SupervisionStrategy::OneForOne.decide(note, 0) {
+        SupervisionDecision::RestartChild => {
+            // Recreate and re-supervise the child here
+        }
+        _ => { /* log, escalate, or ignore */ }
+    }
+    Reply::ready()
+});
+```
 
 This gives you fine-grained control over failure recovery.
 
@@ -66,7 +84,7 @@ This gives you fine-grained control over failure recovery.
 
 ## Supervision Strategies
 
-Acton provides three Erlang/OTP-style strategies that determine how a parent responds when a child fails:
+Acton provides three Erlang/OTP-style strategies. A strategy is a **decision helper**: calling `strategy.decide(&notification, child_index)` in your `ChildTerminated` handler tells you which children should be restarted, and your handler carries it out.
 
 ### OneForOne (Default)
 
@@ -109,11 +127,11 @@ Restart the failed child and all children started after it, preserving start ord
 
 ## Restart Policies
 
-Each child actor has a restart policy that determines whether it should be restarted when it terminates:
+Each child actor has a restart policy that travels with its `ChildTerminated` notification. `SupervisionStrategy::decide()` consults it to determine whether the child should be restarted:
 
 ### Permanent (Default)
 
-Always restart the actor when it terminates (except during parent shutdown).
+Should always be restarted when it terminates (except during parent shutdown).
 
 ```rust
 let config = ActorConfig::new(
@@ -128,7 +146,7 @@ let config = ActorConfig::new(
 
 ### Temporary
 
-Never restart the actor when it terminates.
+Should never be restarted when it terminates.
 
 ```rust
 .with_restart_policy(RestartPolicy::Temporary)
@@ -138,13 +156,17 @@ Never restart the actor when it terminates.
 
 ### Transient
 
-Restart only on abnormal termination (panic, inbox closed). Don't restart on normal shutdown.
+Should be restarted only on abnormal termination (e.g., an unexpectedly closed inbox), not on normal shutdown.
 
 ```rust
 .with_restart_policy(RestartPolicy::Transient)
 ```
 
 **Use for**: Workers that may complete normally but should restart on unexpected failures.
+
+{% callout type="note" title="Panics don't terminate actors by default" %}
+With the default `catch-handler-panics` feature enabled, a panicking handler is caught and logged and the actor keeps running — a panic doesn't trigger the supervision flow at all.
+{% /callout %}
 
 ---
 
@@ -170,7 +192,7 @@ Never rely on actor memory for data that must survive failures. Use:
 - Event sourcing for recovery
 - External state stores
 
-Supervision restarts actors fresh — any in-memory state is lost.
+A recreated actor starts fresh — any in-memory state is lost.
 {% /callout %}
 
 ---
@@ -212,10 +234,11 @@ Assume your actor might restart at any time. Keep minimal state — restore from
 
 ## Summary
 
-- Parent actors supervise children registered with `supervise()`
+- Parent actors supervise children registered with `supervise()`; create children with a parent reference (or `create_child()`) so termination notifications flow
 - Failures are isolated to individual actors
-- **Supervision strategies** control which children restart (OneForOne, OneForAll, RestForOne)
-- **Restart policies** control whether a child restarts (Permanent, Temporary, Transient)
+- Restarts are **your code's responsibility**: handle `ChildTerminated` in the parent and recreate children as needed
+- **Supervision strategies** decide which children should restart (OneForOne, OneForAll, RestForOne)
+- **Restart policies** decide whether a child should restart (Permanent, Temporary, Transient)
 - Children stop when their parent stops
 - Critical state should be persisted externally
 
@@ -229,6 +252,6 @@ You now understand the core concepts of Acton:
 - **The Actor System** for management
 - **Supervision** for fault tolerance
 
-For advanced supervision features like restart limiting and custom recovery logic, see [Custom Supervision](/docs/advanced/custom-supervision).
+For custom recovery logic and the `RestartLimiter` helper (a rate-limiting building block you can call from your own supervision handler), see [Custom Supervision](/docs/advanced/custom-supervision).
 
 Continue to [Building Apps](/docs/building-apps/parent-child-actors) for practical patterns.

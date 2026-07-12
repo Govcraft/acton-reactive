@@ -38,11 +38,10 @@ counter
 let handle = counter.start().await;
 ```
 
-The `start()` method:
-1. Creates the actor instance
-2. Sets up its message queue
-3. Starts it running on the async runtime
-4. Returns a handle for sending messages
+`new_actor()` creates the actor instance and its message queue. The `start()` method then:
+1. Runs the `before_start` hook
+2. Spawns the actor's task on the async runtime
+3. Returns a handle for sending messages
 
 ### Named Actors
 

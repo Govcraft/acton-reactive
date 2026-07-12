@@ -77,7 +77,7 @@ handle.send(Increment).await;
 
 ---
 
-## A complete example in 20 lines
+## A complete example in 25 lines
 
 ```rust
 use acton_reactive::prelude::*;
@@ -90,21 +90,19 @@ struct Increment;
 
 #[acton_main]
 async fn main() {
-    let mut app = ActonApp::launch();
+    let mut app = ActonApp::launch_async().await;
 
-    let handle = app
-        .new_actor::<Counter>()
-        .mutate_on::<Increment>(|actor, _| {
-            actor.model.count += 1;
-            println!("Count: {}", actor.model.count);
-            Reply::ready()
-        })
-        .start()
-        .await;
+    let mut counter = app.new_actor::<Counter>();
+    counter.mutate_on::<Increment>(|actor, _| {
+        actor.model.count += 1;
+        println!("Count: {}", actor.model.count);
+        Reply::ready()
+    });
+    let handle = counter.start().await;
 
-    handle.send(Increment).await.ok();
-    handle.send(Increment).await.ok();
-    handle.send(Increment).await.ok();
+    handle.send(Increment).await;
+    handle.send(Increment).await;
+    handle.send(Increment).await;
 
     app.shutdown_all().await.ok();
 }
@@ -139,7 +137,8 @@ builder.mutate_on::<Increment>(|actor, _| {
 
 // For queries - can run concurrently with other reads
 builder.act_on::<GetCount>(|actor, _| {
-    Reply::with(actor.model.count)
+    println!("Count: {}", actor.model.count);
+    Reply::ready()
 });
 ```
 
@@ -153,8 +152,8 @@ See [Messages & Handlers](/docs/core-concepts/messages-and-handlers) for the com
 
 ## Current status
 
-{% callout type="warning" title="Pre-1.0 Software" %}
-`acton-reactive` is under active development. The API is stabilizing but may change before 1.0. Breaking changes bump the minor version (e.g., 0.7 → 0.8).
+{% callout type="note" title="Production Ready" %}
+`acton-reactive` is stable and actively maintained. Releases follow semantic versioning: breaking changes bump the major version (e.g., 7.x → 8.0).
 {% /callout %}
 
 ---

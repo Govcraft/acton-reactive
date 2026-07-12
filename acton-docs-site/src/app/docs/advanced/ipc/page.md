@@ -16,7 +16,9 @@ Actors can communicate across process boundaries using Acton's IPC system. This 
 
 ## How It Works
 
-Acton's IPC uses Unix domain sockets for fast, local communication. Messages are serialized as JSON.
+Acton's IPC uses Unix domain sockets for fast, local communication. Messages are length-prefixed frames whose payload is serialized as **JSON** (always available) or **MessagePack** (with the `ipc-messagepack` feature). Each frame declares its own format, so both kinds of client can share one listener.
+
+The socket lives at `$XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock`, where `app_name` defaults to the binary name (falling back to `/tmp/acton/<app_name>/ipc.sock` when `XDG_RUNTIME_DIR` is unset). Resolve it with `IpcConfig::load().socket_path()` rather than hardcoding it.
 
 {% callout type="note" title="Local Only" %}
 IPC is designed for same-machine communication. For network distribution, build on top with your preferred transport.
@@ -104,64 +106,92 @@ The `expose_for_ipc()` method uses the actor's ERN name automatically. If you ne
 
 ## Client Side
 
-External clients connect via Unix domain sockets using the wire protocol:
+Rust clients use `IpcClient`, which owns the socket, runs dedicated reader and writer tasks, and correlates responses to requests for you. No hand-rolled framing:
 
 ```rust
-use tokio::net::UnixStream;
-use acton_reactive::ipc::protocol::{write_envelope, read_response};
-use acton_reactive::ipc::IpcEnvelope;
+use acton_reactive::prelude::*;
+use acton_reactive::ipc::{socket_exists, socket_is_alive};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Connect to the socket
-    let stream = UnixStream::connect("/run/user/1000/acton/ipc.sock").await?;
-    let (mut reader, mut writer) = stream.into_split();
+    // Resolve the same socket path the server uses.
+    let socket_path = IpcConfig::load().socket_path();
 
-    // Create an envelope targeting the exposed actor
-    let envelope = IpcEnvelope::new(
+    if !socket_exists(&socket_path) || !socket_is_alive(&socket_path).await {
+        eprintln!("Server not running at {}", socket_path.display());
+        return Ok(());
+    }
+
+    let client = IpcClient::connect(&socket_path).await?;
+
+    // new_request expects a reply; new() would be fire-and-forget.
+    let envelope = IpcEnvelope::new_request(
         "my-service",  // Actor name (from expose_for_ipc or ipc_expose)
         "GetValue",    // Registered type name
         serde_json::json!({}),
     );
 
-    // Send the request
-    write_envelope(&mut writer, &envelope).await?;
+    let response = client.request(envelope).await?;
 
-    // Read the response
-    let response = read_response(&mut reader, 1024 * 1024).await?;
-    println!("Response: {:?}", response);
+    if response.success {
+        println!("Value: {:?}", response.payload);
+    } else {
+        eprintln!("{:?}: {:?}", response.error_code, response.error);
+    }
 
+    client.disconnect().await?;
     Ok(())
 }
 ```
+
+{% callout type="warning" title="Use new_request when you want an answer" %}
+`IpcEnvelope::new` builds a **fire-and-forget** message: the server routes it to the actor and immediately replies `{"status": "delivered"}`, discarding whatever the actor sends back. Only `IpcEnvelope::new_request` (or `new_request_with_timeout`) sets `expects_reply`, which is what makes the listener wait for the actor's reply and forward it.
+{% /callout %}
+
+`IpcClient` also covers fire-and-forget (`send`), subscriptions (`subscribe` + `take_push_receiver`), and discovery (`discover`). See [IPC Patterns](/docs/ipc-patterns) for each. Request-stream is the one pattern it does not decode — read those frames with `protocol::read_frame` directly.
 
 ---
 
 ## Client Libraries
 
-Acton includes example client libraries for other languages:
+Acton includes example client libraries for Python, Node.js, and Deno. Each speaks the same wire protocol as `IpcClient`.
 
 ### Python
 
-```python
-from acton_ipc import ActonClient
+`ActonIpcClient` is async; `ActonIpcClientSync` is the blocking equivalent.
 
-client = ActonClient("/run/user/1000/acton/ipc.sock")
-response = client.send("my-service", "GetValue", {})
-print(f"Value: {response}")
+```python
+from acton_ipc import ActonIpcClient
+
+client = ActonIpcClient("/run/user/1000/acton/my_app/ipc.sock")
+await client.connect()
+
+response = await client.request("my-service", "GetValue", {})
+print(f"Value: {response.payload}")
+
+# Push notifications
+await client.subscribe(["PriceUpdate"])
 ```
 
 ### Node.js
 
-```typescript
-import { ActonClient } from 'acton-ipc';
+The package is `acton-ipc-client`, exporting `ActonIpcClient`.
 
-const client = new ActonClient('/run/user/1000/acton/ipc.sock');
-const response = await client.send('my-service', 'GetValue', {});
-console.log('Value:', response);
+```typescript
+import { ActonIpcClient } from 'acton-ipc-client';
+
+const client = new ActonIpcClient('/run/user/1000/acton/my_app/ipc.sock');
+await client.connect();
+
+const response = await client.request('my-service', 'GetValue', {});
+console.log('Value:', response.payload);
 ```
 
-See the `examples/ipc_client_libraries/` directory for complete implementations.
+### Deno
+
+A Deno client ships alongside the Node.js one, in `examples/ipc_client_libraries/deno/`.
+
+See the `examples/ipc_client_libraries/` directory for complete implementations, and [IPC Setup](/docs/ipc-setup#wire-protocol) for the frame format if you are writing a client in another language.
 
 ---
 

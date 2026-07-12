@@ -117,14 +117,83 @@ builder.act_on::<GetCount>(|actor, envelope| {
 ### Async Handler
 
 ```rust
-builder.act_on::<FetchData>(|_actor, envelope| {
-    let url = envelope.message().url.clone();
+builder.act_on::<Compute>(|actor, envelope| {
+    let input = envelope.message().input;
     let reply = envelope.reply_envelope();
     Reply::pending(async move {
+        let result = compute(input).await;
+        reply.send(ComputeResponse { result }).await;
+    })
+});
+```
+
+{% callout type="warning" title="Handler futures must be Send + Sync" %}
+The async block you pass to `Reply::pending` must be `Send + **Sync**`. That's stricter than the usual `Send`, and it rules out plenty of third-party futures (many HTTP and database clients). If the compiler says *"future created by async block is not `Sync`"*, use the spawn-and-report-back pattern below.
+{% /callout %}
+
+### Async Handler (Non-`Sync` Future — HTTP, DB, …)
+
+Spawn the work with `tokio::spawn` (which only needs `Send`) and message the result back:
+
+```rust
+builder.mutate_on::<FetchData>(|actor, envelope| {
+    let handle = actor.handle().clone();
+    let url = envelope.message().url.clone();
+
+    tokio::spawn(async move {
         let resp = reqwest::get(&url).await.unwrap();
         let body = resp.text().await.unwrap();
-        reply.send(FetchResponse { body }).await;
+        handle.send(FetchResponse { body }).await;
+    });
+
+    Reply::ready()
+});
+
+// Then handle the result as a normal message
+builder.mutate_on::<FetchResponse>(|actor, envelope| {
+    actor.model.last_body = envelope.message().body.clone();
+    Reply::ready()
+});
+```
+
+### Read-Only Handler (Sync — No Future Allocation)
+
+```rust
+builder.act_on_sync::<LogCount>(|actor, _envelope| {
+    tracing::info!("count = {}", actor.model.count);
+});
+```
+
+---
+
+## Fallible Handlers
+
+Return a `Result` from a handler and handle the error separately.
+
+```rust
+builder
+    .try_mutate_on::<Withdraw, Receipt, BankError>(|actor, ctx| {
+        let amount = ctx.message().amount;
+        let balance = actor.model.balance;
+        Reply::try_pending(async move {
+            if balance < amount {
+                Err(BankError::InsufficientFunds { balance, amount })
+            } else {
+                Ok(Receipt { remaining: balance - amount })
+            }
+        })
     })
+    .on_error::<Withdraw, BankError>(|actor, ctx, err| {
+        tracing::error!("Withdrawal failed: {}", err);
+        Reply::ready()
+    });
+```
+
+Immediate results skip the async block entirely:
+
+```rust
+builder.try_act_on::<GetBalance, Balance, BankError>(|actor, _ctx| {
+    Reply::try_ok(Balance(actor.model.balance))
 });
 ```
 
@@ -134,26 +203,38 @@ builder.act_on::<FetchData>(|_actor, envelope| {
 
 ### Create and Supervise Child
 
-```rust
-builder.mutate_on::<SpawnChild>(|actor, _envelope| {
-    let mut child = actor.create_child("worker".to_string())
-        .expect("Failed to create child");
-    child.mutate_on::<Task>(handle_task);
+Build the child from the runtime, give it a **parent reference**, then hand it to `supervise()`:
 
-    let parent_handle = actor.handle().clone();
-    Reply::pending(async move {
-        let child_handle = parent_handle.supervise(child).await
-            .expect("Failed to supervise");
-        println!("Child started: {}", child_handle.id());
-    })
-});
+```rust
+// Start the parent
+let parent = runtime.new_actor::<ParentState>();
+let parent_handle = parent.start().await;
+
+// Build the child with the parent in its config — this is what enables
+// ChildTerminated notifications back to the parent.
+let config = ActorConfig::new(
+    Ern::with_root("worker")?,
+    Some(parent_handle.clone()),
+    None,
+)?;
+let mut child = runtime.new_actor_with_config::<WorkerState>(config);
+child.mutate_on::<Task>(handle_task);
+
+// supervise() starts the child and registers it under the parent
+let child_handle = parent_handle.supervise(child).await?;
 ```
+
+{% callout type="note" title="create_child() is Idle-only" %}
+`create_child()` exists only on a builder (`ManagedActor<Idle, _>`), not on a running actor — so you can't call it from inside a handler, and it returns an actor with the *same* state type as its parent. To spawn a differently-typed worker, use `runtime.new_actor_with_config()` as above.
+{% /callout %}
 
 ### Access Children
 
+`children()` lives on the **handle**, not on the actor:
+
 ```rust
-for child in actor.children().iter() {
-    child.send(Ping).await;
+for child in actor.handle().children().iter() {
+    child.value().send(Ping).await;
 }
 ```
 
@@ -192,9 +273,10 @@ struct Counter {
 
 ### With Custom Default
 
+Use `no_default` to stop the macro deriving `Default`, then write your own. (Adding `#[derive(Default)]` *and* a manual `impl Default` collides — you'd get "conflicting implementations".)
+
 ```rust
-#[acton_actor]
-#[derive(Default)]
+#[acton_actor(no_default)]
 struct Config {
     timeout: Duration,
 }
@@ -205,6 +287,8 @@ impl Default for Config {
     }
 }
 ```
+
+`no_default` is also how you hold a field whose type has no `Default` (a `Stdout`, a client handle, and so on).
 
 ### With External Resources
 
@@ -284,14 +368,80 @@ async fn test_actor() {
 
 ---
 
+## IPC
+
+### Expose an Actor (Server)
+
+```rust
+let mut runtime = ActonApp::launch_async().await;
+
+// Register the message type so it can be deserialized from the wire
+runtime.ipc_registry().register::<GetPrice>("GetPrice");
+
+let mut service = runtime.new_actor_with_name::<PriceService>("prices".to_string());
+service
+    .act_on::<GetPrice>(|actor, ctx| { /* ... */ })
+    .expose_for_ipc();          // reachable as "prices"
+let handle = service.start().await;
+
+let listener = runtime.start_ipc_listener().await?;
+```
+
+### Connect and Send (Client)
+
+`IpcClient` is the channel-based client — connect once, then send, request, or subscribe:
+
+```rust
+use acton_reactive::ipc::{IpcClient, IpcConfig, IpcEnvelope};
+
+let client = IpcClient::connect(IpcConfig::load().socket_path()).await?;
+
+// Request-response — new_request() sets expects_reply and generates a correlation ID
+let response = client.request(IpcEnvelope::new_request(
+    "prices",
+    "GetPrice",
+    serde_json::json!({ "symbol": "ACTON" }),
+)).await?;
+
+if response.success {
+    println!("{:?}", response.payload);
+}
+
+// Fire-and-forget — IpcEnvelope::new() instead
+client.send(IpcEnvelope::new(
+    "prices",
+    "RefreshCache",
+    serde_json::json!({}),
+)).await?;
+
+client.disconnect().await?;
+```
+
+### Subscribe to Broadcasts (Client)
+
+```rust
+client.subscribe(vec!["PriceUpdate".to_string()]).await?;
+let mut pushes = client.take_push_receiver().expect("already taken");
+
+while let Some(note) = pushes.recv().await {
+    println!("push: {:?}", note.payload);
+}
+```
+
+See [IPC Setup](/docs/ipc-setup) and [IPC Patterns](/docs/ipc-patterns) for the full picture.
+
+---
+
 ## Quick Imports
 
 ```rust
 // Everything you need
 use acton_reactive::prelude::*;
 
-// For IPC
-use acton_reactive::ipc::{IpcEnvelope, IpcConfig};
+// For IPC clients
+use acton_reactive::ipc::{IpcClient, IpcConfig, IpcEnvelope};
+
+// Only if you're speaking the wire protocol by hand
 use acton_reactive::ipc::protocol::{write_envelope, read_response};
 ```
 
@@ -301,9 +451,14 @@ use acton_reactive::ipc::protocol::{write_envelope, read_response};
 
 | Wrong | Right |
 |-------|-------|
-| `ActonApp::launch()` | `ActonApp::launch_async().await` |
+| `ActonApp::launch()` **from an async context** (panics) | `ActonApp::launch_async().await`. `launch()` is fine from `fn main()`. |
+| `ctx.message` | `ctx.message()` — it's an accessor, not a field |
+| `actor.children()` | `actor.handle().children()` |
+| `actor.create_child(..)` inside a handler | `create_child` is `Idle`-only; build from the runtime and `supervise()` |
+| `#[acton_actor]` + `#[derive(Default)]` + manual `impl Default` | `#[acton_actor(no_default)]` + manual `impl Default` |
+| `runtime.new_actor::<T>().mutate_on::<M>(h).start()` | Configure via `&mut` first, *then* `builder.start().await` |
 | `handle.ask(msg)` | Use reply envelope pattern |
 | `Reply::with(value)` | Use `Reply::pending` + reply envelope |
 | Forgetting `.await` on `start()` | `builder.start().await` |
 | Mutating in `act_on` | Use `mutate_on` for state changes |
-| Using `_msg` parameter | Use `envelope.message()` |
+| Expecting a panic to kill an actor | Panics are caught by default; use `try_mutate_on` + `on_error` |

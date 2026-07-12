@@ -41,13 +41,11 @@ use acton_reactive::prelude::*;
 use std::collections::HashMap;
 
 #[acton_actor]
-#[derive(Default)]
 struct KVStore {
     data: HashMap<String, String>,
 }
 
 #[acton_actor]
-#[derive(Default)]
 struct Client;
 
 #[acton_message]

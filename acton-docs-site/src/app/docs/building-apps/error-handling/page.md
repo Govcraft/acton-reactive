@@ -27,6 +27,39 @@ builder.mutate_on::<ProcessOrder>(|actor, envelope| {
 
 ---
 
+## Fallible Handlers
+
+For handlers that can fail, use the `try_` variants with the `Reply::try_*` helpers, and register a typed error handler with `on_error`:
+
+```rust
+// Immediate result (sync)
+builder.try_mutate_on::<RiskyOperation>(|actor, ctx| {
+    if something_bad() {
+        Reply::try_err(MyError::new("something went wrong"))
+    } else {
+        Reply::try_ok(SuccessResult)
+    }
+});
+
+// Or with async operations
+builder.try_mutate_on::<RiskyOperation>(|actor, ctx| {
+    Reply::try_pending(async move {
+        let result = do_risky_thing().await?;
+        Ok(SuccessResult { data: result })
+    })
+});
+
+// Runs when a RiskyOperation handler returns MyError
+builder.on_error::<RiskyOperation, MyError>(|actor, ctx, error| {
+    tracing::error!("RiskyOperation failed: {}", error);
+    Reply::ready()
+});
+```
+
+`try_act_on` is the read-only counterpart of `try_mutate_on`.
+
+---
+
 ## Signaling Errors to Other Actors
 
 When another actor needs to know about failures, send error response messages:
@@ -90,6 +123,35 @@ worker_1.send(DangerousTask).await;
 worker_2.send(SafeTask).await;  // Still works
 worker_3.send(SafeTask).await;  // Still works
 ```
+
+{% callout type="warning" title="Panic isolation is a feature flag" %}
+Handler panics are caught by the `catch-handler-panics` feature, which is **enabled by default**. It wraps every handler dispatch in `catch_unwind` so a panicking handler can't crash the actor task. If you disable default features for performance, a panicking handler takes its actor task down with it — only disable it for well-tested handlers.
+{% /callout %}
+
+---
+
+## Supervision Building Blocks
+
+When a supervised child terminates, it sends a `ChildTerminated` message to its parent carrying the child's identity, the `TerminationReason` (`Normal`, `Panic`, `InboxClosed`, or `ParentShutdown`), and its `RestartPolicy`. The parent handles this like any other message:
+
+```rust
+parent.mutate_on::<ChildTerminated>(|actor, envelope| {
+    let notification = envelope.message();
+    tracing::warn!("Child {} terminated: {:?}", notification.child_id, notification.reason);
+    // Decide whether to recreate the child, escalate, or move on
+    Reply::ready()
+});
+```
+
+Set a child's restart policy via `ActorConfig::with_restart_policy` when creating it:
+
+| Policy | Meaning |
+|--------|---------|
+| `Permanent` (default) | Should always be restarted, whether termination was normal or abnormal |
+| `Temporary` | Should never be restarted |
+| `Transient` | Should be restarted only on abnormal termination (panic or error) |
+
+`SupervisionStrategy::decide()` combines the policy and termination reason into a `SupervisionDecision` (`RestartChild`, `RestartAll`, `RestartFrom`, `NoRestart`, `Escalate`), and the `RestartLimiter` helper can bound restart frequency in your handler. Restarting is your handler's job — the framework only delivers the notification. See [Custom Supervision](/docs/advanced/custom-supervision) for putting these together.
 
 ---
 
@@ -204,8 +266,10 @@ builder.mutate_on::<RiskyOperation>(|actor, envelope| {
 ## Summary
 
 - Handle expected errors within handlers
+- Use `try_mutate_on` / `try_act_on` with `on_error` for typed failures
 - Send explicit success/failure response messages
-- Rely on actor isolation for fault tolerance
+- Rely on actor isolation for fault tolerance (backed by the default-on `catch-handler-panics` feature)
+- Handle `ChildTerminated` in parents and set restart policies for supervised children
 - Log errors for debugging
 - Consider patterns like circuit breakers for external services
 

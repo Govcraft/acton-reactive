@@ -249,7 +249,7 @@ sequenceDiagram
 
 This means:
 - Children's `before_stop` and `after_stop` hooks run before the parent completes
-- Resources are cleaned up in reverse order of creation
+- Siblings stop concurrently; each child's own children stop before it does (depth-first)
 - No manual cleanup tracking needed
 
 ---
