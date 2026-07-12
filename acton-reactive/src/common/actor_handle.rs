@@ -55,10 +55,11 @@ pub struct ActorHandle {
     pub(crate) outbox: ActorSender,
     /// Tracks the actor's main task and potentially other associated tasks.
     tracker: TaskTracker,
-    /// Optional reference to the parent (supervisor) actor's handle.
+    /// Optional reference to the parent (supervisor) actor's handle
+    /// ([`ParentRef`](crate::common::ParentRef)).
     /// `None` if this is a top-level actor. Boxed to manage `ActorHandle` size.
     pub parent: Option<Box<Self>>,
-    /// Optional reference to the system message broker's handle.
+    /// Optional reference to the system message broker's handle ([`BrokerRef`]).
     /// Boxed to manage `ActorHandle` size.
     pub broker: Box<Option<Self>>,
     /// A map holding handles to the direct children supervised by this actor.

@@ -161,6 +161,32 @@ pub type FutureBoxReadOnlyResult = Pin<
     >,
 >;
 
+/// Crate-internal: Error context carried back from a completed read-only fallible handler.
+///
+/// Read-only handler futures execute concurrently and therefore cannot access the
+/// actor mutably to invoke a registered error handler directly. When a `try_act_on`
+/// handler fails, its future yields this context so the actor loop can dispatch the
+/// error at the next flush point, where exclusive (`&mut`) access is available.
+pub struct ReadOnlyHandlerError {
+    /// The envelope the failing handler was invoked with, preserving the original
+    /// message and reply context for the error handler.
+    pub envelope: Envelope,
+    /// The `TypeId` of the concrete message type the failing handler was registered for.
+    pub message_type_id: TypeId,
+    /// The `TypeId` of the concrete error type returned by the handler.
+    pub error_type_id: TypeId,
+    /// The boxed error returned by the handler.
+    pub error: Box<dyn std::error::Error + Send + Sync>,
+}
+
+/// Crate-internal: Box for read-only handler futures executed concurrently by the
+/// actor's message loop.
+///
+/// Resolves to `Some(ReadOnlyHandlerError)` when a fallible read-only handler returns
+/// an error, and `None` when the handler succeeds or is infallible.
+pub type FutureBoxReadOnlyOutcome =
+    Pin<Box<dyn Future<Output = Option<ReadOnlyHandlerError>> + Send + Sync + 'static>>;
+
 /// Crate-internal: Type alias for the sender part of an actor's MPSC channel.
 pub type ActorSender = Sender<Envelope>;
 

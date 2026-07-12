@@ -265,14 +265,14 @@ actor.try_act_on::<CheckCache>(|actor, ctx| {
 **Characteristics:**
 - Read-only access with error handling
 - Concurrent execution (like `act_on`)
-- Errors are logged and dropped — `on_error` handlers do **not** fire for `try_act_on`
+- Errors are routed to `on_error` handlers at the next flush point, after in-flight concurrent handlers complete
 - Use for fallible queries
 
 ---
 
 ## Error Handler Registration
 
-For `try_mutate_on` handlers, register error handlers with `on_error`. (Errors from `try_act_on` are logged and dropped; `on_error` does not apply to them.)
+Register error handlers for fallible message types with `on_error`. It applies to both `try_mutate_on` and `try_act_on` handlers.
 
 ```rust
 // Define error type
@@ -305,6 +305,8 @@ actor.on_error::<ProcessData, ValidationError>(|actor, ctx, error| {
     Reply::ready()
 });
 ```
+
+`on_error` works with both fallible handler types. Errors from `try_mutate_on` handlers are dispatched to the error handler immediately after the failing handler returns. Errors from `try_act_on` handlers are captured when the concurrent handler completes and dispatched at the actor's next flush point (before the next mutable handler runs, when the high-water mark is reached, on the flush timer, or at shutdown), where the error handler receives exclusive `&mut` access to the actor along with the original message and reply context.
 
 If no error handler is registered, errors are logged and the message is dropped.
 

@@ -229,7 +229,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// Registers an asynchronous error handler for a specific error type `E`.
     ///
     /// This allows the actor to handle errors of type `E` by executing the given closure
-    /// whenever a message handler returns an error of this type.
+    /// whenever a message handler returns an error of this type. Both fallible handler
+    /// kinds are covered: errors from [`try_mutate_on`](Self::try_mutate_on) handlers are
+    /// dispatched immediately after the failing handler returns, while errors from
+    /// [`try_act_on`](Self::try_act_on) handlers are dispatched at the actor's next flush
+    /// point, once the concurrently running read-only handlers have completed.
     ///
     /// # Type Parameters
     ///
@@ -470,6 +474,13 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// Unlike `try_mutate_on`, handlers registered with `try_act_on` operate on an immutable reference
     /// to the actor (`&ManagedActor`) and can be executed concurrently with other read-only handlers.
     /// Message ordering is not guaranteed for read-only handlers.
+    ///
+    /// Errors returned by the handler are routed to an error handler registered via
+    /// [`on_error`](Self::on_error) for the same message and error types. Because
+    /// read-only handlers execute concurrently, the error is dispatched at the actor's
+    /// next flush point (where exclusive access to the actor is available) rather than
+    /// immediately after the handler returns. If no matching error handler is
+    /// registered, the error is logged.
     ///
     /// # Type Parameters
     ///

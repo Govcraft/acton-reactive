@@ -27,7 +27,10 @@ use tracing::{error, instrument, trace};
 
 use crate::actor::{ManagedActor, TerminationReason};
 use crate::common::config::CONFIG;
-use crate::common::{Envelope, FutureBoxReadOnly, OutboundEnvelope, ReactorItem, ReactorMap};
+use crate::common::{
+    Envelope, FutureBoxReadOnlyOutcome, OutboundEnvelope, ReactorItem, ReactorMap,
+    ReadOnlyHandlerError,
+};
 use crate::message::{BrokerRequestEnvelope, ChildTerminated, MessageAddress, SystemSignal};
 use crate::traits::ActorHandleInterface;
 
@@ -354,11 +357,47 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         }
     }
 
+    /// Drains all in-flight read-only handler futures, then dispatches any errors
+    /// their fallible handlers returned.
+    ///
+    /// Read-only handler futures run concurrently and cannot access the actor mutably,
+    /// so a failing `try_act_on` handler cannot invoke its registered error handler
+    /// directly. Instead, each completed fallible future carries its error context
+    /// back here, where the actor loop has exclusive (`&mut`) access, and the errors
+    /// are routed through [`handle_fallible_error`](Self::handle_fallible_error)
+    /// exactly like the `try_mutate_on` path. All concurrent handlers are drained
+    /// before any error handler runs, preserving read-only handler concurrency.
+    async fn flush_read_only_handlers(
+        &mut self,
+        read_only_futures: &mut FuturesUnordered<FutureBoxReadOnlyOutcome>,
+    ) {
+        let mut deferred_errors: Vec<ReadOnlyHandlerError> = Vec::new();
+        while let Some(outcome) = read_only_futures.next().await {
+            if let Some(handler_error) = outcome {
+                deferred_errors.push(handler_error);
+            }
+        }
+        for mut handler_error in deferred_errors {
+            self.handle_fallible_error(
+                &mut handler_error.envelope,
+                handler_error.message_type_id,
+                handler_error.error_type_id,
+                handler_error.error,
+            )
+            .await;
+        }
+    }
+
     /// Enqueues a read-only handler as a future for concurrent execution.
     ///
     /// Instead of spawning a separate task for each handler, this pushes the future
     /// directly to `FuturesUnordered` for more efficient execution of lightweight handlers.
     /// This avoids the overhead of task creation and `JoinHandle` management.
+    ///
+    /// Fallible handlers ([`ReactorItem::ReadOnlyFallible`]) that return an error yield
+    /// a [`ReadOnlyHandlerError`] from their future so the error can be dispatched to a
+    /// registered error handler at the next flush point
+    /// (see [`flush_read_only_handlers`](Self::flush_read_only_handlers)).
     ///
     /// Panics in read-only handlers are caught and logged, preventing one panicking
     /// handler from affecting other concurrent handlers or crashing the actor.
@@ -371,7 +410,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         &self,
         reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
-        read_only_futures: &FuturesUnordered<FutureBoxReadOnly>,
+        read_only_futures: &FuturesUnordered<FutureBoxReadOnlyOutcome>,
     ) {
         let actor_id = self.id().clone();
         let message_type_id = envelope.message.as_any().type_id();
@@ -397,6 +436,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                                         "Panic in read-only message handler"
                                     );
                                 }
+                                None
                             }));
                         }
                         Err(panic_payload) => {
@@ -412,7 +452,11 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                 #[cfg(not(feature = "catch-handler-panics"))]
                 {
                     let _ = (actor_id, message_type_id);
-                    read_only_futures.push(fut(self, envelope));
+                    let future = fut(self, envelope);
+                    read_only_futures.push(Box::pin(async move {
+                        future.await;
+                        None
+                    }));
                 }
             }
             ReactorItem::ReadOnlyFallible(fut) => {
@@ -423,16 +467,22 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     }));
                     match future_result {
                         Ok(future) => {
+                            // Clone the envelope so the error handler retains the original
+                            // message and reply context, mirroring the `try_mutate_on` path.
+                            let envelope = envelope.clone();
                             read_only_futures.push(Box::pin(async move {
                                 match AssertUnwindSafe(future).catch_unwind().await {
-                                    Ok(Ok(_)) => { /* Handler succeeded */ }
-                                    Ok(Err((err, _error_type_id))) => {
-                                        error!(
-                                            actor_id = %actor_id,
-                                            message_type = ?message_type_id,
-                                            error = ?err,
-                                            "Unhandled error from read-only message handler"
-                                        );
+                                    Ok(Ok(_)) => None, /* Handler succeeded */
+                                    Ok(Err((error, error_type_id))) => {
+                                        // Carry the error back to the actor loop so it can be
+                                        // dispatched to a registered error handler at the next
+                                        // flush point, where `&mut` access is available.
+                                        Some(ReadOnlyHandlerError {
+                                            envelope,
+                                            message_type_id,
+                                            error_type_id,
+                                            error,
+                                        })
                                     }
                                     Err(panic_payload) => {
                                         let panic_msg = extract_panic_message(&panic_payload);
@@ -442,6 +492,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                                             panic_message = %panic_msg,
                                             "Panic in read-only fallible message handler"
                                         );
+                                        None
                                     }
                                 }
                             }));
@@ -459,14 +510,23 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                 #[cfg(not(feature = "catch-handler-panics"))]
                 {
                     let future = fut(self, envelope);
+                    // Clone the envelope so the error handler retains the original
+                    // message and reply context, mirroring the `try_mutate_on` path.
+                    let envelope = envelope.clone();
                     read_only_futures.push(Box::pin(async move {
-                        if let Err((err, _error_type_id)) = future.await {
-                            error!(
-                                actor_id = %actor_id,
-                                message_type = ?message_type_id,
-                                error = ?err,
-                                "Unhandled error from read-only message handler"
-                            );
+                        match future.await {
+                            Ok(_) => None, /* Handler succeeded */
+                            Err((error, error_type_id)) => {
+                                // Carry the error back to the actor loop so it can be
+                                // dispatched to a registered error handler at the next
+                                // flush point, where `&mut` access is available.
+                                Some(ReadOnlyHandlerError {
+                                    envelope,
+                                    message_type_id,
+                                    error_type_id,
+                                    error,
+                                })
+                            }
                         }
                     }));
                 }
@@ -514,7 +574,8 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let cancel_token = self.cancellation_token.clone().unwrap();
         let mut cancel = Box::pin(cancel_token.cancelled());
 
-        let mut read_only_futures: FuturesUnordered<FutureBoxReadOnly> = FuturesUnordered::new();
+        let mut read_only_futures: FuturesUnordered<FutureBoxReadOnlyOutcome> =
+            FuturesUnordered::new();
         let high_water_mark = CONFIG.limits.concurrent_handlers_high_water_mark;
         let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
         let mut last_flush_time = Instant::now();
@@ -526,14 +587,14 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             tokio::select! {
                 () = &mut cancel => {
                     trace!("Forceful cancellation triggered for actor: {}", self.id());
-                    while read_only_futures.next().await.is_some() {}
+                    self.flush_read_only_handlers(&mut read_only_futures).await;
                     // Parent-initiated shutdown via cancellation token
                     termination_reason = TerminationReason::ParentShutdown;
                     break;
                 }
 
                 () = tokio::time::sleep_until((last_flush_time + max_wait_duration).into()), if !read_only_futures.is_empty() => {
-                    while read_only_futures.next().await.is_some() {}
+                    self.flush_read_only_handlers(&mut read_only_futures).await;
                     last_flush_time = Instant::now();
                 }
 
@@ -558,17 +619,17 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
 
                     // Dispatch to registered handler or handle system signals
                     if let Some(reactor) = mutable_reactors.get(&type_id) {
-                        while read_only_futures.next().await.is_some() {}
+                        self.flush_read_only_handlers(&mut read_only_futures).await;
                         last_flush_time = Instant::now();
                         self.dispatch_mutable_handler(reactor, &mut envelope).await;
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
                         self.enqueue_read_only_handler(reactor, &mut envelope, &read_only_futures);
                         if read_only_futures.len() >= high_water_mark {
-                            while read_only_futures.next().await.is_some() {}
+                            self.flush_read_only_handlers(&mut read_only_futures).await;
                             last_flush_time = Instant::now();
                         }
                     } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate)) {
-                        while read_only_futures.next().await.is_some() {}
+                        self.flush_read_only_handlers(&mut read_only_futures).await;
                         trace!("Terminate signal received for actor: {}. Closing inbox.", self.id());
                         run_lifecycle_hook!(self, before_stop, "before_stop");
                         self.inbox.close();
@@ -583,7 +644,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         }
 
         trace!("Message loop finished for actor: {}. Initiating final termination.", self.id());
-        while read_only_futures.next().await.is_some() {}
+        self.flush_read_only_handlers(&mut read_only_futures).await;
         terminate_children(&self.handle, self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
 
