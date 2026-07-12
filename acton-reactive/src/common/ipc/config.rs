@@ -426,7 +426,7 @@ mod tests {
         let config = IpcConfig::default();
         assert_eq!(
             config.request_timeout(),
-            std::time::Duration::from_millis(30_000)
+            std::time::Duration::from_secs(30)
         );
     }
 
@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(config.shutdown.drain_timeout, 5_000);
         assert_eq!(
             config.drain_timeout(),
-            std::time::Duration::from_millis(5_000)
+            std::time::Duration::from_secs(5)
         );
     }
 

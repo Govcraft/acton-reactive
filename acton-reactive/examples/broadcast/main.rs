@@ -168,7 +168,7 @@ async fn main() {
                         SetForegroundColor(Color::DarkYellow),
                         Print("\u{2713}  "),
                         SetForegroundColor(Color::Yellow),
-                        Print(who.to_string()),
+                        Print(who.clone()),
                         SetForegroundColor(Color::DarkYellow),
                         Print(format!(" is {what}!\n")),
                         ResetColor
@@ -180,7 +180,7 @@ async fn main() {
                         SetForegroundColor(Color::DarkCyan),
                         Print("\u{2139}  "),
                         SetForegroundColor(Color::Cyan),
-                        Print(who.to_string()),
+                        Print(who.clone()),
                         SetForegroundColor(Color::DarkCyan),
                         Print(format!(" updated value: {data_value}!\n")),
                         ResetColor

@@ -1390,7 +1390,7 @@ mod tests {
         assert_eq!(envelope.response_timeout_ms, 5000);
         assert_eq!(
             envelope.response_timeout(),
-            std::time::Duration::from_millis(5000)
+            std::time::Duration::from_secs(5)
         );
     }
 

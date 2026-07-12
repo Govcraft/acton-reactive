@@ -127,7 +127,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
     // then execute its `after_stop` handler before fully terminating.
     // The `.await` ensures we wait for the shutdown to complete.
 
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     runtime.shutdown_all().await?;
 
     Ok(())

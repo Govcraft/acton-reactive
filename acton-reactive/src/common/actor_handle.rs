@@ -25,7 +25,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace, warn}; // warn seems unused
 
 use crate::actor::{Idle, ManagedActor};
-use crate::common::{ActorSender, BrokerRef, OutboundEnvelope, ParentRef};
+use crate::common::{ActorSender, BrokerRef, OutboundEnvelope};
 use crate::message::{BrokerRequest, MessageAddress, SystemSignal};
 use crate::prelude::ActonMessage;
 use crate::traits::{ActorHandleInterface, Broadcaster, Subscriber};
@@ -57,13 +57,13 @@ pub struct ActorHandle {
     tracker: TaskTracker,
     /// Optional reference to the parent (supervisor) actor's handle.
     /// `None` if this is a top-level actor. Boxed to manage `ActorHandle` size.
-    pub parent: Option<Box<ParentRef>>,
+    pub parent: Option<Box<Self>>,
     /// Optional reference to the system message broker's handle.
     /// Boxed to manage `ActorHandle` size.
-    pub broker: Box<Option<BrokerRef>>,
+    pub broker: Box<Option<Self>>,
     /// A map holding handles to the direct children supervised by this actor.
     /// Keys are the string representation of the child actor's `Ern`.
-    children: DashMap<String, ActorHandle>,
+    children: DashMap<String, Self>,
     /// The actor's cancellation token (clone).
     pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
 }

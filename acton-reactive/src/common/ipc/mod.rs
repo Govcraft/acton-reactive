@@ -103,7 +103,9 @@ pub use types::{
 pub use client::{IpcClient, IpcClientConfig};
 
 // Re-export config types for users who want to customize defaults
-pub use config::{RateLimitConfig, ShutdownConfig};
+pub use config::{
+    IpcLimitsConfig, IpcTimeoutsConfig, RateLimitConfig, ShutdownConfig, SocketConfig,
+};
 
 // Assert public API types are constructable - compile-time check
 const _: () = {

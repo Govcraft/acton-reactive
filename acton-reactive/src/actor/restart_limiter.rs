@@ -434,11 +434,11 @@ mod tests {
         let _ = limiter.record_restart();
         // Fourth restart: would be 8000ms, but capped at 5000ms
         let backoff4 = limiter.record_restart();
-        assert_eq!(backoff4, Duration::from_millis(5000));
+        assert_eq!(backoff4, Duration::from_secs(5));
 
         // Fifth restart: still capped at 5000ms
         let backoff5 = limiter.record_restart();
-        assert_eq!(backoff5, Duration::from_millis(5000));
+        assert_eq!(backoff5, Duration::from_secs(5));
     }
 
     #[test]

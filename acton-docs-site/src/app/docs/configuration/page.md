@@ -363,6 +363,8 @@ subscription_read_timeout_ms = 0     # 0 = no timeout (default for subscribers)
 drain_timeout_ms = 5000      # Max wait for in-flight requests on shutdown
 ```
 
+Each section maps to a nested field of `IpcConfig` (`socket`, `limits`, `rate_limit`, `timeouts`, `shutdown`), and each nested type (`SocketConfig`, `IpcLimitsConfig`, `RateLimitConfig`, `IpcTimeoutsConfig`, `ShutdownConfig`) is importable from `acton_reactive::ipc`.
+
 ### Default IPC Values
 
 | Option | Default | Description |
@@ -402,6 +404,35 @@ async fn setup_ipc(runtime: &ActorRuntime) {
 
     let listener = runtime
         .start_ipc_listener_with_config(config)
+        .await
+        .expect("Failed to start IPC");
+}
+```
+
+The nested config types are exported from `acton_reactive::ipc`, so you can also construct an `IpcConfig` directly instead of mutating a loaded one:
+
+```rust
+use acton_reactive::prelude::*;
+use acton_reactive::ipc::{IpcConfig, IpcLimitsConfig, RateLimitConfig, ShutdownConfig};
+
+#[cfg(feature = "ipc")]
+async fn setup_ipc(runtime: &ActorRuntime) {
+    let ipc_config = IpcConfig {
+        limits: IpcLimitsConfig {
+            max_connections: 50,
+            ..IpcLimitsConfig::default()
+        },
+        rate_limit: RateLimitConfig {
+            enabled: true,
+            requests_per_second: 250,
+            burst_size: 25,
+        },
+        shutdown: ShutdownConfig { drain_timeout: 1_000 },
+        ..IpcConfig::default()
+    };
+
+    let listener = runtime
+        .start_ipc_listener_with_config(ipc_config)
         .await
         .expect("Failed to start IPC");
 }

@@ -552,7 +552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main loop: receive and process messages
     loop {
-        match timeout(Duration::from_secs(60), read_frame(&mut reader, MAX_FRAME_SIZE)).await {
+        match timeout(Duration::from_mins(1), read_frame(&mut reader, MAX_FRAME_SIZE)).await {
             Ok(Ok((msg_type, _format, payload))) => {
                 if msg_type == MSG_TYPE_PUSH {
                     let notification: IpcPushNotification = serde_json::from_slice(&payload)?;

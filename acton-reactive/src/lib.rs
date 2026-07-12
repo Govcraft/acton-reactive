@@ -80,9 +80,10 @@ pub mod ipc {
     pub use crate::common::ipc::{
         socket_exists, socket_is_alive, start_listener, ActorInfo, IpcClient, IpcClientConfig,
         IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
-        IpcListenerHandle, IpcListenerStats, IpcPushNotification, IpcResponse, IpcStreamFrame,
-        IpcSubscribeRequest, IpcSubscriptionResponse, IpcTypeRegistry, IpcUnsubscribeRequest,
-        ProtocolCapabilities, ProtocolVersionInfo, ShutdownResult,
+        IpcLimitsConfig, IpcListenerHandle, IpcListenerStats, IpcPushNotification, IpcResponse,
+        IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse, IpcTimeoutsConfig,
+        IpcTypeRegistry, IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
+        RateLimitConfig, ShutdownConfig, ShutdownResult, SocketConfig,
     };
 
     /// Wire protocol for IPC message framing.

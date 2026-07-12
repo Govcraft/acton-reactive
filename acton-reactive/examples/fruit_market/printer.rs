@@ -217,7 +217,7 @@ impl Printer {
                     // If item doesn't exist, insert a Loader entry.
                     actor.model.items.insert(
                         item.id().clone(),
-                        DisplayItem::Loader(item.name().to_string()),
+                        DisplayItem::Loader(item.name().clone()),
                     );
                     // Mark the display as not fully loaded.
                     actor.model.loaded = false;

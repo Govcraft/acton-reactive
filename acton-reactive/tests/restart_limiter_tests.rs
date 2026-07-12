@@ -111,11 +111,11 @@ async fn test_backoff_capped_at_max() {
     let _ = limiter.record_restart();
     // Fourth restart: would be 8000ms, but capped at 5000ms
     let backoff4 = limiter.record_restart();
-    assert_eq!(backoff4, Duration::from_millis(5000));
+    assert_eq!(backoff4, Duration::from_secs(5));
 
     // Fifth restart: still capped at 5000ms
     let backoff5 = limiter.record_restart();
-    assert_eq!(backoff5, Duration::from_millis(5000));
+    assert_eq!(backoff5, Duration::from_secs(5));
 }
 
 /// Tests that resetting consecutive restarts resets backoff.
@@ -281,7 +281,7 @@ async fn test_config_helper_methods() {
         backoff_multiplier: 2.0,
     };
 
-    assert_eq!(config.window_duration(), Duration::from_secs(60));
+    assert_eq!(config.window_duration(), Duration::from_mins(1));
     assert_eq!(config.initial_backoff(), Duration::from_millis(100));
-    assert_eq!(config.max_backoff(), Duration::from_millis(5000));
+    assert_eq!(config.max_backoff(), Duration::from_secs(5));
 }

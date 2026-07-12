@@ -495,7 +495,7 @@ impl IpcClient {
         }
         self.writer_handle
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .is_some_and(|h| !h.is_finished())
     }
@@ -541,13 +541,14 @@ impl IpcClient {
             .await;
 
         // Await the writer task so all pending frames (including large ones)
-        // are flushed to the socket before we close the connection.
-        if let Some(handle) = self
+        // are flushed to the socket before we close the connection. Take the
+        // handle out of the mutex first so the guard is dropped before awaiting.
+        let writer_handle = self
             .writer_handle
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(handle) = writer_handle {
             let _ = handle.await;
         }
 
@@ -564,13 +565,15 @@ impl Drop for IpcClient {
         // Abort the reader task unconditionally (it exits when the socket closes)
         self.reader_handle.abort();
 
-        // Only abort the writer if disconnect() didn't already drain it
-        if let Some(handle) = self
+        // Only abort the writer if disconnect() didn't already drain it.
+        // Take the handle out of the mutex first so the guard is dropped
+        // before aborting.
+        let writer_handle = self
             .writer_handle
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(handle) = writer_handle {
             handle.abort();
         }
     }
