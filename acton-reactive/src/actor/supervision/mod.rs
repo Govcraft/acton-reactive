@@ -20,9 +20,36 @@
 //! [`SupervisionStrategy`] and [`SupervisionDecision`] resolve exactly as they
 //! did when this module was a single file.
 //!
-//! See [`strategy`] for the supervision strategies themselves.
+//! # Layout
+//!
+//! - [`strategy`] — which children to restart when one terminates
+//! - [`registry`] — the value types describing a supervisor's children
+//! - [`status`] — what a supervisor publishes about one child
+//! - [`escalation`] — what happens once restarting stops working
+//! - [`events`] — supervision notifications broadcast over the broker
+//! - [`error`] — the errors the subsystem returns
 
+pub use error::SupervisionError;
+pub use escalation::Escalation;
+pub use events::{ChildRestarted, ChildSupervised, SupervisionEscalated};
+pub use registry::{BackoffDelay, ChildIndex, RestartGeneration};
+pub use status::{SupervisionState, SupervisionStatus};
 pub use strategy::{SupervisionDecision, SupervisionStrategy};
+
+/// Contains the errors returned by the supervision subsystem.
+mod error;
+
+/// Contains the policy for what a supervisor does after restarts stop working.
+mod escalation;
+
+/// Contains the supervision events broadcast over the system broker.
+mod events;
+
+/// Contains the value types describing a supervisor's view of its children.
+mod registry;
+
+/// Contains a supervisor's published view of one supervised child.
+mod status;
 
 /// Contains the supervision strategies and the decisions they produce.
 mod strategy;

@@ -43,7 +43,11 @@ pub use managed_actor::ManagedActor;
 pub use managed_actor::started::Started; // Note: `Started` is defined within a submodule
 pub use restart_limiter::{RestartLimiter, RestartLimiterConfig, RestartLimitExceeded, RestartStats};
 pub use restart_policy::{RestartPolicy, TerminationReason};
-pub use supervision::{SupervisionDecision, SupervisionStrategy};
+pub use supervision::{
+    BackoffDelay, ChildIndex, ChildRestarted, ChildSupervised, Escalation, RestartGeneration,
+    SupervisionDecision, SupervisionError, SupervisionEscalated, SupervisionState,
+    SupervisionStatus, SupervisionStrategy,
+};
 
 /// Contains the `ManagedActor` struct and its state-specific implementations (`Idle`, `Started`).
 mod managed_actor;
