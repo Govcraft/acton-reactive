@@ -72,6 +72,9 @@ mod tests {
         assert_eq!(Escalation::StopSupervisor.to_string(), "stop_supervisor");
     }
 
+    /// TOML rather than JSON on purpose: `serde_json` is an optional
+    /// dependency enabled only by the `ipc` feature, and this module is not
+    /// feature-gated, so reaching for it here would break the default build.
     #[test]
     fn round_trips_through_toml_as_a_config_value() {
         #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]

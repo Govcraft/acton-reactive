@@ -61,7 +61,7 @@ mod events;
     not(test),
     expect(
         dead_code,
-        reason = "the engine that consumes this decision layer lands in a later change"
+        reason = "issue #7: the engine that consumes this decision layer lands in a later change"
     )
 )]
 mod plan;
