@@ -35,9 +35,16 @@ use crate::actor::RestartLimitExceeded;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SupervisionError {
-    /// A child with this identifier is already supervised by this actor.
+    /// This actor already supervises a child with this identifier.
+    ///
+    /// Not a name collision. Every [`ActorConfig`] mints a fresh [`Ern`] whose
+    /// root carries a generated `UUIDv7` suffix, so two children created with the
+    /// same name never share an identifier. This reports the case that can
+    /// actually happen: the *same* configuration was used to supervise twice.
+    ///
+    /// [`ActorConfig`]: crate::actor::ActorConfig
     DuplicateChild {
-        /// The identifier that is already in use.
+        /// The identifier that is already supervised.
         child: Ern,
     },
 
@@ -93,7 +100,7 @@ impl fmt::Display for SupervisionError {
         match self {
             Self::DuplicateChild { child } => write!(
                 f,
-                "child '{child}' is already supervised by this actor; call unsupervise() first or choose a different name"
+                "child '{child}' is already supervised by this actor; build a fresh ActorConfig for each child, or call unsupervise() first to replace this one"
             ),
             Self::UnknownChild { child } => write!(
                 f,
@@ -163,6 +170,25 @@ mod tests {
         .to_string();
         assert!(message.contains(&child.to_string()), "{message}");
         assert!(message.contains("unsupervise()"), "{message}");
+        // The remedy is a fresh configuration, not a different name: every
+        // ActorConfig mints a new Ern, so names never collide on their own.
+        assert!(message.contains("ActorConfig"), "{message}");
+        assert!(
+            !message.contains("different name"),
+            "suggesting a rename would send the caller down a dead end: {message}"
+        );
+    }
+
+    #[test]
+    fn two_children_built_from_the_same_name_never_share_an_identifier() {
+        // The fact DuplicateChild's wording rests on: Ern roots carry a
+        // generated UUIDv7 suffix, so a duplicate can only come from reusing
+        // one configuration, never from reusing a name.
+        let first = Ern::with_root("worker").expect("'worker' is a valid Ern root");
+        let second = Ern::with_root("worker").expect("'worker' is a valid Ern root");
+
+        assert_ne!(first, second);
+        assert_ne!(first.to_string(), second.to_string());
     }
 
     #[test]
