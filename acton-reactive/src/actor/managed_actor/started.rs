@@ -14,6 +14,7 @@
  * limitations under that License.
  */
 
+use std::any::TypeId;
 use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
@@ -30,7 +31,8 @@ use crate::common::{
     ReadOnlyHandlerError,
 };
 use crate::message::{
-    BrokerRequestEnvelope, ChildTerminated, MessageAddress, RemoveAllSubscriptions, SystemSignal,
+    BrokerRequestEnvelope, ChildTerminated, MessageAddress, RegisterSupervisedChild,
+    RemoveAllSubscriptions, SystemSignal, UnregisterSupervisedChild,
 };
 use crate::traits::ActorHandleInterface;
 
@@ -253,7 +255,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         &mut self,
         fut: &crate::common::FutureHandler<Actor>,
         envelope: &mut Envelope,
-        message_type_id: std::any::TypeId,
+        message_type_id: TypeId,
     ) {
         #[cfg(feature = "catch-handler-panics")]
         {
@@ -281,7 +283,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         &mut self,
         fut: &crate::common::FutureHandlerResult<Actor>,
         envelope: &mut Envelope,
-        message_type_id: std::any::TypeId,
+        message_type_id: TypeId,
     ) {
         #[cfg(feature = "catch-handler-panics")]
         {
@@ -321,8 +323,8 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
     async fn handle_fallible_error(
         &mut self,
         envelope: &mut Envelope,
-        message_type_id: std::any::TypeId,
-        error_type_id: std::any::TypeId,
+        message_type_id: TypeId,
+        error_type_id: TypeId,
         err: Box<dyn std::error::Error + Send + Sync>,
     ) {
         if let Some(handler) = self.error_handler_map.remove(&(message_type_id, error_type_id)) {
@@ -725,6 +727,22 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                         (incoming_envelope, type_id)
                     };
 
+                    // Supervision bookkeeping runs ahead of handler dispatch and is
+                    // never user-dispatchable. Compared by TypeId against the value
+                    // already computed above, so the hot path costs integer compares
+                    // rather than a downcast per message.
+                    if type_id == TypeId::of::<RegisterSupervisedChild>() {
+                        if let Some(registration) = envelope.message.as_any().downcast_ref::<RegisterSupervisedChild>() {
+                            self.register_supervised_child(registration);
+                        }
+                        continue;
+                    } else if type_id == TypeId::of::<UnregisterSupervisedChild>() {
+                        if let Some(release) = envelope.message.as_any().downcast_ref::<UnregisterSupervisedChild>() {
+                            self.unregister_supervised_child(release);
+                        }
+                        continue;
+                    }
+
                     // Dispatch to registered handler or handle system signals
                     if let Some(reactor) = mutable_reactors.get(&type_id) {
                         self.flush_read_only_handlers(&mut read_only_futures).await;
@@ -764,6 +782,12 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
     /// With `catch-handler-panics` disabled this also runs after a panic
     /// termination, so a panicked actor's broker subscriptions do not leak.
     async fn shutdown_cleanup(&mut self) {
+        // Suppress restart decisions before any child is touched. Stopping a
+        // child produces a normal termination, and a `Permanent` child warrants
+        // a restart on a normal termination, so without this a cascading
+        // shutdown would read as a wave of failures worth restarting.
+        self.supervision_mut().begin_shutdown();
+
         // Stop accepting new messages on every termination path. The graceful
         // path has already closed the inbox; closing again is a no-op, but the
         // panic and cancellation paths reach here with it still open.
@@ -780,7 +804,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             self.broker.send(unsubscription).await;
         }
 
-        terminate_children(&self.handle, self.id()).await;
+        terminate_children(self.shutdown_child_handles(), self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
     }
 }
@@ -795,15 +819,19 @@ enum ChildStopResult {
     Timeout { child_id: String },
 }
 
-/// Terminates all child actors of the given handle concurrently.
+/// Terminates the given child actors concurrently.
+///
+/// Takes an owned list rather than reading it from a handle, because the set of
+/// children to stop is the union of two views that can disagree — see
+/// `ManagedActor::shutdown_child_handles`.
 ///
 /// This is a standalone async function to avoid the `&mut self` / `&self` async borrow
 /// checker constraints that would require `State: Sync`.
 ///
 /// Timeout and error results are aggregated to avoid log flooding when many children
 /// fail simultaneously.
-#[instrument(skip(handle))]
-async fn terminate_children(handle: &crate::common::ActorHandle, actor_id: &acton_ern::Ern) {
+#[instrument(skip(children))]
+async fn terminate_children(children: Vec<crate::common::ActorHandle>, actor_id: &acton_ern::Ern) {
     use std::time::Duration;
     use tokio::time::timeout as tokio_timeout;
 
@@ -811,11 +839,9 @@ async fn terminate_children(handle: &crate::common::ActorHandle, actor_id: &acto
 
     let timeout_ms = CONFIG.timeouts.actor_shutdown;
 
-    let stop_futures: Vec<_> = handle
-        .children()
-        .iter()
-        .map(|item| {
-            let child_handle = item.value().clone();
+    let stop_futures: Vec<_> = children
+        .into_iter()
+        .map(|child_handle| {
             async move {
                 trace!("Sending stop signal to child: {}", child_handle.id());
                 let stop_res =

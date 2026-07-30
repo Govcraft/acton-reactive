@@ -30,6 +30,7 @@
 //! - [`error`] — the errors the subsystem returns
 //! - [`plan`] — the pure decision layer the engine carries out
 //! - [`spawner`] — how a supervisor recreates a child
+//! - [`engine`] — the supervising actor's side of registration
 
 pub use error::SupervisionError;
 pub use escalation::Escalation;
@@ -38,10 +39,13 @@ pub use registry::{BackoffDelay, ChildIndex, RestartGeneration};
 // `ChildSlot`, `NewSlot` and `SlotState` are deliberately not re-exported yet:
 // nothing outside `registry` names them until registration lands, and an unused
 // re-export is a warning rather than a placeholder.
-pub use registry::SupervisionRegistry;
+pub use registry::{NewSlot, SupervisionRegistry};
 pub use spawner::ChildSpawner;
-pub use status::{SupervisionState, SupervisionStatus};
+pub use status::{SupervisedChild, SupervisionState, SupervisionStatus};
 pub use strategy::{SupervisionDecision, SupervisionStrategy};
+
+/// Contains the supervising actor's side of registration.
+mod engine;
 
 /// Contains the errors returned by the supervision subsystem.
 mod error;

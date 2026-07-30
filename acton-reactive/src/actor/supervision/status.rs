@@ -25,7 +25,9 @@ use std::fmt;
 
 use acton_ern::Ern;
 
-use super::RestartGeneration;
+use tokio::sync::watch;
+
+use super::{RestartGeneration, SupervisionError};
 use crate::common::ActorHandle;
 
 /// Lifecycle state of a supervised child, as published by its supervisor.
@@ -173,9 +175,154 @@ impl fmt::Display for SupervisionStatus {
     }
 }
 
+/// A reference to a supervised child that survives its restarts.
+///
+/// An [`ActorHandle`] names one incarnation: a restart replaces the child's
+/// mailbox, and the old handle goes stale. A `SupervisedChild` names the child
+/// itself, and can hand out the handle of whichever incarnation is current.
+///
+/// Reads are local. The supervisor publishes into a channel this holds the
+/// receiving end of, so asking what a child is doing costs nothing and never
+/// interrupts the supervisor.
+#[derive(Debug, Clone)]
+pub struct SupervisedChild {
+    ern: Ern,
+    supervisor: Ern,
+    status: watch::Receiver<SupervisionStatus>,
+}
+
+impl SupervisedChild {
+    /// Creates a reference to a child from the receiving end of its status
+    /// channel.
+    ///
+    /// Scoped to non-test builds: the blueprint path that hands these out lands
+    /// in a later change, but the unit tests below already build them.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "issue #7: the blueprint path that hands out SupervisedChild lands in a later change"
+        )
+    )]
+    pub(crate) const fn new(
+        ern: Ern,
+        supervisor: Ern,
+        status: watch::Receiver<SupervisionStatus>,
+    ) -> Self {
+        Self {
+            ern,
+            supervisor,
+            status,
+        }
+    }
+
+    /// The child's identifier. Stable across restarts.
+    #[must_use]
+    pub const fn ern(&self) -> &Ern {
+        &self.ern
+    }
+
+    /// The identifier of the actor supervising this child.
+    #[must_use]
+    pub const fn supervisor(&self) -> &Ern {
+        &self.supervisor
+    }
+
+    /// A handle to the current incarnation, or `None` while the child is down.
+    ///
+    /// Reads the local cell without marking it seen, so polling here does not
+    /// consume a change that a concurrent [`wait_for`](Self::wait_for) is
+    /// waiting on.
+    #[must_use]
+    pub fn current(&self) -> Option<ActorHandle> {
+        self.status.borrow().handle().cloned()
+    }
+
+    /// What the supervisor last published about this child.
+    #[must_use]
+    pub fn status(&self) -> SupervisionStatus {
+        self.status.borrow().clone()
+    }
+
+    /// Waits until the supervisor publishes a status the predicate accepts.
+    ///
+    /// The current value is checked first, so a state that has already been
+    /// reached resolves immediately rather than waiting for a further change
+    /// that may never come.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::SupervisorStopped`] if the supervising actor's task
+    /// ends while waiting, which closes the channel.
+    pub async fn wait_for(
+        &mut self,
+        predicate: impl FnMut(&SupervisionStatus) -> bool + Send,
+    ) -> Result<SupervisionStatus, SupervisionError> {
+        self.status
+            .wait_for(predicate)
+            .await
+            .map(|status| status.clone())
+            .map_err(|_| SupervisionError::SupervisorStopped {
+                supervisor: self.supervisor.clone(),
+            })
+    }
+
+    /// Waits until the child is running, returning that incarnation's handle.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::SupervisorStopped`] if the supervising actor's task
+    /// ends first.
+    pub async fn wait_running(&mut self) -> Result<ActorHandle, SupervisionError> {
+        let status = self
+            .wait_for(|status| {
+                status.state() == SupervisionState::Running && status.handle().is_some()
+            })
+            .await?;
+
+        status
+            .handle()
+            .cloned()
+            .ok_or_else(|| SupervisionError::SupervisorStopped {
+                supervisor: self.supervisor.clone(),
+            })
+    }
+
+    /// Waits until the given incarnation of the child is running.
+    ///
+    /// Accepts any generation at or beyond `generation`, so a caller that asks
+    /// for one restart does not hang if the child has already been restarted
+    /// twice by the time it asks.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::SupervisorStopped`] if the supervising actor's task
+    /// ends first.
+    pub async fn wait_generation(
+        &mut self,
+        generation: RestartGeneration,
+    ) -> Result<ActorHandle, SupervisionError> {
+        let status = self
+            .wait_for(|status| {
+                status.generation() >= generation
+                    && status.state() == SupervisionState::Running
+                    && status.handle().is_some()
+            })
+            .await?;
+
+        status
+            .handle()
+            .cloned()
+            .ok_or_else(|| SupervisionError::SupervisorStopped {
+                supervisor: self.supervisor.clone(),
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::ActorHandleInterface;
 
     fn child() -> Ern {
         Ern::with_root("worker").expect("'worker' is a valid Ern root")
@@ -247,6 +394,147 @@ mod tests {
         assert!(text.contains(&child.to_string()), "{text}");
         assert!(text.contains("running"), "{text}");
         assert!(text.contains("generation 0"), "{text}");
+    }
+
+    // ---- SupervisedChild --------------------------------------------------
+
+    fn supervised(
+        child: &Ern,
+    ) -> (SupervisedChild, watch::Sender<SupervisionStatus>) {
+        let supervisor = Ern::with_root("pool").expect("'pool' is a valid Ern root");
+        let (sender, receiver) = watch::channel(SupervisionStatus::new(
+            child.clone(),
+            None,
+            RestartGeneration::FIRST,
+            SupervisionState::Starting,
+            0,
+        ));
+        (
+            SupervisedChild::new(child.clone(), supervisor, receiver),
+            sender,
+        )
+    }
+
+    fn running(child: &Ern, generation: RestartGeneration) -> SupervisionStatus {
+        let (outbox, _inbox) = tokio::sync::mpsc::channel(8);
+        SupervisionStatus::new(
+            child.clone(),
+            Some(ActorHandle::new(child.clone(), outbox)),
+            generation,
+            SupervisionState::Running,
+            0,
+        )
+    }
+
+    #[test]
+    fn a_supervised_child_reports_both_identities() {
+        let child = child();
+        let (reference, _sender) = supervised(&child);
+
+        assert_eq!(reference.ern(), &child);
+        assert_eq!(reference.supervisor().to_string(), reference.supervisor().to_string());
+        assert!(reference.current().is_none(), "not running yet");
+        assert_eq!(reference.status().state(), SupervisionState::Starting);
+    }
+
+    #[test]
+    fn current_follows_whatever_the_supervisor_last_published() {
+        let child = child();
+        let (reference, sender) = supervised(&child);
+
+        sender.send_replace(running(&child, RestartGeneration::FIRST));
+
+        assert!(reference.current().is_some());
+        assert_eq!(reference.status().state(), SupervisionState::Running);
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_state_already_reached_resolves_immediately() {
+        // wait_for checks the current value before waiting, so a caller that
+        // asks after the fact does not hang for a change that never comes.
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+        sender.send_replace(running(&child, RestartGeneration::FIRST));
+
+        let handle = reference
+            .wait_running()
+            .await
+            .expect("the supervisor is still alive");
+
+        assert_eq!(handle.id(), child);
+    }
+
+    #[tokio::test]
+    async fn waiting_resolves_when_the_supervisor_publishes() {
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+
+        let publisher = {
+            let child = child.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                sender.send_replace(running(&child, RestartGeneration::FIRST));
+                // Hold the sender until the waiter has seen the value.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            })
+        };
+
+        let handle = reference
+            .wait_running()
+            .await
+            .expect("the supervisor published a running status");
+        assert_eq!(handle.id(), child);
+        publisher.await.expect("publisher task completes");
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_later_generation_ignores_earlier_ones() {
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+        sender.send_replace(running(&child, RestartGeneration::FIRST));
+
+        let target = RestartGeneration::FIRST.next();
+        let publisher = {
+            let child = child.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                sender.send_replace(running(&child, target));
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            })
+        };
+
+        let handle = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reference.wait_generation(target),
+        )
+        .await
+        .expect("wait_generation must not hang")
+        .expect("the supervisor published the requested generation");
+
+        assert_eq!(handle.id(), child);
+        publisher.await.expect("publisher task completes");
+    }
+
+    #[tokio::test]
+    async fn a_supervisor_that_goes_away_stops_the_wait() {
+        // Dropping every sender is how a caller learns the supervisor's task
+        // ended, rather than waiting forever for a status that cannot come.
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+        drop(sender);
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reference.wait_running(),
+        )
+        .await
+        .expect("the wait must not hang once the channel closes")
+        .expect_err("the supervisor is gone");
+
+        assert!(matches!(
+            error,
+            SupervisionError::SupervisorStopped { .. }
+        ));
     }
 
     #[test]

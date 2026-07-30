@@ -54,11 +54,22 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
     ///   If `None`, the envelope is created without a specific recipient.
     fn create_envelope(&self, recipient_address: Option<MessageAddress>) -> OutboundEnvelope;
 
-    /// Returns a reference to the map containing handles to the actor's direct children.
+    /// Returns a reference to the map of children supervised **through this
+    /// handle**.
     ///
-    /// Provides read-only access to the currently supervised children. Use methods like
-    /// `.len()`, `.iter()`, `.get()`, or `.contains_key()` to query children without
-    /// incurring the cost of cloning the entire map.
+    /// This is a local view, not the supervisor's roster. `ActorHandle` holds
+    /// its children in a `DashMap` that is deep-copied on clone, so each clone
+    /// accumulates only what was supervised through it. A child adopted through
+    /// a different clone of the same actor's handle will not appear here, and
+    /// neither will one adopted from inside the actor's own message handler.
+    ///
+    /// The handles stored here name one incarnation. If a child is restarted,
+    /// the handle kept here goes stale. Use
+    /// [`SupervisedChild`](crate::actor::SupervisedChild) for a reference that
+    /// follows restarts.
+    ///
+    /// Use `.len()`, `.iter()`, `.get()`, or `.contains_key()` to query without
+    /// cloning the map.
     fn children(&self) -> &DashMap<String, ActorHandle>;
 
     /// Attempts to find a direct child actor supervised by this actor, identified by its `Ern`.

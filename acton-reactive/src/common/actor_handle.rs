@@ -20,13 +20,15 @@ use std::hash::{Hash, Hasher};
 use acton_ern::Ern;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace, warn}; // warn seems unused
 
-use crate::actor::{Idle, ManagedActor};
+use crate::actor::{
+    Idle, ManagedActor, RestartGeneration, SupervisionState, SupervisionStatus,
+};
 use crate::common::{ActorSender, BrokerRef, OutboundEnvelope};
-use crate::message::{BrokerRequest, MessageAddress, SystemSignal};
+use crate::message::{BrokerRequest, MessageAddress, RegisterSupervisedChild, SystemSignal};
 use crate::prelude::ActonMessage;
 use crate::traits::{ActorHandleInterface, Broadcaster, Subscriber};
 
@@ -176,6 +178,7 @@ impl ActorHandle {
         child: ManagedActor<Idle, State>,
     ) -> anyhow::Result<Self> {
         let child_id = child.id().clone(); // Get ID before consuming child
+        let restart_policy = child.restart_policy; // Read before `start` consumes the child
         trace!("Supervising child actor with id: {}", child_id);
         let handle = child.start().await; // Start the child actor
         trace!(
@@ -184,6 +187,37 @@ impl ActorHandle {
             self.id
         );
         self.children.insert(handle.id.to_string(), handle.clone()); // Store child handle
+
+        // Ask the supervising actor's own task to record the child, so that it
+        // is stopped when the supervisor stops even if this handle is a clone
+        // whose `children` map the actor's task cannot see.
+        //
+        // The receiving end is dropped: `supervise` returns a bare handle, so
+        // there is no caller to hand it to. Publishing into a channel with no
+        // watchers is harmless, and the alternative would change this method's
+        // long-standing signature.
+        let (status, _unwatched) = watch::channel(SupervisionStatus::new(
+            child_id.clone(),
+            Some(handle.clone()),
+            RestartGeneration::FIRST,
+            SupervisionState::Starting,
+            0,
+        ));
+
+        self.send(RegisterSupervisedChild {
+            child: child_id,
+            handle: handle.clone(),
+            // No blueprint: a child adopted this way cannot be recreated, so it
+            // is reported when it terminates but never restarted.
+            spawner: None,
+            restart_policy,
+            status,
+            // Nothing to report back. Every child registered here carries a
+            // freshly minted identifier, so registration cannot collide.
+            outcome: None,
+        })
+        .await;
+
         Ok(handle)
     }
 }
@@ -252,17 +286,31 @@ impl ActorHandleInterface for ActorHandle {
         }
     }
 
-    /// Returns a reference to the internal map containing handles to the actor's direct children.
+    /// Returns a reference to the map of children supervised **through this
+    /// handle**.
     ///
-    /// Provides read-only access to the currently supervised children. Use methods like
-    /// `.len()`, `.iter()`, `.get()`, or `.contains_key()` to query children without
-    /// incurring the cost of cloning the entire map.
+    /// This is a local view, not the supervisor's roster. `ActorHandle` holds
+    /// its children in a `DashMap` that is deep-copied on clone, so each clone
+    /// accumulates only what was supervised through it. A child adopted through
+    /// a different clone of the same actor's handle will not appear here, and
+    /// neither will one adopted from inside the actor's own message handler.
+    ///
+    /// The handles stored here name one incarnation. If a child is restarted,
+    /// the handle kept here goes stale. Use
+    /// [`SupervisedChild`](crate::actor::SupervisedChild) for a reference that
+    /// follows restarts.
+    ///
+    /// Use `.len()`, `.iter()`, `.get()`, or `.contains_key()` to query without
+    /// cloning the map.
     #[inline]
     fn children(&self) -> &DashMap<String, ActorHandle> {
         &self.children
     }
 
-    /// Searches for a direct child actor by its unique identifier (`Ern`).
+    /// Searches for a child supervised **through this handle** by its identifier.
+    ///
+    /// Subject to the same local-view and staleness caveats as
+    /// [`children`](Self::children).
     ///
     /// # Arguments
     ///
@@ -270,8 +318,9 @@ impl ActorHandleInterface for ActorHandle {
     ///
     /// # Returns
     ///
-    /// * `Some(ActorHandle)`: If a direct child with the matching `Ern` is found.
-    /// * `None`: If no direct child with the specified `Ern` exists.
+    /// * `Some(ActorHandle)`: If a child with the matching `Ern` was supervised
+    ///   through this handle.
+    /// * `None`: Otherwise.
     #[instrument(skip(self))]
     fn find_child(&self, ern: &Ern) -> Option<Self> {
         trace!("Searching for child with ERN: {}", ern);

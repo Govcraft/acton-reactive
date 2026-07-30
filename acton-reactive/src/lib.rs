@@ -165,9 +165,9 @@ pub mod prelude {
     pub use crate::actor::{
         ActorConfig, BackoffDelay, ChildIndex, ChildRestarted, ChildSupervised, Escalation, Idle,
         ManagedActor, RestartGeneration, RestartLimitExceeded, RestartLimiter,
-        RestartLimiterConfig, RestartPolicy, RestartStats, Started, SupervisionDecision,
-        SupervisionError, SupervisionEscalated, SupervisionState, SupervisionStatus,
-        SupervisionStrategy, TerminationReason,
+        RestartLimiterConfig, RestartPolicy, RestartStats, Started, SupervisedChild,
+        SupervisionDecision, SupervisionError, SupervisionEscalated, SupervisionState,
+        SupervisionStatus, SupervisionStrategy, TerminationReason,
     };
     pub use crate::common::{ActonApp, ActorHandle, ActorRuntime, Broker, Reply};
     pub use crate::message::{
