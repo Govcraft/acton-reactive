@@ -14,18 +14,30 @@
  * limitations under that License.
  */
 
-//! Value types describing a supervisor's view of its children.
+//! A supervisor's record of its children.
 //!
-//! These are the small, copyable values the supervision subsystem passes
-//! around: which incarnation of a child is current ([`RestartGeneration`]),
-//! where a child sits in its supervisor's start order ([`ChildIndex`]), and how
-//! long to wait before trying again ([`BackoffDelay`]).
+//! [`SupervisionRegistry`] is owned by the supervising actor and reached only
+//! through `&mut self` inside that actor's own task. It is never cloned, never
+//! shared and never locked, so the rule "do not hold the registry across an
+//! `await`" is enforced by the borrow checker rather than by a lint.
 //!
-//! All three are plain values with no invariants beyond those of the primitive
-//! they wrap, so they are cheap to copy and safe to compare and order.
+//! Alongside it are the small values the subsystem passes around: which
+//! incarnation of a child is current ([`RestartGeneration`]), where a child sits
+//! in its supervisor's start order ([`ChildIndex`]), and how long to wait before
+//! trying again ([`BackoffDelay`]).
 
+use std::collections::HashMap;
 use std::fmt;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use acton_ern::Ern;
+use tokio::sync::watch;
+
+use super::plan::{SlotSnapshot, SlotView};
+use super::{ChildSpawner, SupervisionError, SupervisionState, SupervisionStatus};
+use crate::actor::{RestartLimiter, RestartPolicy};
+use crate::common::ActorHandle;
 
 /// Monotonic incarnation counter for a supervised child slot.
 ///
@@ -142,9 +154,488 @@ impl fmt::Display for BackoffDelay {
     }
 }
 
+/// What a supervisor believes one of its children is doing.
+///
+/// Distinct from [`SupervisionState`], which is the outward-facing summary.
+/// This carries the extra distinctions the supervisor needs internally and
+/// callers do not, in particular whether a stop was the supervisor's own doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotState {
+    /// Created, not yet confirmed running.
+    Starting,
+
+    /// Running and processing messages.
+    Running,
+
+    /// Terminated, with a backoff timer armed for the slot's current generation.
+    AwaitingBackoff,
+
+    /// A replacement is being created.
+    Restarting,
+
+    /// The supervisor asked this child to stop.
+    ///
+    /// Its termination notice is expected, so it must not be read as a fresh
+    /// failure. This is the distinction that keeps a group restart from looping:
+    /// a child stopped this way reports `Normal`, and a `Permanent` child would
+    /// otherwise be restarted for it.
+    ExpectedStop {
+        /// Whether the supervisor intends to start it again once it is down.
+        then_restart: bool,
+    },
+
+    /// Terminated and not being restarted.
+    Down,
+
+    /// Out of restart allowance; the supervisor has given up.
+    Escalated,
+
+    /// Removed from supervision.
+    ///
+    /// The slot stays in the list so that later children keep their positions.
+    Retired,
+}
+
+impl SlotState {
+    /// The outward-facing state published to callers.
+    ///
+    /// `ExpectedStop` maps to [`SupervisionState::Restarting`] because from
+    /// outside there is no difference between "we are stopping it in order to
+    /// restart it" and "we are restarting it" — both mean a new incarnation is
+    /// coming.
+    #[must_use]
+    pub const fn published(self) -> SupervisionState {
+        match self {
+            Self::Starting => SupervisionState::Starting,
+            Self::Running => SupervisionState::Running,
+            Self::AwaitingBackoff => SupervisionState::RestartPending,
+            Self::Restarting | Self::ExpectedStop { .. } => SupervisionState::Restarting,
+            Self::Down => SupervisionState::Down,
+            Self::Escalated => SupervisionState::Escalated,
+            Self::Retired => SupervisionState::Retired,
+        }
+    }
+
+    /// Whether the child is believed to be up and reachable.
+    ///
+    /// `ExpectedStop` is excluded: the supervisor has already sent it a stop, so
+    /// a group restart must not send it a second one.
+    #[must_use]
+    pub const fn is_running(self) -> bool {
+        matches!(self, Self::Starting | Self::Running)
+    }
+
+    /// Whether a termination notice in this state is a fresh failure.
+    ///
+    /// `false` for a stop the supervisor asked for, and for the states that mean
+    /// a notice has already been acted on — which is how a duplicate notice from
+    /// a previous incarnation is discarded.
+    #[must_use]
+    pub const fn accepts_termination(self) -> bool {
+        matches!(self, Self::Starting | Self::Running)
+    }
+}
+
+impl fmt::Display for SlotState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Starting => f.write_str("starting"),
+            Self::Running => f.write_str("running"),
+            Self::AwaitingBackoff => f.write_str("awaiting_backoff"),
+            Self::Restarting => f.write_str("restarting"),
+            Self::ExpectedStop { then_restart } => {
+                write!(f, "expected_stop(then_restart={then_restart})")
+            }
+            Self::Down => f.write_str("down"),
+            Self::Escalated => f.write_str("escalated"),
+            Self::Retired => f.write_str("retired"),
+        }
+    }
+}
+
+/// Everything needed to place one child under supervision.
+///
+/// A struct rather than a long argument list, so that adding a property later
+/// does not churn every call site.
+#[derive(Debug)]
+pub struct NewSlot {
+    /// The child's identifier.
+    pub ern: Ern,
+
+    /// A handle to the running child.
+    pub handle: ActorHandle,
+
+    /// How to recreate the child, or `None` when the supervisor cannot.
+    ///
+    /// `None` is the legacy `supervise()` path: the supervisor is told when the
+    /// child terminates but has no recipe for building another one.
+    pub spawner: Option<Arc<dyn ChildSpawner>>,
+
+    /// Whether this child warrants a restart, and when.
+    pub restart_policy: RestartPolicy,
+
+    /// This child's own restart allowance and backoff schedule.
+    pub limiter: RestartLimiter,
+
+    /// The publishing end of this child's status channel.
+    ///
+    /// The caller keeps the receiving end. The supervising actor's task is the
+    /// only writer.
+    pub status: watch::Sender<SupervisionStatus>,
+}
+
+/// One supervised child, as recorded by its supervisor.
+#[derive(Debug)]
+pub struct ChildSlot {
+    ern: Ern,
+    index: ChildIndex,
+    handle: Option<ActorHandle>,
+    spawner: Option<Arc<dyn ChildSpawner>>,
+    restart_policy: RestartPolicy,
+    limiter: RestartLimiter,
+    generation: RestartGeneration,
+    state: SlotState,
+    last_restart: Option<Instant>,
+    status: watch::Sender<SupervisionStatus>,
+}
+
+impl ChildSlot {
+    /// The child's identifier. Stable across restarts.
+    pub const fn ern(&self) -> &Ern {
+        &self.ern
+    }
+
+    /// The child's position in its supervisor's start order.
+    pub const fn index(&self) -> ChildIndex {
+        self.index
+    }
+
+    /// A handle to the current incarnation, or `None` while the child is down.
+    pub const fn handle(&self) -> Option<&ActorHandle> {
+        self.handle.as_ref()
+    }
+
+    /// The configured restart policy.
+    pub const fn restart_policy(&self) -> RestartPolicy {
+        self.restart_policy
+    }
+
+    /// Which incarnation is current.
+    pub const fn generation(&self) -> RestartGeneration {
+        self.generation
+    }
+
+    /// What the supervisor believes the child is doing.
+    pub const fn state(&self) -> SlotState {
+        self.state
+    }
+
+    /// When the child was last restarted, if it ever has been.
+    pub const fn last_restart(&self) -> Option<Instant> {
+        self.last_restart
+    }
+
+    /// Whether the supervisor holds a recipe for recreating this child.
+    pub const fn is_restartable(&self) -> bool {
+        self.spawner.is_some()
+    }
+
+    /// The recipe for recreating this child, if there is one.
+    ///
+    /// Returned as an owned [`Arc`] on purpose: a restart must clone the spawner
+    /// out before awaiting, so that no borrow of the registry is held across the
+    /// `await`.
+    pub fn spawner(&self) -> Option<Arc<dyn ChildSpawner>> {
+        self.spawner.clone()
+    }
+
+    /// This child's restart allowance, for the engine to consult and charge.
+    pub const fn limiter_mut(&mut self) -> &mut RestartLimiter {
+        &mut self.limiter
+    }
+
+    /// Records what the supervisor now believes, without publishing it.
+    pub const fn set_state(&mut self, state: SlotState) {
+        self.state = state;
+    }
+
+    /// Attaches a fresh incarnation's handle, or clears it when the child is down.
+    pub fn set_handle(&mut self, handle: Option<ActorHandle>) {
+        self.handle = handle;
+    }
+
+    /// Moves the slot to the next incarnation.
+    pub const fn advance_generation(&mut self) {
+        self.generation = self.generation.next();
+    }
+
+    /// Notes that the child came back at `at`.
+    pub const fn mark_restarted_at(&mut self, at: Instant) {
+        self.last_restart = Some(at);
+    }
+
+    /// Publishes the slot's current state to anyone watching this child.
+    ///
+    /// Returns whether watchers were woken.
+    ///
+    /// The comparison is written out field by field rather than derived. A
+    /// restart replaces the handle but keeps the [`Ern`], and [`ActorHandle`]
+    /// compares by `Ern` alone, so a whole-struct comparison would report "no
+    /// change" across a handle swap. Only the fields that actually discriminate
+    /// are compared, so a state the caller cannot distinguish does not wake it.
+    pub fn publish(&self) -> bool {
+        let next = SupervisionStatus::new(
+            self.ern.clone(),
+            self.handle.clone(),
+            self.generation,
+            self.state.published(),
+            self.limiter.restarts_in_window(),
+        );
+
+        self.status.send_if_modified(|current| {
+            let unchanged = current.generation() == next.generation()
+                && current.state() == next.state()
+                && current.restarts_in_window() == next.restarts_in_window();
+            if unchanged {
+                return false;
+            }
+            *current = next;
+            true
+        })
+    }
+
+    /// The read-only view the restart planner needs of this slot.
+    const fn view(&self) -> SlotView {
+        SlotView {
+            index: self.index,
+            restartable: self.is_restartable(),
+            alive: self.handle.is_some() && self.state.is_running(),
+        }
+    }
+}
+
+/// One supervisor's record of its children.
+///
+/// Owned by the supervising actor's own task. Not [`Clone`], never shared, and
+/// deliberately not behind a lock: every mutation happens on one task in message
+/// order, so there is no interleaving to reason about.
+#[derive(Debug, Default)]
+pub struct SupervisionRegistry {
+    /// Start order. [`SupervisionStrategy::RestForOne`] indexes into this.
+    ///
+    /// Append-only. Removing a child marks its slot [`SlotState::Retired`]
+    /// rather than deleting it, because deleting would shift every later child's
+    /// index and silently change which children a `RestForOne` restart covers.
+    ///
+    /// [`SupervisionStrategy::RestForOne`]: super::SupervisionStrategy::RestForOne
+    slots: Vec<ChildSlot>,
+
+    /// Lookup from identifier to position, for children under active
+    /// supervision. Retired children are removed from here, which is what frees
+    /// their identifier to be supervised again.
+    by_ern: HashMap<Ern, ChildIndex>,
+
+    /// Set before children are terminated, to suppress every restart decision.
+    shutting_down: bool,
+}
+
+impl SupervisionRegistry {
+    /// Places a child under supervision, returning its position in start order.
+    ///
+    /// The child is recorded as [`SlotState::Running`] and its status published,
+    /// so a caller watching the channel observes the transition out of
+    /// `Starting`.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::DuplicateChild`] if this supervisor already
+    /// supervises that identifier.
+    pub fn register(&mut self, new: NewSlot) -> Result<ChildIndex, SupervisionError> {
+        if self.by_ern.contains_key(&new.ern) {
+            return Err(SupervisionError::DuplicateChild { child: new.ern });
+        }
+
+        let index = ChildIndex::new(self.slots.len());
+        let slot = ChildSlot {
+            ern: new.ern.clone(),
+            index,
+            handle: Some(new.handle),
+            spawner: new.spawner,
+            restart_policy: new.restart_policy,
+            limiter: new.limiter,
+            generation: RestartGeneration::FIRST,
+            state: SlotState::Running,
+            last_restart: None,
+            status: new.status,
+        };
+
+        slot.publish();
+        self.slots.push(slot);
+        self.by_ern.insert(new.ern, index);
+
+        Ok(index)
+    }
+
+    /// Points an existing registration at a new handle for the same child.
+    ///
+    /// The legacy `supervise()` path can be called more than once for the same
+    /// child; this refreshes the recorded handle instead of rejecting it.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::UnknownChild`] if that child is not supervised.
+    pub fn replace_legacy(
+        &mut self,
+        ern: &Ern,
+        handle: ActorHandle,
+    ) -> Result<(), SupervisionError> {
+        let index = self
+            .by_ern
+            .get(ern)
+            .copied()
+            .ok_or_else(|| SupervisionError::UnknownChild { child: ern.clone() })?;
+
+        let Some(slot) = self.slots.get_mut(index.get()) else {
+            return Err(SupervisionError::UnknownChild { child: ern.clone() });
+        };
+
+        slot.set_handle(Some(handle));
+        slot.set_state(SlotState::Running);
+        slot.publish();
+
+        Ok(())
+    }
+
+    /// Removes a child from supervision.
+    ///
+    /// Returns the handle the supervisor was holding, so the caller can stop the
+    /// child; `None` when the child was already down. The slot is marked
+    /// [`SlotState::Retired`] rather than removed, keeping every other child's
+    /// index intact, and the identifier is released so it can be supervised
+    /// again.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::UnknownChild`] if that child is not supervised.
+    pub fn retire(&mut self, ern: &Ern) -> Result<Option<ActorHandle>, SupervisionError> {
+        let index = self
+            .by_ern
+            .remove(ern)
+            .ok_or_else(|| SupervisionError::UnknownChild { child: ern.clone() })?;
+
+        let Some(slot) = self.slots.get_mut(index.get()) else {
+            return Err(SupervisionError::UnknownChild { child: ern.clone() });
+        };
+
+        let handle = slot.handle.take();
+        slot.set_state(SlotState::Retired);
+        slot.publish();
+
+        Ok(handle)
+    }
+
+    /// The position of a supervised child, or `None` if it is not supervised.
+    pub fn index_of(&self, ern: &Ern) -> Option<ChildIndex> {
+        self.by_ern.get(ern).copied()
+    }
+
+    /// The slot at `index`, or `None` if there is none.
+    ///
+    /// Returns an [`Option`] rather than indexing, because indices reach this
+    /// method from termination notices and expired timers, both of which can
+    /// name a slot that no longer exists. A panic there would take down the
+    /// supervisor and every child under it.
+    pub fn slot(&self, index: ChildIndex) -> Option<&ChildSlot> {
+        self.slots.get(index.get())
+    }
+
+    /// The slot at `index` for modification, or `None` if there is none.
+    pub fn slot_mut(&mut self, index: ChildIndex) -> Option<&mut ChildSlot> {
+        self.slots.get_mut(index.get())
+    }
+
+    /// The slot for a supervised child, or `None` if it is not supervised.
+    pub fn slot_of(&self, ern: &Ern) -> Option<&ChildSlot> {
+        self.index_of(ern).and_then(|index| self.slot(index))
+    }
+
+    /// The slot for a supervised child, for modification.
+    pub fn slot_of_mut(&mut self, ern: &Ern) -> Option<&mut ChildSlot> {
+        self.index_of(ern).and_then(|index| self.slot_mut(index))
+    }
+
+    /// The read-only views the restart planner works from.
+    ///
+    /// Retired slots are omitted: they exist only to hold their position, and a
+    /// restart must never resurrect one. Positions are carried on each view
+    /// rather than implied, so omitting slots does not disturb the ordering the
+    /// planner relies on.
+    pub fn views(&self) -> Vec<SlotView> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.state != SlotState::Retired)
+            .map(ChildSlot::view)
+            .collect()
+    }
+
+    /// Everything the planner needs about the child that just terminated.
+    ///
+    /// `None` if no such slot exists.
+    pub fn snapshot(&self, index: ChildIndex) -> Option<SlotSnapshot> {
+        let slot = self.slot(index)?;
+        Some(SlotSnapshot {
+            index: slot.index,
+            restartable: slot.is_restartable(),
+            // A shutdown makes every termination expected, which is what stops
+            // a cascading stop from being read as a wave of failures.
+            expected_stop: self.shutting_down || !slot.state.accepts_termination(),
+            last_restart: slot.last_restart,
+        })
+    }
+
+    /// Handles for every child still believed to be running.
+    ///
+    /// Feeds cascading shutdown. Retired children are excluded; the caller
+    /// already took their handles when retiring them.
+    pub fn live_handles(&self) -> Vec<ActorHandle> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.state != SlotState::Retired)
+            .filter_map(|slot| slot.handle.clone())
+            .collect()
+    }
+
+    /// Whether this supervisor has no children under active supervision.
+    ///
+    /// Retired slots do not count, so a supervisor that has retired all of its
+    /// children reads as empty even though their positions are still held.
+    pub fn is_empty(&self) -> bool {
+        self.by_ern.is_empty()
+    }
+
+    /// The number of children under active supervision.
+    pub fn len(&self) -> usize {
+        self.by_ern.len()
+    }
+
+    /// Suppresses every restart decision from here on.
+    ///
+    /// Called before children are terminated, so that the terminations a
+    /// shutdown causes are not mistaken for failures worth restarting.
+    pub const fn begin_shutdown(&mut self) {
+        self.shutting_down = true;
+    }
+
+    /// Whether this supervisor has begun shutting down.
+    pub const fn is_shutting_down(&self) -> bool {
+        self.shutting_down
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::ActorHandleInterface;
 
     #[test]
     fn first_generation_is_zero() {
@@ -225,5 +716,673 @@ mod tests {
     fn backoff_displays_in_milliseconds() {
         assert_eq!(BackoffDelay::from(Duration::from_millis(250)).to_string(), "250ms");
         assert_eq!(BackoffDelay::NONE.to_string(), "0ms");
+    }
+
+    // ---- registry fixtures -----------------------------------------------
+    //
+    // Every fixture below is built without a Tokio runtime. `mpsc::channel` and
+    // `watch::channel` both allocate without touching an executor, and nothing
+    // here polls a future, so these tests run on a bare thread.
+
+    /// A spawner that exists only to make a slot restartable.
+    ///
+    /// `spawn` is never polled by these tests — only `is_restartable()` reads it
+    /// — so it returns an error rather than pretending to build an actor.
+    #[derive(Debug)]
+    struct StubSpawner {
+        child: Ern,
+    }
+
+    impl ChildSpawner for StubSpawner {
+        fn child_id(&self) -> &Ern {
+            &self.child
+        }
+
+        fn restart_policy(&self) -> RestartPolicy {
+            RestartPolicy::Permanent
+        }
+
+        fn spawn(
+            &self,
+            _runtime: crate::common::ActorRuntime,
+            _parent: ActorHandle,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async move {
+                Err(SupervisionError::ConfigRejected {
+                    child: self.child.clone(),
+                    reason: "stub spawner never builds an actor".to_string(),
+                })
+            })
+        }
+    }
+
+    fn ern(name: &str) -> Ern {
+        Ern::with_root(name).expect("valid Ern root")
+    }
+
+    /// A real `ActorHandle` with a real mailbox, built without a runtime.
+    fn handle(id: &Ern) -> ActorHandle {
+        let (outbox, _inbox) = tokio::sync::mpsc::channel(8);
+        ActorHandle::new(id.clone(), outbox)
+    }
+
+    fn status_channel(
+        id: &Ern,
+    ) -> (
+        watch::Sender<SupervisionStatus>,
+        watch::Receiver<SupervisionStatus>,
+    ) {
+        watch::channel(SupervisionStatus::new(
+            id.clone(),
+            None,
+            RestartGeneration::FIRST,
+            SupervisionState::Starting,
+            0,
+        ))
+    }
+
+    fn new_slot(id: &Ern, restartable: bool) -> (NewSlot, watch::Receiver<SupervisionStatus>) {
+        let (status, receiver) = status_channel(id);
+        let spawner: Option<Arc<dyn ChildSpawner>> = if restartable {
+            Some(Arc::new(StubSpawner { child: id.clone() }))
+        } else {
+            None
+        };
+
+        (
+            NewSlot {
+                ern: id.clone(),
+                handle: handle(id),
+                spawner,
+                restart_policy: RestartPolicy::Permanent,
+                limiter: RestartLimiter::default(),
+                status,
+            },
+            receiver,
+        )
+    }
+
+    /// Registers `count` restartable children named `child-0..n`.
+    fn registry_with(count: usize) -> (SupervisionRegistry, Vec<Ern>) {
+        let mut registry = SupervisionRegistry::default();
+        let mut erns = Vec::new();
+
+        for _ in 0..count {
+            let id = ern("child");
+            let (slot, _receiver) = new_slot(&id, true);
+            registry.register(slot).expect("distinct Erns never collide");
+            erns.push(id);
+        }
+
+        (registry, erns)
+    }
+
+    #[test]
+    fn a_spawner_reports_the_identity_and_policy_it_will_build_with() {
+        let id = ern("child");
+        let spawner = StubSpawner { child: id.clone() };
+
+        assert_eq!(spawner.child_id(), &id);
+        assert_eq!(spawner.restart_policy(), RestartPolicy::Permanent);
+    }
+
+    // ---- SlotState -------------------------------------------------------
+
+    #[test]
+    fn every_slot_state_maps_to_a_published_state() {
+        assert_eq!(SlotState::Starting.published(), SupervisionState::Starting);
+        assert_eq!(SlotState::Running.published(), SupervisionState::Running);
+        assert_eq!(
+            SlotState::AwaitingBackoff.published(),
+            SupervisionState::RestartPending
+        );
+        assert_eq!(
+            SlotState::Restarting.published(),
+            SupervisionState::Restarting
+        );
+        assert_eq!(SlotState::Down.published(), SupervisionState::Down);
+        assert_eq!(SlotState::Escalated.published(), SupervisionState::Escalated);
+        assert_eq!(SlotState::Retired.published(), SupervisionState::Retired);
+    }
+
+    #[test]
+    fn an_expected_stop_publishes_as_restarting_either_way() {
+        // Callers cannot act on the difference between "being stopped so it can
+        // restart" and "being restarted", so both read as Restarting.
+        for then_restart in [true, false] {
+            assert_eq!(
+                SlotState::ExpectedStop { then_restart }.published(),
+                SupervisionState::Restarting
+            );
+        }
+    }
+
+    #[test]
+    fn only_starting_and_running_count_as_up() {
+        assert!(SlotState::Starting.is_running());
+        assert!(SlotState::Running.is_running());
+
+        for state in [
+            SlotState::AwaitingBackoff,
+            SlotState::Restarting,
+            SlotState::ExpectedStop { then_restart: true },
+            SlotState::Down,
+            SlotState::Escalated,
+            SlotState::Retired,
+        ] {
+            assert!(!state.is_running(), "{state} should not count as up");
+        }
+    }
+
+    #[test]
+    fn a_termination_is_only_fresh_news_while_the_child_was_up() {
+        // The guard against both re-entrant restarts and duplicate notices from
+        // a previous incarnation.
+        assert!(SlotState::Starting.accepts_termination());
+        assert!(SlotState::Running.accepts_termination());
+
+        for state in [
+            SlotState::AwaitingBackoff,
+            SlotState::Restarting,
+            SlotState::ExpectedStop { then_restart: true },
+            SlotState::ExpectedStop {
+                then_restart: false,
+            },
+            SlotState::Down,
+            SlotState::Escalated,
+            SlotState::Retired,
+        ] {
+            assert!(
+                !state.accepts_termination(),
+                "{state} should ignore a termination notice"
+            );
+        }
+    }
+
+    // ---- register --------------------------------------------------------
+
+    #[test]
+    fn registering_assigns_positions_in_call_order() {
+        let (registry, erns) = registry_with(3);
+
+        for (position, id) in erns.iter().enumerate() {
+            assert_eq!(registry.index_of(id), Some(ChildIndex::new(position)));
+        }
+        assert_eq!(registry.len(), 3);
+        assert!(!registry.is_empty());
+    }
+
+    #[test]
+    fn registering_publishes_the_child_as_running() {
+        let id = ern("child");
+        let (slot, receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+
+        assert_eq!(receiver.borrow().state(), SupervisionState::Starting);
+        registry.register(slot).expect("first registration succeeds");
+
+        let published = receiver.borrow().clone();
+        assert_eq!(published.state(), SupervisionState::Running);
+        assert_eq!(published.generation(), RestartGeneration::FIRST);
+        assert!(published.handle().is_some());
+    }
+
+    #[test]
+    fn registering_the_same_child_twice_is_rejected() {
+        let id = ern("child");
+        let mut registry = SupervisionRegistry::default();
+
+        let (first, _first_rx) = new_slot(&id, true);
+        registry.register(first).expect("first registration succeeds");
+
+        let (second, _second_rx) = new_slot(&id, true);
+        let error = registry
+            .register(second)
+            .expect_err("the same Ern cannot be registered twice");
+
+        assert_eq!(error, SupervisionError::DuplicateChild { child: id });
+        assert_eq!(registry.len(), 1, "the rejected slot was not recorded");
+    }
+
+    #[test]
+    fn an_empty_registry_reports_empty() {
+        let registry = SupervisionRegistry::default();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+        assert!(registry.views().is_empty());
+        assert!(registry.live_handles().is_empty());
+        assert!(!registry.is_shutting_down());
+    }
+
+    // ---- retire ----------------------------------------------------------
+
+    #[test]
+    fn retiring_returns_the_handle_so_the_caller_can_stop_the_child() {
+        let (mut registry, erns) = registry_with(1);
+
+        let handle = registry
+            .retire(&erns[0])
+            .expect("the child is supervised")
+            .expect("the child was running");
+
+        assert_eq!(handle.id(), erns[0]);
+    }
+
+    #[test]
+    fn retiring_leaves_later_children_at_their_original_positions() {
+        // The reason retire marks rather than removes: RestForOne restarts "this
+        // child and everything after it", so a shifted index would silently
+        // change which children a restart covers.
+        let (mut registry, erns) = registry_with(4);
+
+        registry.retire(&erns[1]).expect("the child is supervised");
+
+        assert_eq!(registry.index_of(&erns[0]), Some(ChildIndex::new(0)));
+        assert_eq!(registry.index_of(&erns[2]), Some(ChildIndex::new(2)));
+        assert_eq!(registry.index_of(&erns[3]), Some(ChildIndex::new(3)));
+    }
+
+    #[test]
+    fn a_retired_child_is_no_longer_supervised() {
+        let (mut registry, erns) = registry_with(2);
+
+        registry.retire(&erns[0]).expect("the child is supervised");
+
+        assert_eq!(registry.index_of(&erns[0]), None);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(
+            registry.slot(ChildIndex::new(0)).map(ChildSlot::state),
+            Some(SlotState::Retired),
+            "the slot is still there, holding its position"
+        );
+    }
+
+    #[test]
+    fn retiring_frees_the_identifier_for_reuse() {
+        let id = ern("child");
+        let mut registry = SupervisionRegistry::default();
+
+        let (first, _first_rx) = new_slot(&id, true);
+        registry.register(first).expect("first registration succeeds");
+        registry.retire(&id).expect("the child is supervised");
+
+        let (second, _second_rx) = new_slot(&id, true);
+        let index = registry
+            .register(second)
+            .expect("the identifier was released by retiring");
+
+        assert_eq!(
+            index,
+            ChildIndex::new(1),
+            "re-registration takes a fresh position, behind the retired slot"
+        );
+    }
+
+    #[test]
+    fn retiring_a_child_that_is_already_down_yields_no_handle() {
+        let (mut registry, erns) = registry_with(1);
+        registry
+            .slot_of_mut(&erns[0])
+            .expect("the child is supervised")
+            .set_handle(None);
+
+        let handle = registry.retire(&erns[0]).expect("the child is supervised");
+
+        assert!(handle.is_none());
+    }
+
+    #[test]
+    fn retiring_an_unknown_child_is_an_error() {
+        let mut registry = SupervisionRegistry::default();
+        let missing = ern("nobody");
+
+        let error = registry
+            .retire(&missing)
+            .expect_err("nothing was ever registered");
+
+        assert_eq!(
+            error,
+            SupervisionError::UnknownChild {
+                child: missing.clone()
+            }
+        );
+
+        // And retiring twice reports the same thing.
+        let (mut registry, erns) = registry_with(1);
+        registry.retire(&erns[0]).expect("the child is supervised");
+        assert!(matches!(
+            registry.retire(&erns[0]),
+            Err(SupervisionError::UnknownChild { .. })
+        ));
+    }
+
+    // ---- replace_legacy --------------------------------------------------
+
+    #[test]
+    fn replacing_a_legacy_handle_points_the_slot_at_the_new_mailbox() {
+        let (mut registry, erns) = registry_with(1);
+        let replacement = handle(&erns[0]);
+
+        registry
+            .replace_legacy(&erns[0], replacement)
+            .expect("the child is supervised");
+
+        let slot = registry.slot_of(&erns[0]).expect("the child is supervised");
+        assert_eq!(slot.state(), SlotState::Running);
+        assert!(slot.handle().is_some());
+    }
+
+    #[test]
+    fn replacing_the_handle_of_an_unknown_child_is_an_error() {
+        let mut registry = SupervisionRegistry::default();
+        let missing = ern("nobody");
+
+        let error = registry
+            .replace_legacy(&missing, handle(&missing))
+            .expect_err("nothing was ever registered");
+
+        assert_eq!(error, SupervisionError::UnknownChild { child: missing });
+    }
+
+    // ---- views and snapshots ---------------------------------------------
+
+    #[test]
+    fn views_describe_every_actively_supervised_child() {
+        let (registry, _erns) = registry_with(3);
+
+        let views = registry.views();
+
+        assert_eq!(views.len(), 3);
+        for (position, view) in views.iter().enumerate() {
+            assert_eq!(view.index, ChildIndex::new(position));
+            assert!(view.restartable, "every fixture child has a spawner");
+            assert!(view.alive, "every fixture child is running");
+        }
+    }
+
+    #[test]
+    fn a_child_without_a_spawner_is_not_restartable() {
+        let id = ern("legacy");
+        let (slot, _receiver) = new_slot(&id, false);
+        let mut registry = SupervisionRegistry::default();
+        registry.register(slot).expect("registration succeeds");
+
+        let views = registry.views();
+        assert_eq!(views.len(), 1);
+        assert!(!views[0].restartable);
+        assert!(views[0].alive, "it is running, it just cannot be recreated");
+    }
+
+    #[test]
+    fn views_omit_retired_slots_but_keep_everyone_elses_position() {
+        let (mut registry, erns) = registry_with(4);
+        registry.retire(&erns[1]).expect("the child is supervised");
+
+        let views = registry.views();
+
+        let positions: Vec<usize> = views.iter().map(|view| view.index.get()).collect();
+        assert_eq!(
+            positions,
+            vec![0, 2, 3],
+            "the retired slot is gone from planning, the rest keep their indices"
+        );
+    }
+
+    #[test]
+    fn a_child_that_is_down_is_not_alive() {
+        let (mut registry, erns) = registry_with(2);
+        let slot = registry
+            .slot_of_mut(&erns[0])
+            .expect("the child is supervised");
+        slot.set_state(SlotState::Down);
+        slot.set_handle(None);
+
+        let views = registry.views();
+        assert!(!views[0].alive);
+        assert!(views[1].alive);
+    }
+
+    #[test]
+    fn a_snapshot_of_a_running_child_reads_as_a_fresh_failure() {
+        let (registry, erns) = registry_with(1);
+        let index = registry.index_of(&erns[0]).expect("supervised");
+
+        let snapshot = registry.snapshot(index).expect("the slot exists");
+
+        assert_eq!(snapshot.index, index);
+        assert!(snapshot.restartable);
+        assert!(
+            !snapshot.expected_stop,
+            "a running child terminating is news"
+        );
+        assert!(snapshot.last_restart.is_none());
+    }
+
+    #[test]
+    fn a_snapshot_of_a_child_we_stopped_reads_as_expected() {
+        // Feeds evaluate's first check: expected_stop wins over everything.
+        let (mut registry, erns) = registry_with(1);
+        registry
+            .slot_of_mut(&erns[0])
+            .expect("supervised")
+            .set_state(SlotState::ExpectedStop { then_restart: true });
+        let index = registry.index_of(&erns[0]).expect("supervised");
+
+        let snapshot = registry.snapshot(index).expect("the slot exists");
+
+        assert!(snapshot.expected_stop);
+    }
+
+    #[test]
+    fn shutting_down_makes_every_termination_expected() {
+        // Without this, a cascading stop looks like a wave of failures and each
+        // Permanent child gets restarted on the way down.
+        let (mut registry, erns) = registry_with(2);
+        registry.begin_shutdown();
+
+        assert!(registry.is_shutting_down());
+        for id in &erns {
+            let index = registry.index_of(id).expect("supervised");
+            let snapshot = registry.snapshot(index).expect("the slot exists");
+            assert!(snapshot.expected_stop);
+        }
+    }
+
+    #[test]
+    fn a_snapshot_of_a_missing_slot_is_none() {
+        let (registry, _erns) = registry_with(1);
+        assert!(registry.snapshot(ChildIndex::new(9)).is_none());
+    }
+
+    #[test]
+    fn an_out_of_range_index_yields_no_slot_rather_than_panicking() {
+        // Stale timers and late termination notices both arrive carrying
+        // indices that may no longer exist.
+        let (mut registry, _erns) = registry_with(1);
+        assert!(registry.slot(ChildIndex::new(9)).is_none());
+        assert!(registry.slot_mut(ChildIndex::new(9)).is_none());
+    }
+
+    // ---- live_handles ----------------------------------------------------
+
+    #[test]
+    fn live_handles_covers_every_child_still_holding_a_mailbox() {
+        let (registry, _erns) = registry_with(3);
+        assert_eq!(registry.live_handles().len(), 3);
+    }
+
+    #[test]
+    fn live_handles_skips_children_that_are_down_or_retired() {
+        let (mut registry, erns) = registry_with(3);
+        registry
+            .slot_of_mut(&erns[0])
+            .expect("supervised")
+            .set_handle(None);
+        registry.retire(&erns[1]).expect("supervised");
+
+        let handles = registry.live_handles();
+
+        assert_eq!(handles.len(), 1);
+        assert_eq!(handles[0].id(), erns[2]);
+    }
+
+    // ---- publish ---------------------------------------------------------
+
+    #[test]
+    fn republishing_an_unchanged_state_does_not_wake_watchers() {
+        let id = ern("child");
+        let (slot, mut receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+        registry.register(slot).expect("registration succeeds");
+        // Consume the Starting -> Running change.
+        assert!(receiver.has_changed().expect("sender is alive"));
+        let _ = receiver.borrow_and_update();
+
+        let woke = registry
+            .slot_of(&id)
+            .expect("supervised")
+            .publish();
+
+        assert!(!woke);
+        assert!(
+            !receiver.has_changed().expect("sender is alive"),
+            "an unchanged republish must not wake a watcher"
+        );
+    }
+
+    #[test]
+    fn swapping_the_handle_alone_does_not_wake_watchers() {
+        // Pinned deliberately. ActorHandle compares by Ern only, so a derived
+        // whole-struct comparison would also report "unchanged" here — but for
+        // the wrong reason. This asserts the documented behaviour so that the
+        // field-by-field comparison cannot be replaced by a derive.
+        let id = ern("child");
+        let (slot, mut receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+        registry.register(slot).expect("registration succeeds");
+        let _ = receiver.borrow_and_update();
+
+        let replacement = handle(&id);
+        let child = registry.slot_of_mut(&id).expect("supervised");
+        child.set_handle(Some(replacement));
+        let woke = child.publish();
+
+        assert!(!woke, "same generation and state, so nothing to report");
+    }
+
+    #[test]
+    fn advancing_the_generation_wakes_watchers() {
+        let id = ern("child");
+        let (slot, mut receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+        registry.register(slot).expect("registration succeeds");
+        let _ = receiver.borrow_and_update();
+
+        let child = registry.slot_of_mut(&id).expect("supervised");
+        child.advance_generation();
+        let woke = child.publish();
+
+        assert!(woke);
+        assert!(receiver.has_changed().expect("sender is alive"));
+        assert_eq!(
+            receiver.borrow().generation(),
+            RestartGeneration::FIRST.next()
+        );
+    }
+
+    #[test]
+    fn changing_state_wakes_watchers() {
+        let id = ern("child");
+        let (slot, mut receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+        registry.register(slot).expect("registration succeeds");
+        let _ = receiver.borrow_and_update();
+
+        let child = registry.slot_of_mut(&id).expect("supervised");
+        child.set_state(SlotState::AwaitingBackoff);
+        let woke = child.publish();
+
+        assert!(woke);
+        assert_eq!(receiver.borrow().state(), SupervisionState::RestartPending);
+    }
+
+    #[test]
+    fn retiring_publishes_the_terminal_state() {
+        let id = ern("child");
+        let (slot, receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+        registry.register(slot).expect("registration succeeds");
+
+        registry.retire(&id).expect("supervised");
+
+        let published = receiver.borrow().clone();
+        assert_eq!(published.state(), SupervisionState::Retired);
+        assert!(published.state().is_terminal());
+        assert!(published.handle().is_none(), "the handle was handed back");
+    }
+
+    // ---- slot bookkeeping -------------------------------------------------
+
+    #[test]
+    fn a_slot_reports_what_it_was_registered_with() {
+        let id = ern("child");
+        let (slot, _receiver) = new_slot(&id, true);
+        let mut registry = SupervisionRegistry::default();
+        let index = registry.register(slot).expect("registration succeeds");
+
+        let child = registry.slot(index).expect("the slot exists");
+
+        assert_eq!(child.ern(), &id);
+        assert_eq!(child.index(), index);
+        assert_eq!(child.restart_policy(), RestartPolicy::Permanent);
+        assert_eq!(child.generation(), RestartGeneration::FIRST);
+        assert_eq!(child.state(), SlotState::Running);
+        assert!(child.is_restartable());
+        assert!(child.spawner().is_some());
+        assert!(child.last_restart().is_none());
+    }
+
+    #[test]
+    fn a_slot_records_when_its_child_last_came_back() {
+        let (mut registry, erns) = registry_with(1);
+        let now = Instant::now();
+
+        let child = registry.slot_of_mut(&erns[0]).expect("supervised");
+        child.mark_restarted_at(now);
+
+        assert_eq!(child.last_restart(), Some(now));
+        let index = registry.index_of(&erns[0]).expect("supervised");
+        assert_eq!(
+            registry.snapshot(index).expect("the slot exists").last_restart,
+            Some(now)
+        );
+    }
+
+    #[test]
+    fn a_slots_limiter_is_its_own() {
+        // Each child backs off on its own schedule; one noisy child must not
+        // consume another's allowance.
+        let (mut registry, erns) = registry_with(2);
+
+        let first = registry.slot_of_mut(&erns[0]).expect("supervised");
+        let _ = first.limiter_mut().record_restart();
+        let _ = first.limiter_mut().record_restart();
+
+        assert!(
+            registry.slot_of(&erns[0]).expect("supervised").publish(),
+            "the restart count changed, so watchers are told"
+        );
+
+        let second_count = {
+            let second = registry.slot_of_mut(&erns[1]).expect("supervised");
+            second.limiter_mut().restarts_in_window()
+        };
+        assert_eq!(second_count, 0);
     }
 }

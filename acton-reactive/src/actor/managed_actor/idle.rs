@@ -27,6 +27,7 @@ use tokio::sync::mpsc::channel;
 use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace};
 
+use crate::actor::supervision::SupervisionRegistry;
 use crate::actor::{ActorConfig, ManagedActor, RestartPolicy, Started, SupervisionStrategy};
 use crate::common::{
     ActorHandle, ActorRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
@@ -988,6 +989,9 @@ impl<State: Default + Send + Debug + 'static> From<ManagedActor<Idle, State>>
             restart_policy: value.restart_policy,
             supervision_strategy: value.supervision_strategy,
             expose_for_ipc: value.expose_for_ipc,
+            // Carried rather than reset: an actor may register children before
+            // it starts, and those registrations must survive the transition.
+            supervision: value.supervision,
             _actor_state: PhantomData,
         }
     }
@@ -1026,6 +1030,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
             expose_for_ipc: false,
+            supervision: SupervisionRegistry::default(),
             _actor_state: PhantomData,
         }
     }

@@ -29,11 +29,17 @@
 //! - [`events`] — supervision notifications broadcast over the broker
 //! - [`error`] — the errors the subsystem returns
 //! - [`plan`] — the pure decision layer the engine carries out
+//! - [`spawner`] — how a supervisor recreates a child
 
 pub use error::SupervisionError;
 pub use escalation::Escalation;
 pub use events::{ChildRestarted, ChildSupervised, SupervisionEscalated};
 pub use registry::{BackoffDelay, ChildIndex, RestartGeneration};
+// `ChildSlot`, `NewSlot` and `SlotState` are deliberately not re-exported yet:
+// nothing outside `registry` names them until registration lands, and an unused
+// re-export is a warning rather than a placeholder.
+pub use registry::SupervisionRegistry;
+pub use spawner::ChildSpawner;
 pub use status::{SupervisionState, SupervisionStatus};
 pub use strategy::{SupervisionDecision, SupervisionStrategy};
 
@@ -66,8 +72,29 @@ mod events;
 )]
 mod plan;
 
-/// Contains the value types describing a supervisor's view of its children.
+/// Contains a supervisor's record of its children.
+///
+/// Same deferral as [`plan`]: the registry is wired onto `ManagedActor` here but
+/// nothing reads or writes it until registration and the engine land.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "issue #7: registration and the engine that drive this registry land in later changes"
+    )
+)]
 mod registry;
+
+/// Contains the recipe a supervisor uses to recreate a child.
+///
+/// Unconditional rather than `cfg(not(test))`: `spawn` has no caller in either
+/// build, because calling it would mean actually starting an actor, which the
+/// registry's runtime-free tests deliberately avoid.
+#[expect(
+    dead_code,
+    reason = "issue #7: the blueprint path that calls this trait lands in a later change"
+)]
+mod spawner;
 
 /// Contains a supervisor's published view of one supervised child.
 mod status;

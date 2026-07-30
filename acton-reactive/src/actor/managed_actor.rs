@@ -24,6 +24,7 @@ use tokio_util::task::TaskTracker;
 
 pub use idle::Idle;
 
+use crate::actor::supervision::SupervisionRegistry;
 use crate::actor::{RestartPolicy, SupervisionStrategy};
 use crate::common::{
     ActorHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap,
@@ -116,6 +117,13 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// Whether to automatically expose this actor for IPC access when started.
     /// When `true`, the actor will be registered with the IPC system using its ERN root name.
     pub(crate) expose_for_ipc: bool,
+    /// This actor's record of the children it supervises.
+    ///
+    /// Owned outright and reached only through `&mut self` from this actor's own
+    /// task, so supervision state needs no lock and cannot be touched
+    /// concurrently. Only meaningful once the actor is running; the [`Idle`] copy
+    /// is always empty.
+    pub(crate) supervision: SupervisionRegistry,
     /// Phantom data to associate the `ActorState` type parameter.
     _actor_state: std::marker::PhantomData<ActorState>,
 }
