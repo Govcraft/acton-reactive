@@ -523,8 +523,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
             // Attempt to find the specific child handle using the ID from the message.
             assert!(
                 actor.handle().find_child(&child_id).is_some(),
-                "No child found with ID {} in handler",
-                &child_id
+                "No child found with ID {child_id} in handler"
             );
 
             // Use the child handle if found, otherwise log an error.
