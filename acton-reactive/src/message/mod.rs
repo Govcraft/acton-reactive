@@ -50,7 +50,8 @@ pub use message_context::MessageContext;
 pub use message_error::MessageError;
 pub use subscribe_broker::SubscribeBroker;
 pub use supervision_registration::{
-    RegisterSupervisedChild, RegistrationOutcome, UnregisterSupervisedChild,
+    RegisterSupervisedChild, RegistrationOutcome, SupervisedChildStarted,
+    UnregisterSupervisedChild,
 };
 pub use unsubscribe_broker::{RemoveAllSubscriptions, RemoveSubscription};
 
@@ -74,7 +75,8 @@ mod outbound_envelope;
 mod signal;
 /// Defines [`SubscribeBroker`] message.
 mod subscribe_broker;
-/// Defines the messages that ask a supervisor to record or release a child.
+/// Defines the messages that ask a supervisor to record or release a child, and
+/// the one that reports the outcome of a start it launched.
 mod supervision_registration;
 /// Defines the [`RemoveSubscription`] and [`RemoveAllSubscriptions`] messages.
 mod unsubscribe_broker;

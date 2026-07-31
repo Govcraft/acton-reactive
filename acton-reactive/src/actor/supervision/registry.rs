@@ -161,15 +161,24 @@ impl fmt::Display for BackoffDelay {
 /// callers do not, in particular whether a stop was the supervisor's own doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotState {
-    /// Recorded, not yet created.
+    /// Recorded, queued, nothing launched.
     ///
     /// The supervisor accepted the child — its name is taken and its blueprint
-    /// is held — but has not yet run the spawner, so no incarnation exists and
-    /// the slot has no handle. Only the supervisor's own message loop moves a
-    /// slot out of this state, on its next turn.
+    /// is held — but has not yet handed it to a start task, so no incarnation
+    /// exists or is being built. Nothing is running that a shutdown would have
+    /// to stop.
     Pending,
 
-    /// Created, not yet confirmed running.
+    /// A start task is in flight.
+    ///
+    /// The supervisor has handed this child to a task that is building it, and
+    /// is waiting to be told the outcome. Distinct from [`Pending`] in the way
+    /// that matters on the way down: a child in this state **may already
+    /// exist**, so a shutdown cannot simply forget it. The start task is the
+    /// one holding the handle, and is responsible for stopping the child if it
+    /// cannot hand it over.
+    ///
+    /// [`Pending`]: SlotState::Pending
     Starting,
 
     /// Running and processing messages.
@@ -214,9 +223,10 @@ impl SlotState {
     #[must_use]
     pub const fn published(self) -> SupervisionState {
         match self {
-            // A pending child is indistinguishable from a starting one to a
+            // A queued child is indistinguishable from one being built to a
             // caller: both mean "on its way up, no handle yet". The difference
-            // is only whether the supervisor has run the spawner.
+            // is only whether a start task has it, which matters to the
+            // supervisor and to nobody else.
             Self::Pending | Self::Starting => SupervisionState::Starting,
             Self::Running => SupervisionState::Running,
             Self::AwaitingBackoff => SupervisionState::RestartPending,
@@ -323,6 +333,26 @@ pub struct PendingSlot {
     pub status: watch::Sender<SupervisionStatus>,
 }
 
+/// Everything a start task needs, and nothing more.
+///
+/// A start runs on its own task so that building a child — which includes the
+/// child's own `before_start` hook — does not happen on the supervisor's task.
+/// That task cannot be handed the registry, which never leaves the supervisor,
+/// so it is handed this instead: what to build, and which slot to report back
+/// against.
+#[derive(Debug, Clone)]
+pub struct StartTicket {
+    /// Which slot this start belongs to. Stable: slots are append-only.
+    pub index: ChildIndex,
+
+    /// The child's identifier, carried so the report can be matched to the slot
+    /// by identity rather than by position alone.
+    pub ern: Ern,
+
+    /// How to build the child.
+    pub spawner: Arc<dyn ChildSpawner>,
+}
+
 /// One supervised child, as recorded by its supervisor.
 #[derive(Debug)]
 pub struct ChildSlot {
@@ -380,9 +410,22 @@ impl ChildSlot {
         self.spawner.is_some()
     }
 
-    /// Whether the supervisor has recorded this child but not yet created it.
+    /// Whether this child is recorded and queued, with nothing launched yet.
     pub const fn is_pending(&self) -> bool {
         matches!(self.state, SlotState::Pending)
+    }
+
+    /// Whether a start task is in flight for this child.
+    pub const fn is_starting(&self) -> bool {
+        matches!(self.state, SlotState::Starting)
+    }
+
+    /// Whether this child has been recorded but has never run.
+    ///
+    /// Both halves of "not up yet": queued, and being built. What a shutdown
+    /// has to answer for, and what a caller is still waiting on.
+    pub const fn is_unfinished_start(&self) -> bool {
+        matches!(self.state, SlotState::Pending | SlotState::Starting)
     }
 
     /// Why this child is not running, when the supervisor knows a reason.
@@ -600,22 +643,54 @@ impl SupervisionRegistry {
         !self.pending_starts.is_empty()
     }
 
-    /// Takes the next child waiting to be created, in the order recorded.
-    pub fn take_pending_start(&mut self) -> Option<ChildIndex> {
-        self.pending_starts.pop_front()
+    /// Hands the next queued child to a start task, marking it in flight.
+    ///
+    /// Skips entries whose slot has moved on — retired before its turn came —
+    /// rather than starting a child nobody supervises any more. Returns what the
+    /// start task needs and nothing it does not: the registry itself never
+    /// leaves this actor.
+    ///
+    /// The slot's outward state does not change. `Pending` and `Starting` both
+    /// publish as [`SupervisionState::Starting`], so a watcher is not woken to
+    /// be told the same thing twice.
+    pub fn begin_start(&mut self) -> Option<StartTicket> {
+        while let Some(index) = self.pending_starts.pop_front() {
+            let Some(slot) = self.slots.get_mut(index.get()) else {
+                continue;
+            };
+            if !slot.is_pending() {
+                continue;
+            }
+            let Some(spawner) = slot.spawner() else {
+                // Unreachable through `register_pending`, which requires a
+                // spawner. Skipping beats unwrapping in a supervisor.
+                continue;
+            };
+
+            slot.set_state(SlotState::Starting);
+            slot.publish();
+
+            return Some(StartTicket {
+                index,
+                ern: slot.ern.clone(),
+                spawner,
+            });
+        }
+
+        None
     }
 
-    /// Records that a pending child is now running behind `handle`.
+    /// Records that a child being started is now running behind `handle`.
     ///
-    /// Ignores a slot that is no longer pending: it was retired while it waited
-    /// its turn, and resurrecting it would supervise a child nobody asked for.
-    /// The caller is responsible for the handle in that case, and is told so by
-    /// the `false` return.
-    pub fn start_pending(&mut self, index: ChildIndex, handle: ActorHandle) -> bool {
+    /// Refuses a slot that is no longer starting, or whose identifier does not
+    /// match: it was retired while its start was in flight, and resurrecting it
+    /// would supervise a child nobody asked for. **The caller owns the handle
+    /// when this returns `false`, and must stop it.**
+    pub fn complete_start(&mut self, index: ChildIndex, ern: &Ern, handle: ActorHandle) -> bool {
         let Some(slot) = self.slots.get_mut(index.get()) else {
             return false;
         };
-        if !slot.is_pending() {
+        if !slot.is_starting() || &slot.ern != ern {
             return false;
         }
 
@@ -625,14 +700,22 @@ impl SupervisionRegistry {
         true
     }
 
-    /// Retires a pending child that could not be created, recording why.
+    /// Retires a child that never came up, recording why.
     ///
     /// The slot keeps its position but leaves active supervision, which frees
     /// the identifier for another attempt. The reason rides out on the status
     /// channel so that a caller waiting for the child to come up learns what
     /// happened rather than waiting for a start that will never be retried.
-    pub fn fail_pending(&mut self, index: ChildIndex, failure: &SupervisionError) {
-        let Some(ern) = self.slots.get(index.get()).map(|slot| slot.ern.clone()) else {
+    ///
+    /// Only for a slot that has never run. A child that started and then failed
+    /// is the restart engine's business, not this.
+    pub fn fail_start(&mut self, index: ChildIndex, failure: &SupervisionError) {
+        let Some(ern) = self
+            .slots
+            .get(index.get())
+            .filter(|slot| slot.is_unfinished_start())
+            .map(|slot| slot.ern.clone())
+        else {
             return;
         };
         self.by_ern.remove(&ern);
@@ -646,22 +729,36 @@ impl SupervisionRegistry {
         slot.publish();
     }
 
-    /// Abandons every queued start, telling each caller the supervisor is gone.
+    /// Abandons every start that has not finished, and says why.
     ///
-    /// Called on the way down. Nothing queued was ever created, so there is
-    /// nothing to stop — but a caller waiting on one of these status channels
-    /// would otherwise wait for a start that can no longer happen.
-    pub fn cancel_pending_starts(&mut self, supervisor: &Ern) {
-        while let Some(index) = self.pending_starts.pop_front() {
-            if self.slots.get(index.get()).is_some_and(ChildSlot::is_pending) {
-                self.fail_pending(
-                    index,
-                    &SupervisionError::SupervisorStopped {
-                        supervisor: supervisor.clone(),
-                    },
-                );
-            }
+    /// Called on the way down, and it covers both halves of "not up yet".
+    /// A queued child was never handed to anyone, so it simply will not happen.
+    /// A child whose start is in flight is a different matter: it may already
+    /// exist, and the task holding its handle is the one that will stop it when
+    /// it finds nobody to hand it to. What is settled here is the *record* and
+    /// the caller's answer, not the child.
+    ///
+    /// Returns how many were abandoned, which is what a shutdown logs.
+    pub fn cancel_unfinished_starts(&mut self, supervisor: &Ern) -> usize {
+        self.pending_starts.clear();
+
+        let unfinished: Vec<ChildIndex> = self
+            .slots
+            .iter()
+            .filter(|slot| slot.is_unfinished_start())
+            .map(ChildSlot::index)
+            .collect();
+
+        for index in &unfinished {
+            self.fail_start(
+                *index,
+                &SupervisionError::SupervisorStopped {
+                    supervisor: supervisor.clone(),
+                },
+            );
         }
+
+        unfinished.len()
     }
 
     /// Points an existing registration at a new handle for the same child.
@@ -1206,12 +1303,9 @@ mod tests {
 
         assert_eq!(error, SupervisionError::DuplicateChild { child: id });
         assert_eq!(registry.len(), 1, "the rejected slot was not recorded");
-        assert_eq!(
-            registry.take_pending_start(),
-            Some(ChildIndex::new(0)),
-            "and nothing extra was queued"
-        );
-        assert!(!registry.has_pending_starts());
+        let ticket = registry.begin_start().expect("the accepted child is queued");
+        assert_eq!(ticket.index, ChildIndex::new(0));
+        assert!(!registry.has_pending_starts(), "and nothing extra was queued");
     }
 
     #[test]
@@ -1234,12 +1328,21 @@ mod tests {
         let (slot, receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
         let index = registry.register_pending(slot).expect("registration succeeds");
-        let index = {
-            assert_eq!(registry.take_pending_start(), Some(index));
-            index
-        };
+        let ticket = registry.begin_start().expect("one start was queued");
+        assert_eq!(ticket.index, index);
+        assert_eq!(ticket.ern, id);
+        assert_eq!(
+            registry.slot(index).map(ChildSlot::state),
+            Some(SlotState::Starting),
+            "handing the child to a start task is recorded"
+        );
+        assert_eq!(
+            receiver.borrow().state(),
+            SupervisionState::Starting,
+            "and looks no different from outside"
+        );
 
-        assert!(registry.start_pending(index, handle(&id)));
+        assert!(registry.complete_start(index, &id, handle(&id)));
 
         let child = registry.slot(index).expect("the slot exists");
         assert_eq!(child.state(), SlotState::Running);
@@ -1256,13 +1359,23 @@ mod tests {
         let (slot, _receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
         let index = registry.register_pending(slot).expect("registration succeeds");
+        registry.begin_start().expect("the start is in flight");
         registry.retire(&id).expect("the child is supervised");
 
-        assert!(!registry.start_pending(index, handle(&id)));
+        assert!(!registry.complete_start(index, &id, handle(&id)));
         assert!(
-            !registry.start_pending(ChildIndex::new(9), handle(&id)),
+            !registry.complete_start(ChildIndex::new(9), &id, handle(&id)),
             "an index that never existed is refused too"
         );
+
+        // And a report for the right position but the wrong child is refused
+        // too, so a stale index cannot hand a slot somebody else's incarnation.
+        let other = ern("other");
+        let (slot, _receiver) = pending_slot(&other);
+        let index = registry.register_pending(slot).expect("registration succeeds");
+        registry.begin_start().expect("the start is in flight");
+        assert!(!registry.complete_start(index, &id, handle(&id)));
+        assert!(registry.complete_start(index, &other, handle(&other)));
     }
 
     #[test]
@@ -1276,7 +1389,7 @@ mod tests {
             child: id.clone(),
             reason: "the spawner said no".to_string(),
         };
-        registry.fail_pending(index, &failure);
+        registry.fail_start(index, &failure);
 
         let published = receiver.borrow().clone();
         assert!(
@@ -1308,8 +1421,9 @@ mod tests {
             receivers.push(receiver);
         }
 
-        registry.cancel_pending_starts(&supervisor);
+        let abandoned = registry.cancel_unfinished_starts(&supervisor);
 
+        assert_eq!(abandoned, 3);
         assert!(!registry.has_pending_starts(), "nothing is left holding a blueprint");
         assert!(registry.is_empty());
         for receiver in &receivers {
@@ -1331,10 +1445,10 @@ mod tests {
         let (slot, receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
         let index = registry.register_pending(slot).expect("registration succeeds");
-        let taken = registry.take_pending_start().expect("one start was queued");
-        assert!(registry.start_pending(taken, handle(&id)));
+        let ticket = registry.begin_start().expect("one start was queued");
+        assert!(registry.complete_start(ticket.index, &id, handle(&id)));
 
-        registry.cancel_pending_starts(&supervisor);
+        assert_eq!(registry.cancel_unfinished_starts(&supervisor), 0);
 
         assert_eq!(
             registry.slot(index).map(ChildSlot::state),

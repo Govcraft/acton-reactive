@@ -21,7 +21,11 @@
 //! caller starts the child, then asks the supervisor to record it, and the
 //! supervisor does so on its own task in message order.
 //!
-//! Both messages are crate-internal and never reach the prelude. They are
+//! The same route carries the answer back when a supervisor starts a child
+//! itself: the start runs on its own task and reports through
+//! [`SupervisedChildStarted`].
+//!
+//! Every message here is crate-internal and never reaches the prelude. They are
 //! intercepted by the actor's message loop before handler dispatch, so a user
 //! cannot register a handler for them.
 
@@ -31,7 +35,9 @@ use std::sync::Arc;
 use acton_ern::Ern;
 use tokio::sync::{watch, SetOnce};
 
-use crate::actor::{ChildSpawner, RestartPolicy, SupervisionError, SupervisionStatus};
+use crate::actor::{
+    ChildIndex, ChildSpawner, RestartPolicy, SupervisionError, SupervisionStatus,
+};
 use crate::common::ActorHandle;
 
 /// The cell a caller waits on for the result of its registration.
@@ -78,6 +84,33 @@ pub struct RegisterSupervisedChild {
     /// path cannot fail, because every child it registers carries a freshly
     /// minted identifier that cannot collide.
     pub outcome: Option<RegistrationOutcome>,
+}
+
+/// Reports the outcome of a start the supervisor itself asked for.
+///
+/// A supervisor does not build its children on its own task: it launches a
+/// start task and carries on taking messages. This is how the answer gets back,
+/// and it travels the same way every other answer does.
+///
+/// # Undeliverable means "stop the child"
+///
+/// The `Ok` case carries the only handle to a live actor. If this message
+/// cannot be delivered — the supervisor stopped, its inbox closed — the start
+/// task must stop that child rather than drop the handle, because dropping it
+/// leaves an actor running that nothing can reach. That obligation belongs to
+/// whoever holds the message before it is delivered, which is why the handle
+/// travels inside it rather than being registered anywhere first.
+#[derive(Debug, Clone)]
+pub struct SupervisedChildStarted {
+    /// The child's identifier, so the report can be matched to its slot by
+    /// identity and not by position alone.
+    pub child: Ern,
+
+    /// The slot the supervisor recorded before the start was launched.
+    pub index: ChildIndex,
+
+    /// The started child, or why it could not be started.
+    pub outcome: Result<ActorHandle, SupervisionError>,
 }
 
 /// Asks a supervisor to stop looking after a child.

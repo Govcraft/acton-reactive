@@ -32,7 +32,7 @@ use crate::common::{
 };
 use crate::message::{
     BrokerRequestEnvelope, ChildTerminated, MessageAddress, RegisterSupervisedChild,
-    RemoveAllSubscriptions, SystemSignal, UnregisterSupervisedChild,
+    RemoveAllSubscriptions, SupervisedChildStarted, SystemSignal, UnregisterSupervisedChild,
 };
 use crate::traits::ActorHandleInterface;
 
@@ -694,13 +694,16 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let termination_reason;
 
         loop {
-            // Children recorded by a handler are created here, at the top of the
-            // turn, before this actor waits for anything else. Deliberately not
-            // inside the message arm: a handler's registration must be acted on
-            // even if no further message ever arrives, and both supervision arms
-            // below `continue` back to here rather than falling through.
+            // Children recorded by a handler are handed to start tasks here, at
+            // the top of the turn, before this actor waits for anything else.
+            // Deliberately not inside the message arm: a handler's registration
+            // must be acted on even if no further message ever arrives, and both
+            // supervision arms below `continue` back to here rather than falling
+            // through. No await: the start itself runs elsewhere and reports
+            // back through the inbox, so a child slow to start cannot stop this
+            // actor from taking messages.
             if self.supervision.has_pending_starts() {
-                self.start_pending_children().await;
+                self.launch_pending_starts();
             }
 
             tokio::select! {
@@ -743,6 +746,11 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     if type_id == TypeId::of::<RegisterSupervisedChild>() {
                         if let Some(registration) = envelope.message.as_any().downcast_ref::<RegisterSupervisedChild>() {
                             self.register_supervised_child(registration);
+                        }
+                        continue;
+                    } else if type_id == TypeId::of::<SupervisedChildStarted>() {
+                        if let Some(started) = envelope.message.as_any().downcast_ref::<SupervisedChildStarted>() {
+                            self.record_started_child(started);
                         }
                         continue;
                     } else if type_id == TypeId::of::<UnregisterSupervisedChild>() {
@@ -797,15 +805,21 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // shutdown would read as a wave of failures worth restarting.
         self.supervision_mut().begin_shutdown();
 
-        // Anything still queued was never created, so there is nothing to stop
-        // — but a caller is waiting on each one's status channel for a start
-        // this actor can no longer perform. Tell them before going any further,
-        // and drop the blueprints they were holding.
-        self.cancel_pending_children();
+        // Every start this actor asked for and never finished is answered here:
+        // the ones still queued, which will now never be launched, and the ones
+        // in flight, which this actor is no longer in a position to take on. The
+        // callers waiting on their status channels are told, and the blueprints
+        // they were holding are dropped.
+        self.cancel_unfinished_children();
 
         // Stop accepting new messages on every termination path. The graceful
         // path has already closed the inbox; closing again is a no-op, but the
         // panic and cancellation paths reach here with it still open.
+        //
+        // This is also what tells an in-flight start task that there is nobody
+        // to hand its child to, which is its cue to stop that child rather than
+        // drop the only handle to it. Closed before the drain below, so a start
+        // that has not delivered yet cannot land in a queue nothing will read.
         self.inbox.close();
 
         // Remove this actor from all broker subscriptions so subsequent broadcasts
@@ -819,7 +833,13 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             self.broker.send(unsubscription).await;
         }
 
-        terminate_children(self.shutdown_child_handles(), self.id()).await;
+        // A start that *did* deliver, just before the loop exited, is sitting in
+        // the closed inbox right now holding a running child. Taken over as late
+        // as possible, so that anything which landed while the unsubscription
+        // above was in flight is caught too.
+        let late_arrivals = self.take_late_started_children();
+
+        terminate_children(self.shutdown_child_handles(late_arrivals), self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
     }
 }

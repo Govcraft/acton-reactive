@@ -19,15 +19,21 @@
 //! Several of these fail by **hanging** rather than by asserting, so they are
 //! wrapped in an explicit timeout that fails loudly instead.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
 
 /// Long enough to be decisive, short enough that a hang is not a coffee break.
 const PATIENCE: Duration = Duration::from_secs(5);
+
+/// How long a deliberately slow child takes to start.
+///
+/// Long enough that a supervisor which waited for it would be visibly stuck,
+/// and short enough that the tests using it stay quick.
+const SLOW_START: Duration = Duration::from_secs(2);
 
 #[acton_actor]
 struct Parent;
@@ -46,6 +52,10 @@ struct HireWorker {
     name: &'static str,
 }
 
+/// Asks a supervisor to prove it is still listening.
+#[acton_message]
+struct Ping;
+
 /// The way a handler reports what it did back to the test.
 ///
 /// A channel rather than shared state: the handler runs on the supervisor's
@@ -59,6 +69,43 @@ type Registrations = (
 
 fn registration_channel() -> Registrations {
     tokio::sync::mpsc::unbounded_channel()
+}
+
+/// A blueprint whose child takes its time coming up, and says when it stops.
+///
+/// The `before_start` hook is the part that matters: it is user code of
+/// arbitrary duration that has to run before the child exists, which is exactly
+/// what a supervisor must not be waiting on.
+fn slow_blueprint(
+    stopped: &Arc<AtomicBool>,
+) -> impl Fn(&mut ManagedActor<Idle, Worker>) + Clone + Send + Sync + 'static {
+    let stopped = Arc::clone(stopped);
+    move |actor: &mut ManagedActor<Idle, Worker>| {
+        actor.before_start(|_actor| async move {
+            tokio::time::sleep(SLOW_START).await;
+        });
+        let stopped = Arc::clone(&stopped);
+        actor.after_stop(move |_actor| {
+            let stopped = Arc::clone(&stopped);
+            async move {
+                stopped.store(true, Ordering::SeqCst);
+            }
+        });
+    }
+}
+
+/// Waits for `flag` to be set, up to a bounded time.
+///
+/// Polls rather than sleeping a fixed duration, so a passing test is fast and a
+/// failing one is still decisive.
+async fn wait_for_flag(flag: &Arc<AtomicBool>) -> bool {
+    for _ in 0..300 {
+        if flag.load(Ordering::SeqCst) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    flag.load(Ordering::SeqCst)
 }
 
 /// A blueprint that counts how many times it has been applied.
@@ -398,6 +445,190 @@ async fn stopping_with_starts_still_queued_resolves_every_waiting_caller() -> an
     }
 
     runtime.shutdown_all().await?;
+    Ok(())
+}
+
+/// Test 6c — a supervisor keeps answering while one of its children starts.
+///
+/// The reason a start runs on its own task. Creating a child means running the
+/// child's `before_start`, which is user code of any duration; a supervisor that
+/// awaited it would stop taking messages — including its own `Terminate` — for
+/// as long as somebody else's hook felt like taking.
+///
+/// **Fails on the elapsed-time assertion** if the start moves back onto the
+/// supervisor's task: the pong then cannot arrive until the child has finished
+/// starting.
+#[acton_test]
+async fn a_supervisor_keeps_taking_messages_while_a_child_starts() -> anyhow::Result<()> {
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let (registered, mut outcomes) = registration_channel();
+    let (pinged, mut pongs) = tokio::sync::mpsc::unbounded_channel::<Instant>();
+
+    let mut parent = runtime.new_actor::<Parent>();
+    let blueprint = slow_blueprint(&stopped);
+    parent.mutate_on::<HireWorker>(move |actor, context| {
+        let config =
+            ActorConfig::for_supervised_child(context.message().name, actor.handle().clone(), None)
+                .expect("a name plus a live parent is a valid child configuration");
+        let _ = registered.send(actor.supervise_deferred(config, blueprint.clone()));
+        Reply::ready()
+    });
+    parent.mutate_on_sync::<Ping>(move |_actor, _context| {
+        let _ = pinged.send(Instant::now());
+    });
+    let parent = parent.start().await;
+
+    let asked_at = Instant::now();
+    parent.send(HireWorker { name: "slowpoke" }).await;
+    parent.send(Ping).await;
+
+    let mut child = tokio::time::timeout(PATIENCE, outcomes.recv())
+        .await
+        .expect("the handler must run")
+        .expect("the handler reports its outcome")?;
+
+    let ponged_at = tokio::time::timeout(PATIENCE, pongs.recv())
+        .await
+        .expect("the supervisor must answer while the child is still starting")
+        .expect("the ping handler reports back");
+
+    let waited = ponged_at.duration_since(asked_at);
+    assert!(
+        waited < SLOW_START / 2,
+        "the supervisor answered only after {waited:?}, which means it was waiting for the child"
+    );
+    assert_eq!(
+        child.status().state(),
+        SupervisionState::Starting,
+        "and the child really was still on its way up"
+    );
+
+    // The child does arrive, in its own time.
+    let handle = tokio::time::timeout(PATIENCE, child.wait_running())
+        .await
+        .expect("the child must finish starting")?;
+    assert_eq!(handle.id(), *child.ern());
+
+    runtime.shutdown_all().await?;
+    Ok(())
+}
+
+/// Test 6d — a supervisor that stops mid-start does not leave the child behind.
+///
+/// The hazard the hand-over creates. Between the moment a start task has built
+/// a child and the moment its supervisor records it, that task holds the only
+/// handle to a live actor. If it simply dropped that handle on finding nobody
+/// to give it to, the child would run forever with nothing able to reach it —
+/// worse than the stall this whole step removes.
+#[acton_test]
+async fn a_supervisor_that_stops_mid_start_stops_the_child_it_started(
+) -> anyhow::Result<()> {
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let (registered, mut outcomes) = registration_channel();
+
+    let mut parent = runtime.new_actor::<Parent>();
+    let blueprint = slow_blueprint(&stopped);
+    parent.mutate_on::<HireWorker>(move |actor, context| {
+        let config =
+            ActorConfig::for_supervised_child(context.message().name, actor.handle().clone(), None)
+                .expect("a name plus a live parent is a valid child configuration");
+        let _ = registered.send(actor.supervise_deferred(config, blueprint.clone()));
+        Reply::ready()
+    });
+    let parent = parent.start().await;
+
+    parent.send(HireWorker { name: "slowpoke" }).await;
+    let child = tokio::time::timeout(PATIENCE, outcomes.recv())
+        .await
+        .expect("the handler must run")
+        .expect("the handler reports its outcome")?;
+
+    // Long enough for the loop to have launched the start, far too short for
+    // that start to have finished.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        child.status().state(),
+        SupervisionState::Starting,
+        "the start really is in flight when the supervisor is stopped"
+    );
+
+    tokio::time::timeout(PATIENCE, parent.stop())
+        .await
+        .expect("stopping must not hang on an in-flight start")?;
+
+    assert!(
+        wait_for_flag(&stopped).await,
+        "the child was built after its supervisor stopped and then left running"
+    );
+
+    Ok(())
+}
+
+/// Test 6e — a caller waiting on an in-flight start is answered, and told why.
+///
+/// Property three, which only became reachable once starts stopped happening on
+/// the supervisor's own task: `Terminate` can now genuinely arrive while a child
+/// is being built.
+///
+/// The assertion on the *published* status is the load-bearing one. A caller
+/// whose wait ends because every sender was dropped learns only that the
+/// supervisor is gone; the terminal status with a reason on it exists only
+/// because the supervisor settled the record on its way down.
+#[acton_test]
+async fn a_start_in_flight_when_the_supervisor_stops_is_settled_not_abandoned(
+) -> anyhow::Result<()> {
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let (registered, mut outcomes) = registration_channel();
+
+    let mut parent = runtime.new_actor::<Parent>();
+    let blueprint = slow_blueprint(&stopped);
+    parent.mutate_on::<HireWorker>(move |actor, context| {
+        let config =
+            ActorConfig::for_supervised_child(context.message().name, actor.handle().clone(), None)
+                .expect("a name plus a live parent is a valid child configuration");
+        let _ = registered.send(actor.supervise_deferred(config, blueprint.clone()));
+        Reply::ready()
+    });
+    let parent = parent.start().await;
+    let supervisor_id = parent.id();
+
+    parent.send(HireWorker { name: "slowpoke" }).await;
+    let mut child = tokio::time::timeout(PATIENCE, outcomes.recv())
+        .await
+        .expect("the handler must run")
+        .expect("the handler reports its outcome")?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::time::timeout(PATIENCE, parent.stop())
+        .await
+        .expect("stopping must not hang on an in-flight start")?;
+
+    let error = tokio::time::timeout(PATIENCE, child.wait_running())
+        .await
+        .expect("a caller waiting on an abandoned start must not wait forever")
+        .expect_err("the child never came up");
+    assert!(
+        matches!(error, SupervisionError::SupervisorStopped { .. }),
+        "unexpected error: {error}"
+    );
+
+    let last = child.status();
+    assert!(
+        last.state().is_terminal(),
+        "the supervisor settled the record before it went, rather than leaving it at {}",
+        last.state()
+    );
+    assert_eq!(
+        last.failure(),
+        Some(&SupervisionError::SupervisorStopped {
+            supervisor: supervisor_id
+        }),
+        "and said why, rather than leaving the caller to infer it from a closed channel"
+    );
+
     Ok(())
 }
 
