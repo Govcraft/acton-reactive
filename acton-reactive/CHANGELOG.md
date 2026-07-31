@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The framework now restarts supervised children.** A child registered with
+  `ActorHandle::supervise_with` or `ManagedActor::supervise_deferred` that
+  terminates in a way its `RestartPolicy` warrants a restart from is rebuilt
+  from its blueprint, after an exponential backoff, keeping its identifier.
+  `SupervisionStrategy::OneForOne` — the default — is what is carried out.
+
+  **This cannot restart a child in any existing program.** A supervisor can only
+  rebuild a child it holds a blueprint for, and blueprints reach the registry
+  only through `supervise_with` and `supervise_deferred`, neither of which has
+  appeared in a released version. Children adopted through `supervise()` have no
+  blueprint, so the decision layer leaves them down — before their restart
+  allowance is even consulted — exactly as today. **No program written against a
+  released version can have a child restarted twice**, including one that
+  hand-rolls restarts from its own `ChildTerminated` handler.
+
+  That firewall stops applying the moment you migrate a child to
+  `supervise_with` or `supervise_deferred`. **When you do, delete your
+  hand-rolled restart for that child**, or it will come back twice: once from
+  your handler and once from the framework.
+
+  A `ChildTerminated` handler you already have keeps running either way. The
+  framework's bookkeeping is additive and does not suppress your handler; it
+  only runs first, so a handler that inspects its supervisor sees a settled
+  registry rather than a half-updated one.
+
+  `SupervisionStrategy::OneForAll` and `RestForOne` are recorded and planned but
+  not yet sequenced. Setting one today restarts the child that failed and logs
+  that the rest of the plan was not carried out.
+
+- **A child that exhausts its restart allowance now reaches a terminal state.**
+  Its supervisor gives up, publishes `SupervisionState::Escalated`, and records
+  the reason, so `wait_running()` returns instead of waiting forever. Escalation
+  *policy* — `Escalation::NotifyParent` versus `StopSupervisor` — is not yet
+  honoured; there is no configuration setter for it to read.
+
+- **A restarted actor stays reachable over IPC.** `ipc_expose` stores a handle
+  by value, so before this an actor exposed under a chosen name became
+  unreachable from its first restart onward, and silently: sends landed in a
+  mailbox with no reader. Its names now follow it across restarts, and are
+  removed when an engine-managed child stops for good. Children adopted through
+  `supervise()` keep their names exactly as before.
+
 - **Cascading shutdown now reaches every supervised child.** A supervisor keeps
   its own record of the children it supervises, and stops all of them when it
   stops.
@@ -22,15 +64,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that child will now be stopped.** Start it as a root actor instead of
   supervising it, if it genuinely should outlive its supervisor.
 
-  There is a second-order consequence worth checking before upgrading. Children
-  stopped by a cascading shutdown terminate with `TerminationReason::Normal`,
-  and `RestartPolicy::Permanent` warrants a restart on a normal termination. The
-  built-in supervision bookkeeping suppresses restart decisions during shutdown,
-  but a **hand-rolled `ChildTerminated` handler does not**. If you restart
-  children from your own handler, check the termination reason, or you may
-  restart children on the way down. A dedicated signal that lets children report
-  `TerminationReason::ParentShutdown` ships in this same release and removes the
-  ambiguity.
+  There is a second-order consequence worth checking before upgrading, and it
+  is narrower than it may look. Children stopped by a cascading shutdown
+  terminate with `TerminationReason::Normal`, and `RestartPolicy::Permanent`
+  warrants a restart on a normal termination. The framework's own bookkeeping
+  suppresses restart decisions during shutdown, but a **hand-rolled
+  `ChildTerminated` handler does not**. If you restart children from your own
+  handler, check the termination reason, or you may restart children on the way
+  down. Children stopped this way now report
+  `TerminationReason::ParentShutdown`, which removes the ambiguity for handlers
+  that check it.
+
+  This is a hazard in code you already have, not one this release introduces:
+  the framework restarts only children registered through APIs that have never
+  shipped, so it cannot be competing with your handler over the same child.
+
+### Undeprecated
+
+- `ActorConfig::with_supervision_strategy` and `ActorConfig::with_restart_limiter`
+  no longer carry deprecation notices. They were deprecated because the
+  framework never read them and their notices told you to hand-roll a
+  `ChildTerminated` handler instead. Both are now read. Leaving the notices in
+  place would have had the compiler actively advising users into the
+  double-restart described above.
+
+  `with_restart_limiter` is meaningful on a child as well as on a supervisor:
+  **a child's own setting wins, and a child that sets none inherits its
+  supervisor's.** Each child is held to a limiter of its own, so one child
+  failing repeatedly cannot consume a sibling's allowance.
 
 ### Added
 
