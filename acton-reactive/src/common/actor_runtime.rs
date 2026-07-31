@@ -235,6 +235,35 @@ impl ActorRuntime {
         self.0.ipc_actor_registry.insert(name.to_string(), handle);
     }
 
+    /// Removes every IPC name registered for a child that is not coming back.
+    ///
+    /// Callers otherwise send into a mailbox nobody reads and are told nothing;
+    /// with the names gone they are told there is no such actor, which is true.
+    ///
+    /// Matched the same way as [`ipc_rebind`](Self::ipc_rebind), and for the
+    /// same reason: by identifier, every match, no first to stop at.
+    ///
+    /// Returns how many names were removed.
+    #[cfg(feature = "ipc")]
+    pub(crate) fn ipc_forget(&self, child: &Ern) -> usize {
+        let names: Vec<String> = self
+            .0
+            .ipc_actor_registry
+            .iter()
+            .filter(|entry| entry.value().id() == *child)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for name in &names {
+            self.0.ipc_actor_registry.remove(name);
+        }
+
+        if !names.is_empty() {
+            trace!("Removed IPC name(s) {:?} for departed {}", names, child);
+        }
+        names.len()
+    }
+
     /// Removes an actor from IPC exposure.
     ///
     /// After calling this method, external processes will no longer be able

@@ -113,18 +113,42 @@ pub struct SupervisedChildStarted {
     pub outcome: Result<ActorHandle, SupervisionError>,
 }
 
+/// The cell a caller waits on when releasing a child.
+///
+/// Carries the released child's handle back, because the caller is the one who
+/// decides what happens to it next: [`ActorHandle::unsupervise`] stops it,
+/// [`ActorHandle::release`] hands it to you still running. `None` where the
+/// supervisor held no handle, which means the child was already down.
+///
+/// [`ActorHandle::unsupervise`]: crate::common::ActorHandle::unsupervise
+/// [`ActorHandle::release`]: crate::common::ActorHandle::release
+pub type ReleaseOutcome = Arc<SetOnce<Result<Option<ActorHandle>, SupervisionError>>>;
+
 /// Asks a supervisor to stop looking after a child.
+///
+/// Releasing a child and stopping it are separate decisions, and only the
+/// caller knows which it wants. The supervisor always does the same thing here
+/// — retire the slot, hand the handle back — and the caller stops the child or
+/// does not. What the supervisor *does* need to know is which was intended,
+/// because it is the only side that can reach the IPC registry.
 #[derive(Debug, Clone)]
 pub struct UnregisterSupervisedChild {
     /// The child to release.
     pub child: Ern,
 
-    /// Where to report whether the child was released.
+    /// Whether the caller is going to stop the child once it has it back.
+    ///
+    /// Not the supervisor's business except in one respect: a child that is
+    /// being stopped should stop answering to its IPC names, and the supervisor
+    /// is the side holding the runtime that owns that registry.
+    pub stopping: bool,
+
+    /// Where to report whether the child was released, and its handle.
     ///
     /// Not optional: unlike registration, this can genuinely fail — the child
     /// may not be supervised at all — and the caller has no other way to find
     /// out.
-    pub outcome: RegistrationOutcome,
+    pub outcome: ReleaseOutcome,
 
     /// Proof that this message still exists.
     ///

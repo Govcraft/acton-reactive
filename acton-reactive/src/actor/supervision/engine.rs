@@ -234,12 +234,33 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         let outcome = match self.supervision.retire(&message.child) {
             Ok(handle) => {
                 trace!(
-                    "Actor {} released child {} (handle retained: {})",
+                    "Actor {} released child {} (handle retained: {}, caller is stopping it: {})",
                     self.id(),
                     message.child,
-                    handle.is_some()
+                    handle.is_some(),
+                    message.stopping
                 );
-                Ok(())
+                // A child on its way out should stop answering to its IPC
+                // names; a child being released to keep serving must keep
+                // them. This is the only side that can tell the difference and
+                // the only side that holds the runtime.
+                //
+                // The whole statement is conditional rather than the body of a
+                // helper, so that without the `ipc` feature there is no empty
+                // function taking a `self` it never reads.
+                #[cfg(feature = "ipc")]
+                if message.stopping {
+                    let forgotten = self.runtime.ipc_forget(&message.child);
+                    if forgotten > 0 {
+                        trace!(
+                            "Actor {} dropped {} IPC name(s) for released child {}",
+                            self.id(),
+                            forgotten,
+                            message.child
+                        );
+                    }
+                }
+                Ok(handle)
             }
             Err(error) => {
                 warn!(
@@ -252,7 +273,9 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
             }
         };
 
-        Self::report(Some(&message.outcome), outcome);
+        if message.outcome.set(outcome).is_err() {
+            warn!("Release outcome cell was already set; ignoring the later result");
+        }
     }
 
     /// Hands the result back to a waiting caller, if one is waiting.

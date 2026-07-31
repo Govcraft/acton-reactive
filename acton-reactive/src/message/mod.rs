@@ -51,7 +51,7 @@ pub use message_error::MessageError;
 pub use signal::CascadeTerminate;
 pub use subscribe_broker::SubscribeBroker;
 pub use supervision_registration::{
-    RegisterSupervisedChild, RegistrationOutcome, SupervisedChildStarted,
+    RegisterSupervisedChild, RegistrationOutcome, ReleaseOutcome, SupervisedChildStarted,
     UnregisterSupervisedChild,
 };
 pub use unsubscribe_broker::{RemoveAllSubscriptions, RemoveSubscription};

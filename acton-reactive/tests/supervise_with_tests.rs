@@ -94,6 +94,32 @@ fn slow_blueprint(
     }
 }
 
+/// A blueprint that counts its applications and reports when its child stops.
+///
+/// The stop flag is what distinguishes `unsupervise` from `release`; without it
+/// a test can only observe that a name was freed, which both of them do.
+fn reporting_blueprint(
+    applications: &Arc<AtomicUsize>,
+    stopped: &Arc<AtomicBool>,
+) -> impl Fn(&mut ManagedActor<Idle, Worker>) + Clone + Send + Sync + 'static {
+    let applications = Arc::clone(applications);
+    let stopped = Arc::clone(stopped);
+    move |actor: &mut ManagedActor<Idle, Worker>| {
+        applications.fetch_add(1, Ordering::SeqCst);
+        actor.mutate_on::<Greet>(|actor, _| {
+            actor.model.greetings += 1;
+            Reply::ready()
+        });
+        let stopped = Arc::clone(&stopped);
+        actor.after_stop(move |_actor| {
+            let stopped = Arc::clone(&stopped);
+            async move {
+                stopped.store(true, Ordering::SeqCst);
+            }
+        });
+    }
+}
+
 /// A blueprint that counts how many times it has been applied.
 fn counting_blueprint(
     applications: &Arc<AtomicUsize>,
@@ -649,22 +675,38 @@ async fn children_are_recorded_in_the_order_they_were_supervised() -> anyhow::Re
     Ok(())
 }
 
-/// A released child is stopped and no longer supervised.
+/// `unsupervise` frees the name **and stops the child**.
+///
+/// The stop half was previously asserted by the test's name and by nothing
+/// else, which is how `unsupervise` came to leave the child running while its
+/// documentation said otherwise. Both halves are checked here.
 #[acton_test]
-async fn releasing_a_child_stops_it_and_frees_its_name() -> anyhow::Result<()> {
+async fn unsupervising_a_child_stops_it_and_frees_its_name() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let parent = runtime.new_actor::<Parent>().start().await;
     let applications = Arc::new(AtomicUsize::new(0));
+    let stopped = Arc::new(AtomicBool::new(false));
 
     let config = ActorConfig::for_supervised_child("worker", parent.clone(), None)?;
     let child_id = config.id();
     parent
-        .supervise_with(&runtime, config, counting_blueprint(&applications))
+        .supervise_with(
+            &runtime,
+            config,
+            reporting_blueprint(&applications, &stopped),
+        )
         .await?;
 
     tokio::time::timeout(PATIENCE, parent.unsupervise(&child_id))
         .await
         .expect("unsupervise must not hang")?;
+
+    // Asserted without polling: `unsupervise` awaits the child's stop itself,
+    // so by the time it returns the child is down, not merely on its way.
+    assert!(
+        stopped.load(Ordering::SeqCst),
+        "unsupervise returned while the child was still running"
+    );
 
     // The name is free again, so the same child can be supervised afresh.
     let again = ActorConfig::for_supervised_child("worker", parent.clone(), None)?;
@@ -676,6 +718,59 @@ async fn releasing_a_child_stops_it_and_frees_its_name() -> anyhow::Result<()> {
     .expect("supervise_with must not hang")?;
 
     assert_eq!(applications.load(Ordering::SeqCst), 2);
+
+    runtime.shutdown_all().await?;
+    Ok(())
+}
+
+/// `release` frees the name and **leaves the child running**.
+///
+/// The mirror of the test above, and the reason the two operations are
+/// separate: "stop supervising this, but keep it serving" is a real thing to
+/// want, and it was previously the *only* thing `unsupervise` actually did.
+#[acton_test]
+async fn releasing_a_child_frees_its_name_and_leaves_it_running() -> anyhow::Result<()> {
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
+    let parent = runtime.new_actor::<Parent>().start().await;
+    let applications = Arc::new(AtomicUsize::new(0));
+    let stopped = Arc::new(AtomicBool::new(false));
+
+    let config = ActorConfig::for_supervised_child("worker", parent.clone(), None)?;
+    let child_id = config.id();
+    parent
+        .supervise_with(
+            &runtime,
+            config,
+            reporting_blueprint(&applications, &stopped),
+        )
+        .await?;
+
+    let released = tokio::time::timeout(PATIENCE, parent.release(&child_id))
+        .await
+        .expect("release must not hang")?
+        .expect("the supervisor was holding a handle to a running child");
+
+    assert!(
+        !stopped.load(Ordering::SeqCst),
+        "release stopped the child it was supposed to leave running"
+    );
+    assert_eq!(released.id(), child_id);
+
+    // Still serving: it takes a message and acts on it.
+    released.send(Greet).await;
+
+    // And the name is free, exactly as after unsupervise.
+    let again = ActorConfig::for_supervised_child("worker", parent.clone(), None)?;
+    tokio::time::timeout(
+        PATIENCE,
+        parent.supervise_with(&runtime, again, counting_blueprint(&applications)),
+    )
+    .await
+    .expect("supervise_with must not hang")?;
+
+    // Nothing supervises the released child now, so stopping it is the
+    // caller's job — which is the bargain `release` makes.
+    released.stop().await?;
 
     runtime.shutdown_all().await?;
     Ok(())

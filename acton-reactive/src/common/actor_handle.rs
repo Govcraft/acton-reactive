@@ -33,7 +33,7 @@ use crate::actor::{
 use crate::common::{ActorRuntime, ActorSender, BrokerRef, OutboundEnvelope};
 use crate::message::{
     BrokerRequest, CascadeTerminate, MessageAddress, RegisterSupervisedChild, RegistrationOutcome,
-    SystemSignal, UnregisterSupervisedChild,
+    ReleaseOutcome, SystemSignal, UnregisterSupervisedChild,
 };
 use crate::prelude::ActonMessage;
 use crate::traits::{ActorHandleInterface, Broadcaster, Subscriber};
@@ -375,6 +375,22 @@ impl ActorHandle {
 
     /// Stops a supervised child and removes it from supervision.
     ///
+    /// **The child is stopped.** If you want it to carry on running without a
+    /// supervisor, use [`release`](Self::release) instead:
+    ///
+    /// | | slot retired | child stopped |
+    /// |---|---|---|
+    /// | `unsupervise` | yes | **yes** |
+    /// | [`release`](Self::release) | yes | **no** |
+    ///
+    /// Returns once the child really has stopped, not merely once the
+    /// supervisor has forgotten it. The stop happens here rather than on the
+    /// supervisor's task, which is what lets that be true without stalling the
+    /// supervisor's message loop.
+    ///
+    /// The child's IPC names are removed, since it is no longer there to answer
+    /// them.
+    ///
     /// Carries the same deadlock caveat as
     /// [`supervise_with`](Self::supervise_with): do not call it on your own
     /// handle from inside your own handler. Unlike registration, releasing has
@@ -384,8 +400,69 @@ impl ActorHandle {
     ///
     /// - [`SupervisionError::UnknownChild`] if that child is not supervised.
     /// - [`SupervisionError::SupervisorStopped`] if the supervisor stops first.
+    /// - [`SupervisionError::ReleaseLost`] if the supervisor's task ends with
+    ///   the request still unprocessed.
     pub async fn unsupervise(&self, child: &Ern) -> Result<(), SupervisionError> {
-        let outcome: RegistrationOutcome = Arc::new(SetOnce::new());
+        let released = self.retire_child(child, true).await?;
+
+        // Stopped by the caller rather than by the supervisor, deliberately.
+        // The supervisor's side of this is synchronous bookkeeping; awaiting a
+        // child's shutdown there would stall its message loop. Doing it here
+        // also means this call does not return until the child really has
+        // stopped, which is what its name promises.
+        if let Some(handle) = released {
+            let _ = handle.stop().await;
+        }
+
+        Ok(())
+    }
+
+    /// Removes a child from supervision and leaves it running.
+    ///
+    /// The other half of [`unsupervise`](Self::unsupervise). Both retire the
+    /// child's slot and free its name; they differ in what happens to the actor
+    /// afterwards, and that is the whole of the difference:
+    ///
+    /// | | slot retired | child stopped |
+    /// |---|---|---|
+    /// | [`unsupervise`](Self::unsupervise) | yes | **yes** |
+    /// | `release` | yes | **no** |
+    ///
+    /// Use this for "stop supervising this, but keep it serving": the child
+    /// carries on with no supervisor, and the returned handle is how you reach
+    /// it. Nothing will restart it, and nothing will stop it when its former
+    /// supervisor stops.
+    ///
+    /// Its IPC names are left in place, because it is still there to answer
+    /// them. `unsupervise` removes them, because it is not.
+    ///
+    /// # Returns
+    ///
+    /// The released child's handle, or `None` when the supervisor held none,
+    /// which means the child was already down.
+    ///
+    /// # Errors
+    ///
+    /// - [`SupervisionError::UnknownChild`] if that child is not supervised.
+    /// - [`SupervisionError::SupervisorStopped`] if the supervisor stops first.
+    /// - [`SupervisionError::ReleaseLost`] if the supervisor's task ends with
+    ///   the request still unprocessed.
+    pub async fn release(&self, child: &Ern) -> Result<Option<Self>, SupervisionError> {
+        self.retire_child(child, false).await
+    }
+
+    /// Asks the supervisor to retire a child, and waits for its answer.
+    ///
+    /// The shared half of [`unsupervise`](Self::unsupervise) and
+    /// [`release`](Self::release). `stopping` tells the supervisor which of the
+    /// two is happening, which it needs for one decision only: whether the
+    /// child should keep answering to its IPC names.
+    async fn retire_child(
+        &self,
+        child: &Ern,
+        stopping: bool,
+    ) -> Result<Option<Self>, SupervisionError> {
+        let outcome: ReleaseOutcome = Arc::new(SetOnce::new());
         // The caller keeps the receiver; the sender rides along inside the
         // message. An actor that stops without processing the message drops the
         // envelope, and that is the only signal the caller gets — a supervisor
@@ -394,6 +471,7 @@ impl ActorHandle {
 
         self.send(UnregisterSupervisedChild {
             child: child.clone(),
+            stopping,
             outcome: Arc::clone(&outcome),
             liveness,
         })
