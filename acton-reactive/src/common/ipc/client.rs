@@ -92,7 +92,7 @@ use super::protocol::{
 use super::types::{
     IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
     IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
-    IpcUnsubscribeRequest,
+    IpcUnsubscribeRequest, CONNECTION_REJECTED_CORRELATION_ID,
 };
 
 // ============================================================================
@@ -277,9 +277,71 @@ pub struct IpcClient {
 
     /// Whether the client has been shut down.
     shutdown: AtomicBool,
+
+    /// Why the server refused this connection, if it did.
+    ///
+    /// A connection-level rejection is a write-once fact about the connection, so
+    /// this is a `OnceLock` rather than shared mutable state. The reader task
+    /// records the reason before the socket closes; every path that would
+    /// otherwise report a bare [`IpcError::ConnectionClosed`] consults it first,
+    /// so the cause survives to the caller regardless of which task observes the
+    /// shutdown first.
+    rejection: std::sync::Arc<ConnectionRejection>,
+}
+
+/// Write-once record of a server-initiated connection-level rejection.
+type ConnectionRejection = std::sync::OnceLock<IpcError>;
+
+/// Resolve every outstanding request with `failure`.
+///
+/// Keys are collected before removal on purpose: `DashMap::iter` holds a lock on
+/// the shard it is walking, and removing a key from that same shard while the
+/// guard is live deadlocks the shard — which on a current-thread runtime wedges
+/// the whole executor, timers included.
+fn fail_pending_requests(pending_requests: &PendingRequests, failure: &IpcError) {
+    let correlation_ids: Vec<String> = pending_requests
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
+
+    for correlation_id in correlation_ids {
+        if let Some((_, tx)) = pending_requests.remove(&correlation_id) {
+            let _ = tx.send(Err(failure.clone()));
+        }
+    }
+}
+
+/// The error to report for a connection that is no longer usable.
+///
+/// Prefers a recorded server rejection over the generic
+/// [`IpcError::ConnectionClosed`], so "the server refused you at its connection
+/// limit" is not flattened into "the connection closed".
+fn connection_error(rejection: &ConnectionRejection) -> IpcError {
+    rejection
+        .get()
+        .cloned()
+        .unwrap_or(IpcError::ConnectionClosed)
 }
 
 impl IpcClient {
+    /// The error to report when this connection is unusable.
+    ///
+    /// Returns the server's stated refusal reason when there is one, so callers
+    /// see "connection limit reached (N)" instead of a bare "connection closed".
+    fn connection_error(&self) -> IpcError {
+        connection_error(&self.rejection)
+    }
+
+    /// The reason the server refused this connection, if it did.
+    ///
+    /// `None` for a connection that was accepted normally. This lets a caller
+    /// distinguish a refusal from an ordinary disconnect without inspecting the
+    /// error of a failed request.
+    #[must_use]
+    pub fn rejection_reason(&self) -> Option<IpcError> {
+        self.rejection.get().cloned()
+    }
+
     /// Connect to a Unix domain socket at the given path with default configuration.
     ///
     /// # Errors
@@ -325,10 +387,22 @@ impl IpcClient {
         let streams_for_writer = std::sync::Arc::clone(&active_streams);
         let streams_for_reader = std::sync::Arc::clone(&active_streams);
 
+        // Records a server-side refusal so it survives the connection closing.
+        let rejection: std::sync::Arc<ConnectionRejection> =
+            std::sync::Arc::new(std::sync::OnceLock::new());
+        let rejection_for_writer = std::sync::Arc::clone(&rejection);
+        let rejection_for_reader = std::sync::Arc::clone(&rejection);
+
         // Spawn the writer task (exclusively owns the write half)
         let writer_handle = tokio::spawn(async move {
-            run_client_writer_task(writer, writer_rx, pending_for_writer, streams_for_writer)
-                .await;
+            run_client_writer_task(
+                writer,
+                writer_rx,
+                pending_for_writer,
+                streams_for_writer,
+                rejection_for_writer,
+            )
+            .await;
         });
 
         // Spawn the reader task (exclusively owns the read half)
@@ -340,6 +414,7 @@ impl IpcClient {
                 streams_for_reader,
                 push_tx,
                 max_frame_size,
+                rejection_for_reader,
             )
             .await;
         });
@@ -355,6 +430,7 @@ impl IpcClient {
             reader_handle,
             writer_handle: std::sync::Mutex::new(Some(writer_handle)),
             shutdown: AtomicBool::new(false),
+            rejection,
         })
     }
 
@@ -373,7 +449,7 @@ impl IpcClient {
                 format: self.format,
             })
             .await
-            .map_err(|_| IpcError::ConnectionClosed)
+            .map_err(|_| self.connection_error())
     }
 
     /// Send a request and wait for a correlated response.
@@ -407,12 +483,12 @@ impl IpcClient {
                 reply_tx,
             })
             .await
-            .map_err(|_| IpcError::ConnectionClosed)?;
+            .map_err(|_| self.connection_error())?;
 
         let (format, bytes) = tokio::time::timeout(timeout_duration, reply_rx)
             .await
             .map_err(|_| IpcError::Timeout)?
-            .map_err(|_| IpcError::ConnectionClosed)??;
+            .map_err(|_| self.connection_error())??;
 
         format.deserialize(&bytes)
     }
@@ -500,7 +576,7 @@ impl IpcClient {
             .is_err()
         {
             self.active_streams.remove(&correlation_id);
-            return Err(IpcError::ConnectionClosed);
+            return Err(self.connection_error());
         }
 
         // The forwarder applies the inter-frame timeout and completes the
@@ -538,12 +614,12 @@ impl IpcClient {
                 reply_tx,
             })
             .await
-            .map_err(|_| IpcError::ConnectionClosed)?;
+            .map_err(|_| self.connection_error())?;
 
         let (format, bytes) = tokio::time::timeout(self.default_timeout, reply_rx)
             .await
             .map_err(|_| IpcError::Timeout)?
-            .map_err(|_| IpcError::ConnectionClosed)??;
+            .map_err(|_| self.connection_error())??;
 
         format.deserialize(&bytes)
     }
@@ -573,12 +649,12 @@ impl IpcClient {
                 reply_tx,
             })
             .await
-            .map_err(|_| IpcError::ConnectionClosed)?;
+            .map_err(|_| self.connection_error())?;
 
         let (format, bytes) = tokio::time::timeout(self.default_timeout, reply_rx)
             .await
             .map_err(|_| IpcError::Timeout)?
-            .map_err(|_| IpcError::ConnectionClosed)??;
+            .map_err(|_| self.connection_error())??;
 
         format.deserialize(&bytes)
     }
@@ -599,12 +675,12 @@ impl IpcClient {
                 reply_tx,
             })
             .await
-            .map_err(|_| IpcError::ConnectionClosed)?;
+            .map_err(|_| self.connection_error())?;
 
         let (format, bytes) = tokio::time::timeout(self.default_timeout, reply_rx)
             .await
             .map_err(|_| IpcError::Timeout)?
-            .map_err(|_| IpcError::ConnectionClosed)??;
+            .map_err(|_| self.connection_error())??;
 
         format.deserialize(&bytes)
     }
@@ -786,6 +862,7 @@ async fn run_client_writer_task(
     mut receiver: mpsc::Receiver<ClientWriteCommand>,
     pending_requests: std::sync::Arc<PendingRequests>,
     active_streams: std::sync::Arc<ActiveStreams>,
+    rejection: std::sync::Arc<ConnectionRejection>,
 ) {
     trace!("IPC client writer task started");
 
@@ -864,9 +941,10 @@ async fn run_client_writer_task(
         }
     }
 
-    // On exit, clear all pending requests. Dropping the oneshot senders
-    // causes `RecvError` on the receiver side, which callers map to `ConnectionClosed`.
-    pending_requests.clear();
+    // On exit, fail all pending requests. Sending the reason explicitly (rather
+    // than dropping the senders and relying on `RecvError`) preserves a server
+    // refusal, which a bare `RecvError` would flatten into `ConnectionClosed`.
+    fail_pending_requests(&pending_requests, &connection_error(&rejection));
 
     // Terminate all active streams. Dropping the frame senders closes the
     // per-stream channels so consumers observe end-of-stream instead of hanging.
@@ -894,6 +972,7 @@ async fn run_client_reader_task(
     active_streams: std::sync::Arc<ActiveStreams>,
     push_tx: mpsc::Sender<IpcPushNotification>,
     max_frame_size: usize,
+    rejection: std::sync::Arc<ConnectionRejection>,
 ) {
     trace!("IPC client reader task started");
 
@@ -901,8 +980,14 @@ async fn run_client_reader_task(
         match read_frame(&mut reader, max_frame_size).await {
             Ok((msg_type, format, payload)) => match msg_type {
                 MSG_TYPE_RESPONSE | MSG_TYPE_ERROR => {
-                    handle_response_frame(&pending_requests, &active_streams, format, payload)
-                        .await;
+                    handle_response_frame(
+                        &pending_requests,
+                        &active_streams,
+                        format,
+                        payload,
+                        &rejection,
+                    )
+                    .await;
                 }
                 MSG_TYPE_STREAM => {
                     handle_stream_frame(&active_streams, format, &payload).await;
@@ -928,13 +1013,9 @@ async fn run_client_reader_task(
         }
     }
 
-    // Fail any remaining pending requests
-    for entry in pending_requests.iter() {
-        let correlation_id = entry.key().clone();
-        if let Some((_, tx)) = pending_requests.remove(&correlation_id) {
-            let _ = tx.send(Err(IpcError::ConnectionClosed));
-        }
-    }
+    // Fail any remaining pending requests, reporting the server's refusal reason
+    // when it gave one rather than a bare "connection closed".
+    fail_pending_requests(&pending_requests, &connection_error(&rejection));
 
     // Terminate any streams still in flight so consumers don't hang.
     active_streams.clear();
@@ -956,6 +1037,7 @@ async fn handle_response_frame(
     active_streams: &ActiveStreams,
     format: Format,
     payload: Vec<u8>,
+    rejection: &ConnectionRejection,
 ) {
     // Peek at the correlation_id without full deserialization
     let correlation_id = match format.deserialize::<CorrelationPeek>(&payload) {
@@ -965,6 +1047,14 @@ async fn handle_response_frame(
             return;
         }
     };
+
+    // A connection-level rejection belongs to no request, so it would otherwise
+    // fall through to the drain below and be lost. Record it instead: the socket
+    // is about to close, and this is the only statement of why.
+    if correlation_id == CONNECTION_REJECTED_CORRELATION_ID {
+        record_connection_rejection(format, &payload, rejection);
+        return;
+    }
 
     // Look up and remove the pending request
     if let Some((_, reply_tx)) = pending_requests.remove(&correlation_id) {
@@ -989,6 +1079,29 @@ async fn handle_response_frame(
 
     // Fire-and-forget response or unknown correlation — drain silently
     trace!(correlation_id, "Draining unclaimed response");
+}
+
+/// Decode a connection-level rejection and latch it as this connection's failure
+/// reason.
+///
+/// Failing to decode is not fatal: the connection is closing either way, and the
+/// caller falls back to [`IpcError::ConnectionClosed`].
+fn record_connection_rejection(
+    format: Format,
+    payload: &[u8],
+    rejection: &ConnectionRejection,
+) {
+    let Ok(response) = format.deserialize::<IpcResponse>(payload) else {
+        warn!("Failed to decode connection rejection from server");
+        return;
+    };
+
+    let Some(error) = response.as_connection_rejection() else {
+        return;
+    };
+
+    warn!(error = %error, "Server refused the IPC connection");
+    let _ = rejection.set(error);
 }
 
 /// Build the final [`IpcStreamFrame`] that terminates a stream whose request

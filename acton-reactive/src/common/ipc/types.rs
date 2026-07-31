@@ -24,6 +24,7 @@ use std::fmt;
 /// These errors can occur during message serialization, deserialization,
 /// routing, or transport operations.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum IpcError {
     /// Message type not registered in the type registry.
     ///
@@ -75,6 +76,20 @@ pub enum IpcError {
     /// The server is gracefully shutting down and not accepting new requests.
     ShuttingDown,
 
+    /// The server refused the connection because it is at its connection limit.
+    ///
+    /// The server accepted the socket, then declined to service it because
+    /// `max_connections` concurrent connections were already established. The
+    /// server writes this error before closing, so the client observes the
+    /// cause rather than a bare broken pipe.
+    ///
+    /// Raise [`IpcLimitsConfig::max_connections`](super::IpcLimitsConfig::max_connections)
+    /// to admit more concurrent connections.
+    ConnectionLimitReached {
+        /// The server's configured maximum concurrent connections.
+        limit: usize,
+    },
+
     /// Unsupported protocol version.
     ///
     /// The client sent a message with a protocol version that this server
@@ -88,6 +103,21 @@ pub enum IpcError {
         max_supported: u8,
     },
 }
+
+/// Machine-readable [`IpcResponse::error_code`] for a connection the server
+/// refused because it was at its concurrent-connection limit.
+///
+/// Exposed so non-Rust clients can recognise the rejection on the wire.
+pub const CONNECTION_LIMIT_REACHED_CODE: &str = "CONNECTION_LIMIT_REACHED";
+
+/// Reserved [`IpcResponse::correlation_id`] for server-initiated, connection-level
+/// rejections.
+///
+/// A connection-level rejection is written before the client has sent anything, so
+/// there is no client correlation id to echo. This sentinel marks the response as
+/// belonging to the connection itself rather than to any request. It cannot collide
+/// with a real correlation id, which is always a generated `TypeID` (`req_01h9…`).
+pub const CONNECTION_REJECTED_CORRELATION_ID: &str = "__acton_connection_rejected__";
 
 impl fmt::Display for IpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -104,6 +134,12 @@ impl fmt::Display for IpcError {
                 write!(f, "Rate limit exceeded, retry after {retry_after_ms}ms")
             }
             Self::ShuttingDown => write!(f, "Server is shutting down"),
+            Self::ConnectionLimitReached { limit } => {
+                write!(
+                    f,
+                    "Server refused the connection: connection limit reached ({limit} concurrent connections)"
+                )
+            }
             Self::UnsupportedProtocolVersion {
                 received,
                 min_supported,
@@ -912,6 +948,9 @@ impl IpcResponse {
             IpcError::Timeout => ("TIMEOUT", err.to_string()),
             IpcError::RateLimited { .. } => ("RATE_LIMITED", err.to_string()),
             IpcError::ShuttingDown => ("SHUTTING_DOWN", err.to_string()),
+            IpcError::ConnectionLimitReached { .. } => {
+                (CONNECTION_LIMIT_REACHED_CODE, err.to_string())
+            }
             IpcError::UnsupportedProtocolVersion { .. } => {
                 ("UNSUPPORTED_PROTOCOL_VERSION", err.to_string())
             }
@@ -924,6 +963,60 @@ impl IpcResponse {
             error_code: Some(error_code.to_string()),
             payload: None,
         }
+    }
+
+    /// Creates the connection-level rejection sent when the server is at its
+    /// concurrent-connection limit.
+    ///
+    /// The response is written before the client has sent anything, so it carries
+    /// [`CONNECTION_REJECTED_CORRELATION_ID`] instead of echoing a request id. The
+    /// limit travels as structured payload (`{"limit": N}`) rather than only inside
+    /// the human-readable message, so a client can recover it without parsing prose.
+    #[must_use]
+    pub fn connection_rejected(limit: usize) -> Self {
+        let err = IpcError::ConnectionLimitReached { limit };
+        Self {
+            correlation_id: CONNECTION_REJECTED_CORRELATION_ID.to_string(),
+            success: false,
+            error: Some(err.to_string()),
+            error_code: Some(CONNECTION_LIMIT_REACHED_CODE.to_string()),
+            payload: Some(serde_json::json!({ "limit": limit })),
+        }
+    }
+
+    /// Recovers the typed error from a server-initiated connection-level rejection.
+    ///
+    /// Returns `None` when this response is a normal request response. Any response
+    /// carrying [`CONNECTION_REJECTED_CORRELATION_ID`] yields `Some`, so a rejection
+    /// reason introduced by a newer server still reaches the caller as a
+    /// [`IpcError::ProtocolError`] rather than being silently dropped.
+    ///
+    /// A [`IpcError::ConnectionLimitReached`] whose `limit` is 0 means the server
+    /// did not report its limit.
+    #[must_use]
+    pub fn as_connection_rejection(&self) -> Option<IpcError> {
+        if self.correlation_id != CONNECTION_REJECTED_CORRELATION_ID {
+            return None;
+        }
+
+        if self.error_code.as_deref() == Some(CONNECTION_LIMIT_REACHED_CODE) {
+            return Some(IpcError::ConnectionLimitReached {
+                limit: self.rejection_limit().unwrap_or_default(),
+            });
+        }
+
+        Some(IpcError::ProtocolError(self.error.clone().unwrap_or_else(
+            || "Server refused the connection".to_string(),
+        )))
+    }
+
+    /// Reads the `limit` field out of a rejection payload.
+    fn rejection_limit(&self) -> Option<usize> {
+        self.payload
+            .as_ref()
+            .and_then(|payload| payload.get("limit"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|limit| usize::try_from(limit).ok())
     }
 
     /// Creates an error response with a custom message.

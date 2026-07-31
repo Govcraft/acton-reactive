@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use acton_ern::prelude::*;
 use dashmap::DashMap;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -34,9 +35,9 @@ use tracing::{debug, error, info, trace, warn};
 use super::config::IpcConfig;
 use super::protocol::{
     is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame,
-    write_discovery_response_with_format, write_heartbeat, write_push, write_response_with_format,
-    write_stream_frame_with_format, write_subscription_response_with_format, Format,
-    MSG_TYPE_REQUEST,
+    write_discovery_response_with_format, write_heartbeat, write_push, write_response,
+    write_response_with_format, write_stream_frame_with_format,
+    write_subscription_response_with_format, Format, MSG_TYPE_REQUEST,
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
@@ -128,6 +129,12 @@ pub struct IpcListenerStats {
     pub subscriptions_processed: AtomicUsize,
     /// Total push notifications sent to IPC clients.
     pub push_notifications_sent: AtomicUsize,
+    /// Configured ceiling on concurrent connections.
+    ///
+    /// Recorded alongside the live count so an embedder can preflight against the
+    /// limit instead of discovering it by being refused. Zero when the stats were
+    /// built without a listener (via [`IpcListenerStats::new`]).
+    pub max_connections: AtomicUsize,
     /// Notifier for when all in-flight requests have drained.
     /// This is signaled when `in_flight_requests` reaches zero after being non-zero.
     drain_complete: Notify,
@@ -147,6 +154,7 @@ impl Default for IpcListenerStats {
             in_flight_requests: AtomicUsize::new(0),
             subscriptions_processed: AtomicUsize::new(0),
             push_notifications_sent: AtomicUsize::new(0),
+            max_connections: AtomicUsize::new(0),
             drain_complete: Notify::new(),
         }
     }
@@ -199,6 +207,33 @@ impl IpcListenerStats {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create statistics that record the listener's configured connection ceiling.
+    #[must_use]
+    pub fn with_max_connections(max_connections: usize) -> Self {
+        Self {
+            max_connections: AtomicUsize::new(max_connections),
+            ..Self::default()
+        }
+    }
+
+    /// Get the configured maximum concurrent connections.
+    ///
+    /// Pair with [`IpcListenerStats::connections_active`] to see headroom, or use
+    /// [`IpcListenerStats::connections_available`] directly.
+    #[must_use]
+    pub fn max_connections(&self) -> usize {
+        self.max_connections.load(Ordering::Relaxed)
+    }
+
+    /// Get the number of further connections that can be admitted.
+    ///
+    /// Saturates at zero. This is a sample of two independently-read counters, so
+    /// treat it as a preflight hint rather than a reservation.
+    #[must_use]
+    pub fn connections_available(&self) -> usize {
+        self.max_connections().saturating_sub(self.connections_active())
     }
 
     /// Get the number of connections accepted.
@@ -495,7 +530,9 @@ pub async fn run(
     cancel_token: CancellationToken,
 ) -> Result<IpcListenerHandle, IpcError> {
     let socket_path = config.socket_path();
-    let stats = Arc::new(IpcListenerStats::new());
+    let stats = Arc::new(IpcListenerStats::with_max_connections(
+        config.limits.max_connections,
+    ));
 
     // Create the socket directory if it doesn't exist
     if let Some(parent) = socket_path.parent() {
@@ -549,10 +586,15 @@ pub async fn run(
         })?;
     }
 
-    info!("IPC listener started on: {}", socket_path.display());
+    let max_connections = config.limits.max_connections;
+    info!(
+        max_connections,
+        "IPC listener started on: {}",
+        socket_path.display()
+    );
 
     // Create a semaphore to limit concurrent connections
-    let connection_semaphore = Arc::new(Semaphore::new(config.limits.max_connections));
+    let connection_semaphore = Arc::new(Semaphore::new(max_connections));
 
     // Create shutdown state for graceful drain coordination
     let shutdown_state = Arc::new(ShutdownState::new());
@@ -616,8 +658,16 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
                     Ok((stream, _addr)) => {
                         // Try to acquire a connection permit
                         let Ok(permit) = ctx.connection_semaphore.clone().try_acquire_owned() else {
-                            warn!("Maximum concurrent connections reached, rejecting connection");
+                            let limit = ctx.config.limits.max_connections;
+                            warn!(
+                                max_connections = limit,
+                                "Maximum concurrent connections reached, rejecting connection"
+                            );
                             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            // Tell the client why before closing. Without this the
+                            // client's connect() has already succeeded and it learns
+                            // of the refusal only as a broken pipe on first write.
+                            reject_at_connection_limit(stream, limit).await;
                             continue;
                         };
 
@@ -644,6 +694,44 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
                 }
             }
         }
+    }
+}
+
+/// How long the accept loop will spend telling a client it has been refused.
+///
+/// The refusal is a courtesy, not a guarantee. A client that is not reading must
+/// not be able to stall admission of the connections that *can* be served.
+const REJECTION_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Write a connection-limit rejection to a stream that will not be serviced.
+///
+/// The socket was already accepted, so the client's `connect()` has succeeded and it
+/// believes it holds a working connection. Closing without a word leaves it to
+/// discover the refusal as `Broken pipe` on first write, which says nothing about a
+/// connection limit. Writing a typed error first is what lets the client report the
+/// real cause.
+///
+/// Always JSON: the refusal precedes anything the client has sent, so its preferred
+/// format is unknown. This is safe because the frame header carries the format byte
+/// and clients decode using the header, not their own preference.
+async fn reject_at_connection_limit(mut stream: UnixStream, limit: usize) {
+    let response = IpcResponse::connection_rejected(limit);
+
+    match tokio::time::timeout(
+        REJECTION_WRITE_TIMEOUT,
+        write_response(&mut stream, &response),
+    )
+    .await
+    {
+        Ok(Ok(())) => {
+            // Flush before the drop closes the socket, so the rejection is not
+            // discarded along with the connection.
+            if let Err(e) = stream.flush().await {
+                debug!(error = %e, "Failed to flush connection-limit rejection");
+            }
+        }
+        Ok(Err(e)) => debug!(error = %e, "Failed to write connection-limit rejection"),
+        Err(_) => debug!("Timed out writing connection-limit rejection"),
     }
 }
 
@@ -1708,6 +1796,94 @@ mod tests {
 
         stats.decrement_in_flight();
         assert_eq!(stats.in_flight_requests(), 0);
+    }
+
+    /// The effective ceiling must be discoverable before it is hit, not after.
+    ///
+    /// Issue #14: an embedder had no signal that a 100-connection limit was in
+    /// force until connections started failing.
+    #[tokio::test]
+    async fn the_listener_logs_its_connection_limit_at_startup() {
+        use std::io::Write as _;
+
+        #[derive(Clone, Default)]
+        struct LogCapture {
+            buffer: Arc<std::sync::Mutex<Vec<u8>>>,
+        }
+
+        impl std::io::Write for LogCapture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.buffer
+                    .lock()
+                    .expect("log buffer poisoned")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl tracing_subscriber::fmt::MakeWriter<'_> for LogCapture {
+            type Writer = Self;
+
+            fn make_writer(&self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let capture = LogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .finish();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("ipc.sock");
+        let config = IpcConfig {
+            socket: super::super::config::SocketConfig {
+                path: Some(socket_path),
+                ..Default::default()
+            },
+            limits: super::super::config::IpcLimitsConfig {
+                max_connections: 37,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cancel_token = CancellationToken::new();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let handle = run(
+            config,
+            Arc::new(IpcTypeRegistry::new()),
+            Arc::new(DashMap::new()),
+            cancel_token.clone(),
+        )
+        .await
+        .expect("listener starts");
+        drop(guard);
+
+        cancel_token.cancel();
+        drop(handle);
+
+        let mut capture_for_read = capture.clone();
+        capture_for_read.flush().expect("flush");
+        let logs = {
+            let buffer = capture.buffer.lock().expect("log buffer poisoned");
+            String::from_utf8_lossy(&buffer).into_owned()
+        };
+
+        assert!(
+            logs.contains("IPC listener started on"),
+            "startup line missing, got: {logs}"
+        );
+        assert!(
+            logs.contains("max_connections=37"),
+            "startup line should carry the effective limit, got: {logs}"
+        );
     }
 
     #[test]

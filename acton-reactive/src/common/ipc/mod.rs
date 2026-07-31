@@ -97,6 +97,7 @@ pub use types::{
     ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
     IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
     IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
+    CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID,
 };
 
 // IPC client - channel-based client for connecting to an acton-reactive server
@@ -104,7 +105,7 @@ pub use client::{IpcClient, IpcClientConfig};
 
 // Re-export config types for users who want to customize defaults
 pub use config::{
-    IpcLimitsConfig, IpcTimeoutsConfig, RateLimitConfig, ShutdownConfig, SocketConfig,
+    ConfigSource, IpcLimitsConfig, IpcTimeoutsConfig, RateLimitConfig, ShutdownConfig, SocketConfig,
 };
 
 // Assert public API types are constructable - compile-time check

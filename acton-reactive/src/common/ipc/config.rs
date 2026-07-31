@@ -17,8 +17,58 @@
 //! IPC configuration with XDG-compliant socket path handling.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+/// File name of the IPC configuration file in either searched location.
+const CONFIG_FILE_NAME: &str = "ipc.toml";
+
+/// Which of the two searched locations supplied the loaded configuration.
+///
+/// Reported in the load-time log so the effective file is unambiguous.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml`.
+    PerApp,
+    /// `$XDG_CONFIG_HOME/acton/ipc.toml`, shared by every acton IPC server.
+    Shared,
+}
+
+impl ConfigSource {
+    /// Short, stable label for logs.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PerApp => "per-app",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Choose between the per-application and shared configuration candidates.
+///
+/// The per-application file wins when both exist, so an application can override
+/// machine-wide settings. Pure: it decides from the candidates it is handed and
+/// touches no filesystem.
+fn resolve_config_path(
+    per_app: Option<PathBuf>,
+    shared: Option<PathBuf>,
+) -> Option<(PathBuf, ConfigSource)> {
+    per_app
+        .map(|path| (path, ConfigSource::PerApp))
+        .or_else(|| shared.map(|path| (path, ConfigSource::Shared)))
+}
+
+/// Return `path` only when it names an existing file.
+fn existing_file(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then_some(path)
+}
 
 /// Configuration for IPC (Inter-Process Communication).
 ///
@@ -28,8 +78,16 @@ use tracing::{info, warn};
 /// # XDG Compliance
 ///
 /// Socket files are stored in `$XDG_RUNTIME_DIR/acton/<app_name>/` following
-/// the XDG Base Directory Specification. Configuration files are loaded from
-/// `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml`.
+/// the XDG Base Directory Specification.
+///
+/// Configuration files are searched in two locations, in order, and the first
+/// match wins (see [`IpcConfig::load`]):
+///
+/// 1. `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml` — per-application.
+/// 2. `$XDG_CONFIG_HOME/acton/ipc.toml` — shared by every acton IPC server
+///    on the machine.
+///
+/// The location actually used is logged at load time.
 ///
 /// # Example Configuration File
 ///
@@ -40,7 +98,7 @@ use tracing::{info, warn};
 /// mode = 0o660
 ///
 /// [limits]
-/// max_connections = 100
+/// max_connections = 1024
 /// max_message_size = 1048576  # 1 MiB
 ///
 /// [rate_limit]
@@ -96,6 +154,10 @@ pub struct SocketConfig {
 #[serde(default)]
 pub struct IpcLimitsConfig {
     /// Maximum concurrent connections.
+    ///
+    /// Defaults to 1024. Connections beyond this limit are refused with
+    /// [`IpcError::ConnectionLimitReached`](super::IpcError::ConnectionLimitReached),
+    /// and the effective limit is logged when the listener starts.
     pub max_connections: usize,
 
     /// Maximum message size in bytes.
@@ -185,7 +247,11 @@ impl Default for SocketConfig {
 impl Default for IpcLimitsConfig {
     fn default() -> Self {
         Self {
-            max_connections: 100,
+            // Sized from measured per-connection buffer reservation (~20 KiB:
+            // push channel 100 x 112 B, writer channel 64 x ~128 B), giving a
+            // ~20 MiB ceiling at the limit. The previous default of 100 capped
+            // usable topologies at ~2 MiB worth of connections.
+            max_connections: 1024,
             max_message_size: 1_048_576, // 1 MiB
             push_buffer_size: 100,       // 100 pending push notifications
         }
@@ -224,11 +290,16 @@ impl Default for ShutdownConfig {
 impl IpcConfig {
     /// Load IPC configuration from XDG-compliant locations.
     ///
-    /// Attempts to load configuration from:
-    /// 1. `$XDG_CONFIG_HOME/acton/ipc.toml`
-    /// 2. Falls back to `~/.config/acton/ipc.toml`
+    /// Two locations are searched, in order, and the first file that exists wins:
     ///
-    /// If no configuration file is found, returns the default configuration.
+    /// 1. `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml` — per-application. `<app_name>`
+    ///    is the current binary's file stem. (The `app_name` field inside the file
+    ///    cannot be used here: it is only known once a file has been read.)
+    /// 2. `$XDG_CONFIG_HOME/acton/ipc.toml` — shared by every acton IPC server on the
+    ///    machine.
+    ///
+    /// The location used is logged at `INFO`, so it is clear which file took effect.
+    /// If neither exists, the default configuration is returned.
     #[must_use]
     pub fn load() -> Self {
         let xdg_dirs = match xdg::BaseDirectories::with_prefix("acton") {
@@ -239,38 +310,78 @@ impl IpcConfig {
             }
         };
 
-        xdg_dirs.find_config_file("ipc.toml").map_or_else(
+        let app_name = Self::default_app_name();
+        let per_app = xdg_dirs.find_config_file(PathBuf::from(&app_name).join(CONFIG_FILE_NAME));
+        let shared = xdg_dirs.find_config_file(CONFIG_FILE_NAME);
+
+        resolve_config_path(per_app, shared).map_or_else(
+            || {
+                info!(
+                    app_name = %app_name,
+                    "No IPC configuration file found in either the per-application or shared \
+                     location, using defaults"
+                );
+                Self::default()
+            },
+            |(path, source)| Self::load_from_path(&path, source),
+        )
+    }
+
+    /// Read and parse a configuration file, falling back to defaults on any failure.
+    fn load_from_path(path: &Path, source: ConfigSource) -> Self {
+        info!(
+            source = source.as_str(),
+            "Loading IPC configuration from: {}",
+            path.display()
+        );
+
+        let contents = match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(e) => {
+                warn!(
+                    "Failed to read IPC configuration file {}: {}",
+                    path.display(),
+                    e
+                );
+                return Self::default();
+            }
+        };
+
+        match toml::from_str::<Self>(&contents) {
+            Ok(config) => {
+                info!(source = source.as_str(), "Successfully loaded IPC configuration");
+                config
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse IPC configuration file {}: {}",
+                    path.display(),
+                    e
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Load configuration from an explicit configuration root.
+    ///
+    /// Applies the same two-step search as [`IpcConfig::load`] against `config_root`
+    /// instead of the XDG configuration directory:
+    /// `config_root/<app_name>/ipc.toml`, then `config_root/ipc.toml`.
+    ///
+    /// This is the seam that makes the search order testable without mutating
+    /// process-global environment variables.
+    #[must_use]
+    pub fn load_from_root(config_root: &Path, app_name: &str) -> Self {
+        let per_app = existing_file(config_root.join(app_name).join(CONFIG_FILE_NAME));
+        let shared = existing_file(config_root.join(CONFIG_FILE_NAME));
+
+        resolve_config_path(per_app, shared).map_or_else(
             || {
                 info!("No IPC configuration file found, using defaults");
                 Self::default()
             },
-            |path| {
-                info!("Loading IPC configuration from: {}", path.display());
-                match std::fs::read_to_string(&path) {
-                    Ok(config_str) => match toml::from_str::<Self>(&config_str) {
-                        Ok(config) => {
-                            info!("Successfully loaded IPC configuration");
-                            config
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to parse IPC configuration file {}: {}",
-                                path.display(),
-                                e
-                            );
-                            Self::default()
-                        }
-                    },
-                    Err(e) => {
-                        warn!(
-                            "Failed to read IPC configuration file {}: {}",
-                            path.display(),
-                            e
-                        );
-                        Self::default()
-                    }
-                }
-            },
+            |(path, source)| Self::load_from_path(&path, source),
         )
     }
 
@@ -386,9 +497,44 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = IpcConfig::default();
-        assert_eq!(config.limits.max_connections, 100);
+        assert_eq!(config.limits.max_connections, 1024);
         assert_eq!(config.limits.max_message_size, 1_048_576);
         assert_eq!(config.timeouts.request, 30_000);
+    }
+
+    #[test]
+    fn per_app_candidate_wins_over_shared() {
+        let resolved = resolve_config_path(
+            Some(PathBuf::from("/cfg/my_app/ipc.toml")),
+            Some(PathBuf::from("/cfg/ipc.toml")),
+        );
+
+        assert_eq!(
+            resolved,
+            Some((PathBuf::from("/cfg/my_app/ipc.toml"), ConfigSource::PerApp))
+        );
+    }
+
+    #[test]
+    fn shared_candidate_is_used_when_there_is_no_per_app_file() {
+        let resolved = resolve_config_path(None, Some(PathBuf::from("/cfg/ipc.toml")));
+
+        assert_eq!(
+            resolved,
+            Some((PathBuf::from("/cfg/ipc.toml"), ConfigSource::Shared))
+        );
+    }
+
+    #[test]
+    fn no_candidates_resolve_to_nothing() {
+        assert_eq!(resolve_config_path(None, None), None);
+    }
+
+    #[test]
+    fn config_source_labels_are_stable() {
+        assert_eq!(ConfigSource::PerApp.as_str(), "per-app");
+        assert_eq!(ConfigSource::Shared.as_str(), "shared");
+        assert_eq!(ConfigSource::PerApp.to_string(), "per-app");
     }
 
     #[test]
@@ -410,6 +556,118 @@ mod tests {
         assert_eq!(
             config.socket_path(),
             PathBuf::from("/custom/path/socket.sock")
+        );
+    }
+
+    /// Collects formatted log output so tests can assert on what was reported.
+    #[derive(Clone, Default)]
+    struct LogCapture {
+        buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl LogCapture {
+        fn contents(&self) -> String {
+            let buffer = self.buffer.lock().expect("log buffer poisoned");
+            String::from_utf8_lossy(&buffer).into_owned()
+        }
+    }
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.buffer
+                .lock()
+                .expect("log buffer poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl tracing_subscriber::fmt::MakeWriter<'_> for LogCapture {
+        type Writer = Self;
+
+        fn make_writer(&self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` with log output captured.
+    fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let capture = LogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .finish();
+
+        let value = tracing::subscriber::with_default(subscriber, f);
+        let contents = capture.contents();
+        (value, contents)
+    }
+
+    fn write_limits_config(path: &Path, max_connections: usize) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create config dir");
+        }
+        std::fs::write(
+            path,
+            format!("[limits]\nmax_connections = {max_connections}\n"),
+        )
+        .expect("write config");
+    }
+
+    /// The silent part is the bug: which file took effect must be in the log.
+    #[test]
+    fn loading_a_per_app_config_logs_that_it_was_the_per_app_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_limits_config(&dir.path().join("my_app").join(CONFIG_FILE_NAME), 7);
+
+        let (config, logs) =
+            capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
+
+        assert_eq!(config.limits.max_connections, 7);
+        assert!(
+            logs.contains("per-app"),
+            "log should name the per-app source, got: {logs}"
+        );
+        assert!(
+            logs.contains("my_app"),
+            "log should name the file that was loaded, got: {logs}"
+        );
+    }
+
+    #[test]
+    fn loading_a_shared_config_logs_that_it_was_the_shared_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_limits_config(&dir.path().join(CONFIG_FILE_NAME), 11);
+
+        let (config, logs) =
+            capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
+
+        assert_eq!(config.limits.max_connections, 11);
+        assert!(
+            logs.contains("shared"),
+            "log should name the shared source, got: {logs}"
+        );
+    }
+
+    #[test]
+    fn finding_no_config_file_is_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (config, logs) =
+            capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
+
+        assert_eq!(
+            config.limits.max_connections,
+            IpcLimitsConfig::default().max_connections
+        );
+        assert!(
+            logs.contains("No IPC configuration file found"),
+            "log should say defaults were used, got: {logs}"
         );
     }
 
