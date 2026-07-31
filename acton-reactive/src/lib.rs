@@ -78,13 +78,14 @@ pub(crate) mod traits;
 #[cfg(feature = "ipc")]
 pub mod ipc {
     pub use crate::common::ipc::{
-        socket_exists, socket_is_alive, start_listener, ActorInfo, ConfigSource, IpcClient,
-        IpcClientConfig, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
-        IpcLimitsConfig, IpcListenerHandle, IpcListenerStats, IpcPushNotification, IpcResponse,
-        IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse, IpcTimeoutsConfig,
-        IpcTypeRegistry, IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
-        RateLimitConfig, ShutdownConfig, ShutdownResult, SocketConfig,
-        CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID,
+        socket_exists, socket_is_alive, start_listener, ActorInfo, ConfigSource, ConnectionId,
+        IpcClient, IpcClientConfig, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope,
+        IpcError, IpcLimitsConfig, IpcListenerHandle, IpcListenerStats, IpcPushNotification,
+        IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
+        IpcTimeoutsConfig, IpcTypeRegistry, IpcUnsubscribeRequest, PeerCredentials,
+        ProtocolCapabilities, ProtocolVersionInfo, RateLimitConfig, ShutdownConfig, ShutdownResult,
+        SocketConfig, SubscriptionManager, CONNECTION_LIMIT_REACHED_CODE,
+        CONNECTION_REJECTED_CORRELATION_ID,
     };
 
     /// Wire protocol for IPC message framing.

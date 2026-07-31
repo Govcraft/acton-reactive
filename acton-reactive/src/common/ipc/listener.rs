@@ -41,7 +41,9 @@ use super::protocol::{
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
-use super::subscription_manager::{create_push_channel, PushReceiver, SubscriptionManager};
+use super::subscription_manager::{
+    create_push_channel, PeerCredentials, PushReceiver, SubscriptionManager,
+};
 use super::types::{
     ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
     IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
@@ -656,11 +658,19 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
 
                 match accept_result {
                     Ok((stream, _addr)) => {
+                        // Read before any permit decision, so a refusal can name
+                        // the process it turned away.
+                        let peer = peer_credentials(&stream);
+
                         // Try to acquire a connection permit
                         let Ok(permit) = ctx.connection_semaphore.clone().try_acquire_owned() else {
                             let limit = ctx.config.limits.max_connections;
                             warn!(
                                 max_connections = limit,
+                                peer = peer.as_ref().map_or_else(
+                                    || "unknown".to_string(),
+                                    ToString::to_string
+                                ),
                                 "Maximum concurrent connections reached, rejecting connection"
                             );
                             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -681,7 +691,7 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
                         let ctx_clone = ctx.clone();
 
                         tokio::spawn(async move {
-                            handle_connection(stream, conn_id, ctx_clone).await;
+                            handle_connection(stream, conn_id, peer, ctx_clone).await;
 
                             // Release the permit when done
                             drop(permit);
@@ -693,6 +703,29 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Read the kernel-reported credentials of the process behind a connection.
+///
+/// Uses tokio's safe [`UnixStream::peer_cred`] wrapper rather than a raw
+/// `getsockopt`: this crate is `#![forbid(unsafe_code)]`, so the raw route is
+/// unavailable, and no `libc` dependency is needed to do this properly.
+///
+/// Returns `None` if the platform declines to report credentials. That is not
+/// treated as an error — a peer we cannot name is still a peer we can serve, and
+/// failing the connection over missing diagnostics would be a poor trade.
+fn peer_credentials(stream: &UnixStream) -> Option<PeerCredentials> {
+    match stream.peer_cred() {
+        Ok(cred) => Some(PeerCredentials::from_raw(
+            cred.pid(),
+            cred.uid(),
+            cred.gid(),
+        )),
+        Err(e) => {
+            debug!(error = %e, "Could not read peer credentials for connection");
+            None
         }
     }
 }
@@ -986,7 +1019,15 @@ async fn process_frame(
 }
 
 /// Handle a single client connection.
-async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionContext) {
+///
+/// `peer` carries the connecting process's credentials as reported by the kernel
+/// at accept time, or `None` if the platform did not report them.
+async fn handle_connection(
+    stream: UnixStream,
+    conn_id: usize,
+    peer: Option<PeerCredentials>,
+    ctx: ConnectionContext,
+) {
     let (mut reader, writer) = stream.into_split();
     let push_buffer_size = ctx.config.limits.push_buffer_size;
     let limits = ConnectionLimits {
@@ -999,7 +1040,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
     // Create push notification channel and register connection for subscriptions
     let (push_sender, push_receiver) = create_push_channel(conn_id, push_buffer_size);
     ctx.subscription_manager
-        .register_connection(conn_id, push_sender);
+        .register_connection(conn_id, push_sender, peer);
 
     // Create writer command channel - eliminates the need for Mutex
     let (writer_tx, writer_rx) = mpsc::channel::<WriteCommand>(WRITER_CHANNEL_CAPACITY);
@@ -1009,6 +1050,7 @@ async fn handle_connection(stream: UnixStream, conn_id: usize, ctx: ConnectionCo
         rate_limiting_enabled = rate_limiter.is_enabled(),
         available_tokens = rate_limiter.available_tokens(),
         push_buffer_size,
+        peer = peer.as_ref().map_or_else(|| "unknown".to_string(), ToString::to_string),
         "Connection handler started with subscription support"
     );
 

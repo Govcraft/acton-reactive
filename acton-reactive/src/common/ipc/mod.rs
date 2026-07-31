@@ -87,8 +87,8 @@ pub use registry::IpcTypeRegistry;
 // Subscription manager types - used by external clients for broker forwarding
 #[allow(unused_imports)]
 pub use subscription_manager::{
-    create_push_channel, ConnectionId, PushReceiver, PushSender, SubscriptionManager,
-    SubscriptionStats,
+    create_push_channel, ConnectionId, PeerCredentials, PushReceiver, PushSender,
+    SubscriptionManager, SubscriptionStats,
 };
 
 // IPC types - used by external clients for message serialization

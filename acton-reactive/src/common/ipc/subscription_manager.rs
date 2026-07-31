@@ -36,6 +36,76 @@ pub type ConnectionId = usize;
 /// Channel sender for pushing notifications to a connection.
 pub type PushSender = mpsc::Sender<IpcPushNotification>;
 
+/// Credentials of the process on the other end of a Unix socket connection.
+///
+/// Supplied by the kernel when the connection is accepted, so they cannot be
+/// forged by the peer. Applications can use them to make connection-level
+/// authentication and access-control decisions.
+///
+/// # Choosing between the fields
+///
+/// Prefer [`uid`](Self::uid) and [`gid`](Self::gid) for authorization. A PID
+/// identifies a process only for as long as that process lives: PIDs are
+/// recycled, so a check that reads a PID and then acts on it can be defeated by
+/// the original process exiting and its number being reused. The user and group
+/// ids are fixed for the life of the connection and are the sound basis for a
+/// policy decision. [`pid`](Self::pid) is best treated as a diagnostic — it is
+/// what lets a log line name the process that connected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PeerCredentials {
+    /// Process ID of the peer, when the platform reported one.
+    pid: Option<u32>,
+    /// User ID of the peer.
+    uid: u32,
+    /// Group ID of the peer.
+    gid: u32,
+}
+
+impl PeerCredentials {
+    /// Build credentials from the raw values the platform reports.
+    ///
+    /// `pid` is signed at the OS level; a value that cannot be represented as a
+    /// `u32` (a negative placeholder) is treated as "no PID reported" rather
+    /// than being coerced into a nonsensical number.
+    pub(crate) fn from_raw(pid: Option<i32>, uid: u32, gid: u32) -> Self {
+        Self {
+            pid: pid.and_then(|pid| u32::try_from(pid).ok()),
+            uid,
+            gid,
+        }
+    }
+
+    /// Process ID of the peer, if the platform reported one.
+    ///
+    /// See the type-level note on why this is a diagnostic rather than an
+    /// authorization primitive.
+    #[must_use]
+    pub const fn pid(self) -> Option<u32> {
+        self.pid
+    }
+
+    /// User ID of the peer.
+    #[must_use]
+    pub const fn uid(self) -> u32 {
+        self.uid
+    }
+
+    /// Group ID of the peer.
+    #[must_use]
+    pub const fn gid(self) -> u32 {
+        self.gid
+    }
+}
+
+impl std::fmt::Display for PeerCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.pid {
+            Some(pid) => write!(f, "pid={pid} uid={} gid={}", self.uid, self.gid),
+            None => write!(f, "pid=unknown uid={} gid={}", self.uid, self.gid),
+        }
+    }
+}
+
 /// Statistics for the subscription manager.
 #[derive(Debug, Default)]
 pub struct SubscriptionStats {
@@ -81,6 +151,9 @@ struct ConnectionInfo {
     push_sender: PushSender,
     /// Set of message type names this connection is subscribed to.
     subscribed_types: HashSet<String>,
+    /// Credentials of the process behind this connection, when the platform
+    /// reported them.
+    peer: Option<PeerCredentials>,
 }
 
 /// Manages IPC connection subscriptions for broker forwarding.
@@ -143,15 +216,45 @@ impl SubscriptionManager {
     /// Registers a connection with its push notification channel.
     ///
     /// This should be called when a new IPC connection is established.
-    pub fn register_connection(&self, conn_id: ConnectionId, push_sender: PushSender) {
+    ///
+    /// `peer` carries the kernel-reported credentials of the connecting process,
+    /// or `None` when the platform did not report them. Callers with no interest
+    /// in peer identity pass `None`.
+    pub fn register_connection(
+        &self,
+        conn_id: ConnectionId,
+        push_sender: PushSender,
+        peer: Option<PeerCredentials>,
+    ) {
         trace!(conn_id, "Registering connection for subscriptions");
         self.connections.insert(
             conn_id,
             ConnectionInfo {
                 push_sender,
                 subscribed_types: HashSet::new(),
+                peer,
             },
         );
+    }
+
+    /// Credentials of the process behind a connection.
+    ///
+    /// Returns `None` when the connection is unknown or the platform did not
+    /// report credentials for it.
+    #[must_use]
+    pub fn peer_credentials(&self, conn_id: ConnectionId) -> Option<PeerCredentials> {
+        self.connections.get(&conn_id).and_then(|info| info.peer)
+    }
+
+    /// Process ID of the peer behind a connection.
+    ///
+    /// Convenience over [`peer_credentials`](Self::peer_credentials). Note that a
+    /// PID is a diagnostic rather than an authorization primitive; see
+    /// [`PeerCredentials`] for why `uid`/`gid` are the sound basis for a policy
+    /// decision.
+    #[must_use]
+    pub fn peer_pid(&self, conn_id: ConnectionId) -> Option<u32> {
+        self.peer_credentials(conn_id).and_then(PeerCredentials::pid)
     }
 
     /// Unregisters a connection, removing all its subscriptions.
@@ -392,11 +495,124 @@ mod tests {
         let manager = SubscriptionManager::new();
         let (sender, _receiver) = mpsc::channel(10);
 
-        manager.register_connection(1, sender);
+        manager.register_connection(1, sender, None);
         assert_eq!(manager.connection_count(), 1);
 
         manager.unregister_connection(1);
         assert_eq!(manager.connection_count(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Peer credentials (issue #5)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn a_reported_pid_is_carried_through() {
+        let creds = PeerCredentials::from_raw(Some(4321), 1000, 1000);
+
+        assert_eq!(creds.pid(), Some(4321));
+        assert_eq!(creds.uid(), 1000);
+        assert_eq!(creds.gid(), 1000);
+    }
+
+    /// A negative PID is a placeholder, not a process. Coercing it would invent
+    /// a plausible-looking but wrong process id.
+    #[test]
+    fn a_negative_pid_is_treated_as_unreported() {
+        let creds = PeerCredentials::from_raw(Some(-1), 1000, 1000);
+
+        assert_eq!(creds.pid(), None);
+        assert_eq!(creds.uid(), 1000, "uid survives an unusable pid");
+    }
+
+    #[test]
+    fn an_absent_pid_stays_absent() {
+        assert_eq!(PeerCredentials::from_raw(None, 0, 0).pid(), None);
+    }
+
+    #[test]
+    fn root_credentials_are_representable() {
+        let creds = PeerCredentials::from_raw(Some(1), 0, 0);
+
+        assert_eq!(creds.pid(), Some(1));
+        assert_eq!(creds.uid(), 0);
+        assert_eq!(creds.gid(), 0);
+    }
+
+    #[test]
+    fn credentials_render_for_logs() {
+        assert_eq!(
+            PeerCredentials::from_raw(Some(7), 1000, 20).to_string(),
+            "pid=7 uid=1000 gid=20"
+        );
+        assert_eq!(
+            PeerCredentials::from_raw(None, 1000, 20).to_string(),
+            "pid=unknown uid=1000 gid=20"
+        );
+    }
+
+    #[test]
+    fn a_registered_connection_reports_its_peer() {
+        let manager = SubscriptionManager::new();
+        let (sender, _receiver) = mpsc::channel(10);
+        let creds = PeerCredentials::from_raw(Some(4321), 1000, 1000);
+
+        manager.register_connection(1, sender, Some(creds));
+
+        assert_eq!(manager.peer_credentials(1), Some(creds));
+        assert_eq!(manager.peer_pid(1), Some(4321));
+    }
+
+    #[test]
+    fn a_connection_registered_without_credentials_reports_none() {
+        let manager = SubscriptionManager::new();
+        let (sender, _receiver) = mpsc::channel(10);
+
+        manager.register_connection(1, sender, None);
+
+        assert_eq!(manager.peer_credentials(1), None);
+        assert_eq!(manager.peer_pid(1), None);
+    }
+
+    #[test]
+    fn an_unknown_connection_has_no_peer() {
+        let manager = SubscriptionManager::new();
+
+        assert_eq!(manager.peer_credentials(99), None);
+        assert_eq!(manager.peer_pid(99), None);
+    }
+
+    /// Credentials belong to the connection, so they must outlive subscription
+    /// churn and vanish only when the connection does.
+    #[test]
+    fn credentials_survive_subscription_changes_and_end_with_the_connection() {
+        let manager = SubscriptionManager::new();
+        let (sender, _receiver) = mpsc::channel(10);
+        let creds = PeerCredentials::from_raw(Some(4321), 1000, 1000);
+
+        manager.register_connection(1, sender, Some(creds));
+        manager.subscribe(1, &["TypeA".to_string()]);
+        assert_eq!(manager.peer_credentials(1), Some(creds));
+
+        manager.unsubscribe(1, &["TypeA".to_string()]);
+        assert_eq!(manager.peer_credentials(1), Some(creds));
+
+        manager.unregister_connection(1);
+        assert_eq!(manager.peer_credentials(1), None);
+    }
+
+    /// Each connection keeps its own peer; they must not bleed into each other.
+    #[test]
+    fn each_connection_keeps_its_own_peer() {
+        let manager = SubscriptionManager::new();
+        let (sender1, _r1) = mpsc::channel(10);
+        let (sender2, _r2) = mpsc::channel(10);
+
+        manager.register_connection(1, sender1, Some(PeerCredentials::from_raw(Some(11), 1, 1)));
+        manager.register_connection(2, sender2, Some(PeerCredentials::from_raw(Some(22), 2, 2)));
+
+        assert_eq!(manager.peer_pid(1), Some(11));
+        assert_eq!(manager.peer_pid(2), Some(22));
     }
 
     #[test]
@@ -404,7 +620,7 @@ mod tests {
         let manager = SubscriptionManager::new();
         let (sender, _receiver) = mpsc::channel(10);
 
-        manager.register_connection(1, sender);
+        manager.register_connection(1, sender, None);
 
         // Subscribe to some types
         let subscribed = manager.subscribe(1, &["TypeA".to_string(), "TypeB".to_string()]);
@@ -434,7 +650,7 @@ mod tests {
         let manager = SubscriptionManager::new();
         let (sender, _receiver) = mpsc::channel(10);
 
-        manager.register_connection(1, sender);
+        manager.register_connection(1, sender, None);
         manager.subscribe(1, &["TypeA".to_string(), "TypeB".to_string()]);
         assert_eq!(manager.subscribed_types_count(), 2);
 
@@ -448,8 +664,8 @@ mod tests {
         let (sender1, _receiver1) = mpsc::channel(10);
         let (sender2, _receiver2) = mpsc::channel(10);
 
-        manager.register_connection(1, sender1);
-        manager.register_connection(2, sender2);
+        manager.register_connection(1, sender1, None);
+        manager.register_connection(2, sender2, None);
 
         manager.subscribe(1, &["TypeA".to_string()]);
         manager.subscribe(2, &["TypeA".to_string()]);
@@ -472,7 +688,7 @@ mod tests {
         let manager = Arc::new(SubscriptionManager::new());
         let (sender, mut receiver) = mpsc::channel(10);
 
-        manager.register_connection(1, sender);
+        manager.register_connection(1, sender, None);
         manager.subscribe(1, &["PriceUpdate".to_string()]);
 
         let notification = IpcPushNotification::new(
