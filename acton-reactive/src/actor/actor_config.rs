@@ -261,50 +261,60 @@ impl ActorConfig {
         self.restart_policy
     }
 
-    /// Records a supervision strategy for this actor.
+    /// Sets how this actor responds when one of the children it supervises
+    /// terminates.
     ///
-    /// **This method records intent only and has no runtime effect.** The framework
-    /// never reads the recorded strategy and never restarts child actors
-    /// automatically. When a supervised child terminates, the parent only receives
-    /// a [`ChildTerminated`](crate::message::ChildTerminated) notification; acting
-    /// on it is up to you.
+    /// The strategy consulted for a failure is the **supervisor's**, not the
+    /// child's. That is worth stating outright, because
+    /// [`for_supervised_child`](Self::for_supervised_child) builds a *child's*
+    /// configuration and a reader may reasonably expect a strategy set there to
+    /// govern what happens when that child dies. It does not: what to do about
+    /// a failure is the supervising actor's policy.
     ///
-    /// To apply a strategy, register a `mutate_on::<ChildTerminated>` handler on
-    /// the parent and call [`SupervisionStrategy::decide`] yourself:
+    /// # What is carried out today
     ///
-    /// ```rust,ignore
-    /// use acton_reactive::prelude::*;
+    /// [`SupervisionStrategy::OneForOne`] — the default, and therefore what
+    /// every unconfigured actor gets — is honoured in full: the failed child is
+    /// restarted from its blueprint after a backoff, and the supervisor keeps
+    /// taking messages throughout.
     ///
-    /// let strategy = SupervisionStrategy::OneForOne;
-    /// supervisor.mutate_on::<ChildTerminated>(move |actor, ctx| {
-    ///     let notification = ctx.message().clone();
-    ///     match strategy.decide(&notification, 0) {
-    ///         SupervisionDecision::RestartChild => {
-    ///             // Re-create and re-supervise the failed child here.
-    ///         }
-    ///         _ => { /* NoRestart, RestartAll, RestartFrom, Escalate */ }
-    ///     }
-    ///     Reply::ready()
-    /// });
-    /// ```
+    /// [`OneForAll`] and [`RestForOne`] are recorded and planned correctly but
+    /// **not yet sequenced**: carrying a multi-child plan out needs a
+    /// stop-then-restart sequencer with ordering rules of its own. Setting one
+    /// of them today restarts the child that failed and logs that the rest of
+    /// the plan was not carried out. Tracked as
+    /// <https://github.com/govcraft/acton-reactive/issues/8>.
     ///
-    /// See <https://github.com/govcraft/acton-reactive/issues/7> for the status of
-    /// full supervision integration.
+    /// # Only children with a blueprint
+    ///
+    /// A strategy governs children registered through
+    /// [`supervise_with`](crate::common::ActorHandle::supervise_with) or
+    /// [`supervise_deferred`](crate::actor::ManagedActor::supervise_deferred).
+    /// A child adopted through the legacy `supervise()` path is one the
+    /// supervisor has no recipe for rebuilding, so it is left down exactly as
+    /// it is today and no strategy applies to it.
+    ///
+    /// # If you already hand-rolled this
+    ///
+    /// Earlier releases had no restart engine and this method's documentation
+    /// told you to write a `mutate_on::<ChildTerminated>` handler that restarts
+    /// the child yourself. Those handlers still run — the engine's bookkeeping
+    /// is additive and does not suppress dispatch — so when you move a child to
+    /// `supervise_with` or `supervise_deferred`, **delete the hand-rolled
+    /// restart** or that child will come back twice.
+    ///
+    /// [`OneForAll`]: SupervisionStrategy::OneForAll
+    /// [`RestForOne`]: SupervisionStrategy::RestForOne
     ///
     /// # Arguments
     ///
-    /// * `strategy` - The supervision strategy to record for this actor.
+    /// * `strategy` - The supervision strategy this actor applies to its
+    ///   children.
     ///
     /// # Returns
     ///
     /// Returns `self` for method chaining.
     #[must_use]
-    #[deprecated(
-        note = "records intent only and has no runtime effect; the framework never restarts \
-                actors automatically. Register `mutate_on::<ChildTerminated>` on the parent and \
-                call `SupervisionStrategy::decide()` yourself. \
-                See https://github.com/govcraft/acton-reactive/issues/7"
-    )]
     pub const fn with_supervision_strategy(mut self, strategy: SupervisionStrategy) -> Self {
         self.supervision_strategy = strategy;
         self
@@ -316,35 +326,52 @@ impl ActorConfig {
         self.supervision_strategy
     }
 
-    /// Records a restart limiter configuration for this actor.
+    /// Sets how many times an actor may be restarted, and how long to wait
+    /// between attempts.
     ///
-    /// **This method records intent only and has no runtime effect.** The framework
-    /// never reads the recorded configuration and never restarts child actors
-    /// automatically, so no restart limiting or backoff is applied on your behalf.
+    /// # Which limiter governs a child
     ///
-    /// To limit restarts manually, keep a [`RestartLimiter`](crate::actor::RestartLimiter)
-    /// in the supervising actor's state and consult it from a
-    /// `mutate_on::<ChildTerminated>` handler before restarting a child:
+    /// **A child's own setting wins; a child that sets none inherits its
+    /// supervisor's.** So this method is meaningful on both sides of the
+    /// relationship, and setting it on a child is an override rather than a
+    /// no-op: a child that knows it is expensive to rebuild can raise its own
+    /// `max_restarts` above what its supervisor would have allowed.
     ///
-    /// ```rust,ignore
-    /// use acton_reactive::prelude::*;
+    /// Each child is held to a limiter of its **own**, never one shared across
+    /// siblings, so one child failing repeatedly cannot consume the allowance
+    /// of a sibling that has never failed.
     ///
-    /// supervisor.mutate_on::<ChildTerminated>(|actor, _ctx| {
-    ///     match actor.model.limiter.can_restart() {
-    ///         Ok(()) => {
-    ///             let backoff = actor.model.limiter.record_restart();
-    ///             // Sleep for `backoff`, then re-create and re-supervise the child.
-    ///         }
-    ///         Err(exceeded) => {
-    ///             // Limit hit: stop restarting and escalate or alert instead.
-    ///         }
-    ///     }
-    ///     Reply::ready()
-    /// });
-    /// ```
+    /// # What it controls
     ///
-    /// See <https://github.com/govcraft/acton-reactive/issues/7> for the status of
-    /// full supervision integration.
+    /// A child that terminates in a way its [`RestartPolicy`] warrants a
+    /// restart from waits out an exponentially growing backoff and is then
+    /// rebuilt from its blueprint. A child that exceeds `max_restarts` within
+    /// `window_secs` is not restarted again: its supervisor gives up and
+    /// publishes [`SupervisionState::Escalated`] with the reason, so anything
+    /// waiting on that child stops waiting rather than hanging.
+    ///
+    /// A child that stays up longer than `window_secs` counts as recovered and
+    /// its backoff starts over rather than compounding from its last failure.
+    ///
+    /// # Only children with a blueprint
+    ///
+    /// Applies to children registered through
+    /// [`supervise_with`](crate::common::ActorHandle::supervise_with) or
+    /// [`supervise_deferred`](crate::actor::ManagedActor::supervise_deferred).
+    /// A child adopted through the legacy `supervise()` path is never restarted
+    /// — the supervisor holds no recipe for rebuilding it — so no allowance is
+    /// consulted or consumed for it.
+    ///
+    /// # If you already hand-rolled this
+    ///
+    /// Earlier releases had no restart engine and this method's documentation
+    /// told you to keep a [`RestartLimiter`](crate::actor::RestartLimiter) in
+    /// your supervisor's state and restart children yourself. Those handlers
+    /// still run. When you move a child to `supervise_with` or
+    /// `supervise_deferred`, **delete the hand-rolled restart** or that child
+    /// will come back twice.
+    ///
+    /// [`SupervisionState::Escalated`]: crate::actor::SupervisionState::Escalated
     ///
     /// # Arguments
     ///
@@ -354,23 +381,16 @@ impl ActorConfig {
     ///
     /// Returns `self` for method chaining.
     #[must_use]
-    #[deprecated(
-        note = "records intent only and has no runtime effect; the framework never reads this \
-                configuration. Keep a `RestartLimiter` in the supervising actor's state and \
-                consult it from a `mutate_on::<ChildTerminated>` handler. \
-                See https://github.com/govcraft/acton-reactive/issues/7"
-    )]
     pub const fn with_restart_limiter(mut self, config: RestartLimiterConfig) -> Self {
         self.restart_limiter_config = Some(config);
         self
     }
 
-    /// Returns the optional restart limiter configuration recorded for this actor.
+    /// Returns the restart limiter configuration recorded for this actor.
     ///
-    /// Not yet read by the runtime; retained for the eventual supervision
-    /// integration tracked in <https://github.com/govcraft/acton-reactive/issues/7>.
+    /// `None` means this actor expressed no preference, which a supervisor
+    /// reads as "inherit mine".
     #[inline]
-    #[allow(dead_code)] // Reserved for the supervision integration tracked in issue #7
     pub(crate) const fn restart_limiter_config(&self) -> Option<&RestartLimiterConfig> {
         self.restart_limiter_config.as_ref()
     }

@@ -71,22 +71,12 @@ mod events;
 
 /// Contains the pure decision layer: what to do about a terminated child.
 ///
-/// The decision layer lands before the engine that carries its decisions out,
-/// so that the restart rules can be reviewed and tested on their own. Until the
-/// engine arrives, nothing in the crate calls into it.
+/// Kept separate from the engine that carries its decisions out, so that the
+/// restart rules — which is where the subtle bugs live — are tested by calling
+/// a function and comparing a value, with no runtime and no timing.
 ///
-/// `expect` rather than `allow`: the compiler rejects this attribute once every
-/// item here is in use, which is what forces it to be deleted rather than left
-/// behind. It is scoped to non-test builds because the module's own unit tests
-/// already exercise every item, so under `cfg(test)` there is no dead code to
-/// expect.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "issue #7: the engine that consumes this decision layer lands in a later change"
-    )
-)]
+/// It carried a `dead_code` expectation until the engine landed, which the
+/// compiler then rejected as unfulfilled. That is what an `expect` is for.
 mod plan;
 
 /// Contains a supervisor's record of its children.

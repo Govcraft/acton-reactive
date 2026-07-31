@@ -33,8 +33,8 @@ use crate::common::{
 };
 use crate::message::{
     BrokerRequestEnvelope, CascadeTerminate, ChildTerminated, MessageAddress,
-    RegisterSupervisedChild, RemoveAllSubscriptions, SupervisedChildStarted, SystemSignal,
-    UnregisterSupervisedChild,
+    RegisterSupervisedChild, RemoveAllSubscriptions, RestartDue, SupervisedChildStarted,
+    SystemSignal, UnregisterSupervisedChild,
 };
 use crate::traits::ActorHandleInterface;
 
@@ -760,6 +760,30 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                             self.unregister_supervised_child(release);
                         }
                         continue;
+                    } else if type_id == TypeId::of::<RestartDue>() {
+                        if let Some(due) = envelope.message.as_any().downcast_ref::<RestartDue>() {
+                            self.record_restart_due(due);
+                        }
+                        continue;
+                    }
+
+                    // `ChildTerminated` is intercepted too, and is the one that
+                    // deliberately does **not** `continue`. The arms above are
+                    // crate-internal messages a user cannot handle. This one is
+                    // public, is in the prelude, and has user handlers pinned in
+                    // this crate's own test suite — and until this release the
+                    // deprecated supervision config setters actively instructed
+                    // people to write one. Skipping dispatch here would silently
+                    // break every one of them, so the restart engine does its
+                    // bookkeeping and then lets the message carry on.
+                    //
+                    // Bookkeeping first, so that a user handler which inspects
+                    // its supervisor sees the decision already recorded rather
+                    // than a half-updated registry.
+                    if type_id == TypeId::of::<ChildTerminated>() {
+                        if let Some(notice) = envelope.message.as_any().downcast_ref::<ChildTerminated>() {
+                            self.record_child_terminated(notice);
+                        }
                     }
 
                     // Dispatch to registered handler or handle system signals
@@ -856,6 +880,15 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // the closed inbox right now holding a running child. Nobody is adding
         // to that queue any more, so what is in it is all there will be.
         let late_arrivals = self.take_late_started_children();
+
+        // Ahead of the stops, so that no name outlives the mailbox it points at.
+        // A cascading shutdown never reaches the terminal-state sweep — the
+        // registry is already `shutting_down`, so every termination reads as
+        // expected and no slot reaches `Down` — and without this a supervisor
+        // that stops inside a still-running system leaves its children's names
+        // pointing at dead mailboxes.
+        #[cfg(feature = "ipc")]
+        self.forget_children_ipc_names();
 
         terminate_children(self.shutdown_child_handles(late_arrivals), self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");

@@ -235,6 +235,53 @@ impl ActorRuntime {
         self.0.ipc_actor_registry.insert(name.to_string(), handle);
     }
 
+    /// Points every IPC name registered for `child` at its current incarnation.
+    ///
+    /// [`ipc_expose`](Self::ipc_expose) stores a cloned handle *by value*, and
+    /// a restart keeps the child's [`Ern`] while replacing its mailbox. Nothing
+    /// updated the stored handle, so a restarted actor was unreachable over IPC
+    /// from its first restart onward — silently, because a send into a mailbox
+    /// with no reader reports nothing.
+    ///
+    /// # Matched by identifier, never by staleness
+    ///
+    /// [`ActorHandle`] compares by `Ern` alone, so a stale handle and the
+    /// replacement that supersedes it are **equal**. Any check written as "is
+    /// this handle out of date" is therefore a no-op that reads as though it
+    /// works. Asking instead "does this entry name this child" — `handle.id()
+    /// == child` — is the same comparison used for the one purpose it is valid
+    /// for, and the trap disappears rather than being documented.
+    ///
+    /// That formulation also settles the multi-name case for free: one actor
+    /// may be exposed under several names, so every match is replaced and there
+    /// is no first to stop at.
+    ///
+    /// Collect-then-insert rather than `alter_all`, so no shard guard is held
+    /// across the mutation: the IPC listener reads this map concurrently.
+    ///
+    /// Returns how many names were repointed, which is what the caller logs.
+    #[cfg(feature = "ipc")]
+    pub(crate) fn ipc_rebind(&self, child: &Ern, fresh: &ActorHandle) -> usize {
+        let names: Vec<String> = self
+            .0
+            .ipc_actor_registry
+            .iter()
+            .filter(|entry| entry.value().id() == *child)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for name in &names {
+            self.0
+                .ipc_actor_registry
+                .insert(name.clone(), fresh.clone());
+        }
+
+        if !names.is_empty() {
+            trace!("Repointed IPC name(s) {:?} at the new {}", names, child);
+        }
+        names.len()
+    }
+
     /// Removes every IPC name registered for a child that is not coming back.
     ///
     /// Callers otherwise send into a mailbox nobody reads and are told nothing;

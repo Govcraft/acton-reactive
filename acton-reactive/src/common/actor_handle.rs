@@ -217,6 +217,9 @@ impl ActorHandle {
             // is reported when it terminates but never restarted.
             spawner: None,
             restart_policy,
+            // Moot rather than omitted: without a blueprint the decision layer
+            // forgets this child before the limiter is ever consulted.
+            limiter: None,
             status,
             // Nothing to report back. Every child registered here carries a
             // freshly minted identifier, so registration cannot collide.
@@ -323,6 +326,10 @@ impl ActorHandle {
         configure: impl Fn(&mut ManagedActor<Idle, S>) + Send + Sync + 'static,
     ) -> Result<SupervisedChild, SupervisionError> {
         let blueprint: Arc<ChildBlueprint<S>> = Arc::new(configure);
+        // Read before the configuration is consumed. The supervisor resolves the
+        // fallback on its own task, because it is the only side that knows what
+        // a child which set nothing should inherit.
+        let limiter = config.restart_limiter_config().cloned();
         let spawner: Arc<dyn ChildSpawner> = Arc::new(TypedSpawner::new(config, blueprint));
 
         let child_id = spawner.child_id().clone();
@@ -337,6 +344,7 @@ impl ActorHandle {
             handle: handle.clone(),
             spawner: Some(spawner),
             restart_policy,
+            limiter,
             status,
             outcome: Some(Arc::clone(&outcome)),
         })

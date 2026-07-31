@@ -185,9 +185,30 @@ pub enum SlotState {
     Running,
 
     /// Terminated, with a backoff timer armed for the slot's current generation.
+    ///
+    /// Nothing is running and nothing is being built. The timer holds no handle,
+    /// which is why it is not tracked alongside the start tasks: a shutdown has
+    /// nothing to wait for here, only a record to settle.
     AwaitingBackoff,
 
+    /// The backoff has elapsed and the restart is queued, not yet launched.
+    ///
+    /// The restart-path twin of [`Pending`], and it shares that state's whole
+    /// meaning: recorded, queued, nothing created. It is a separate variant
+    /// because the state it leads to is different — a first start publishes as
+    /// `Starting`, a restart as `Restarting` — and because a caller watching a
+    /// child can tell a first attempt from a replacement.
+    ///
+    /// [`Pending`]: SlotState::Pending
+    AwaitingRestart,
+
     /// A replacement is being created.
+    ///
+    /// The restart-path twin of [`Starting`], with the same obligation on the
+    /// way down: a start task holds the handle and is the one that stops the
+    /// child if it cannot hand it over.
+    ///
+    /// [`Starting`]: SlotState::Starting
     Restarting,
 
     /// The supervisor asked this child to stop.
@@ -230,7 +251,13 @@ impl SlotState {
             Self::Pending | Self::Starting => SupervisionState::Starting,
             Self::Running => SupervisionState::Running,
             Self::AwaitingBackoff => SupervisionState::RestartPending,
-            Self::Restarting | Self::ExpectedStop { .. } => SupervisionState::Restarting,
+            // `AwaitingRestart` joins these for the same reason `Pending` joins
+            // `Starting`: queued and being built are indistinguishable to a
+            // caller, and collapsing them means a slot moving from one to the
+            // other does not wake a watcher to tell it nothing.
+            Self::AwaitingRestart | Self::Restarting | Self::ExpectedStop { .. } => {
+                SupervisionState::Restarting
+            }
             Self::Down => SupervisionState::Down,
             Self::Escalated => SupervisionState::Escalated,
             Self::Retired => SupervisionState::Retired,
@@ -258,6 +285,45 @@ impl SlotState {
     pub const fn accepts_termination(self) -> bool {
         matches!(self, Self::Starting | Self::Running)
     }
+
+    /// Whether a start task is in flight for this child.
+    ///
+    /// Both kinds: a first incarnation and a replacement. The obligation that
+    /// makes them one state is the one that matters on the way down — some
+    /// other task is holding a child that may already exist.
+    #[must_use]
+    pub const fn is_being_started(self) -> bool {
+        matches!(self, Self::Starting | Self::Restarting)
+    }
+
+    /// Whether this child is queued for a start that has not been launched.
+    ///
+    /// Again both kinds, and again nothing exists yet in either.
+    #[must_use]
+    pub const fn is_queued_to_start(self) -> bool {
+        matches!(self, Self::Pending | Self::AwaitingRestart)
+    }
+
+    /// Whether the supervisor still owes this child an incarnation.
+    ///
+    /// The union of queued and in flight: every state in which a caller is
+    /// waiting for a child to come up and none has. What a shutdown must
+    /// answer, so that nobody waits on a start that can no longer land.
+    #[must_use]
+    pub const fn is_unfinished_start(self) -> bool {
+        self.is_queued_to_start() || self.is_being_started()
+    }
+
+    /// Whether a backoff timer is armed for this child.
+    ///
+    /// Kept apart from [`is_unfinished_start`](Self::is_unfinished_start)
+    /// because the two are settled for different reasons. An unfinished start
+    /// has somebody working on it; a backoff has only a timer that holds
+    /// nothing, and on the way down there is nothing to wait for at all.
+    #[must_use]
+    pub const fn is_awaiting_backoff(self) -> bool {
+        matches!(self, Self::AwaitingBackoff)
+    }
 }
 
 impl fmt::Display for SlotState {
@@ -271,6 +337,7 @@ impl fmt::Display for SlotState {
             Self::ExpectedStop { then_restart } => {
                 write!(f, "expected_stop(then_restart={then_restart})")
             }
+            Self::AwaitingRestart => f.write_str("awaiting_restart"),
             Self::Down => f.write_str("down"),
             Self::Escalated => f.write_str("escalated"),
             Self::Retired => f.write_str("retired"),
@@ -353,6 +420,43 @@ pub struct StartTicket {
     pub spawner: Arc<dyn ChildSpawner>,
 }
 
+/// What a supervisor did with a start task's report.
+///
+/// Three outcomes rather than a `bool`, because the caller has to act
+/// differently on each: a refusal leaves it holding a live child it must stop,
+/// and a restart is the moment an actor's IPC names have to be pointed at a new
+/// mailbox. A `bool` would collapse the two cases that do work into one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartRecorded {
+    /// A first incarnation was recorded.
+    First,
+
+    /// A replacement was recorded; the slot advanced a generation.
+    Restart,
+
+    /// Refused, because the slot had moved on. **The caller still owns the
+    /// handle and must stop it.**
+    Refused,
+}
+
+impl StartRecorded {
+    /// Whether the supervisor took the child on.
+    #[must_use]
+    pub const fn is_recorded(self) -> bool {
+        matches!(self, Self::First | Self::Restart)
+    }
+}
+
+impl fmt::Display for StartRecorded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::First => f.write_str("first start"),
+            Self::Restart => f.write_str("restart"),
+            Self::Refused => f.write_str("refused"),
+        }
+    }
+}
+
 /// One supervised child, as recorded by its supervisor.
 #[derive(Debug)]
 pub struct ChildSlot {
@@ -415,17 +519,22 @@ impl ChildSlot {
         matches!(self.state, SlotState::Pending)
     }
 
-    /// Whether a start task is in flight for this child.
+    /// Whether a start task is in flight for this child, of either kind.
     pub const fn is_starting(&self) -> bool {
-        matches!(self.state, SlotState::Starting)
+        self.state.is_being_started()
     }
 
-    /// Whether this child has been recorded but has never run.
+    /// Whether the supervisor still owes this child an incarnation.
     ///
     /// Both halves of "not up yet": queued, and being built. What a shutdown
     /// has to answer for, and what a caller is still waiting on.
     pub const fn is_unfinished_start(&self) -> bool {
-        matches!(self.state, SlotState::Pending | SlotState::Starting)
+        self.state.is_unfinished_start()
+    }
+
+    /// Whether this child is down with a backoff timer armed.
+    pub const fn is_awaiting_backoff(&self) -> bool {
+        self.state.is_awaiting_backoff()
     }
 
     /// Why this child is not running, when the supervisor knows a reason.
@@ -645,29 +754,42 @@ impl SupervisionRegistry {
 
     /// Hands the next queued child to a start task, marking it in flight.
     ///
+    /// Serves both kinds of start. A slot queued for its first incarnation
+    /// (`Pending`) goes to `Starting`; one queued for a replacement
+    /// (`AwaitingRestart`) goes to `Restarting`. The restart path therefore
+    /// reuses this queue, this ticket, and the start task behind them rather
+    /// than learning a second way to create an actor — which is the whole
+    /// reason the deferred-start machinery was built first.
+    ///
     /// Skips entries whose slot has moved on — retired before its turn came —
     /// rather than starting a child nobody supervises any more. Returns what the
     /// start task needs and nothing it does not: the registry itself never
     /// leaves this actor.
     ///
-    /// The slot's outward state does not change. `Pending` and `Starting` both
-    /// publish as [`SupervisionState::Starting`], so a watcher is not woken to
-    /// be told the same thing twice.
+    /// The slot's outward state does not change either way. `Pending` and
+    /// `Starting` both publish as [`SupervisionState::Starting`], and
+    /// `AwaitingRestart` and `Restarting` both publish as
+    /// [`SupervisionState::Restarting`], so a watcher is not woken to be told
+    /// the same thing twice.
     pub fn begin_start(&mut self) -> Option<StartTicket> {
         while let Some(index) = self.pending_starts.pop_front() {
             let Some(slot) = self.slots.get_mut(index.get()) else {
                 continue;
             };
-            if !slot.is_pending() {
-                continue;
-            }
+            let launched = match slot.state() {
+                SlotState::Pending => SlotState::Starting,
+                SlotState::AwaitingRestart => SlotState::Restarting,
+                _ => continue,
+            };
             let Some(spawner) = slot.spawner() else {
                 // Unreachable through `register_pending`, which requires a
-                // spawner. Skipping beats unwrapping in a supervisor.
+                // spawner, and through `queue_restart`, which only ever reaches
+                // a slot that had one. Skipping beats unwrapping in a
+                // supervisor.
                 continue;
             };
 
-            slot.set_state(SlotState::Starting);
+            slot.set_state(launched);
             slot.publish();
 
             return Some(StartTicket {
@@ -682,38 +804,138 @@ impl SupervisionRegistry {
 
     /// Records that a child being started is now running behind `handle`.
     ///
-    /// Refuses a slot that is no longer starting, or whose identifier does not
+    /// Refuses a slot that is not being started, or whose identifier does not
     /// match: it was retired while its start was in flight, and resurrecting it
     /// would supervise a child nobody asked for. **The caller owns the handle
-    /// when this returns `false`, and must stop it.**
-    pub fn complete_start(&mut self, index: ChildIndex, ern: &Ern, handle: ActorHandle) -> bool {
+    /// when this returns [`StartRecorded::Refused`], and must stop it.**
+    ///
+    /// # Where the generation increments
+    ///
+    /// Here, on a replacement that is actually running — not when the restart
+    /// was decided and not when it was launched. Two reasons, pointing the same
+    /// way. [`RestartGeneration`] exists so a timer armed under one incarnation
+    /// can be discarded once the slot has moved past it, and that comparison
+    /// only works if the generation holds still for as long as the timer is
+    /// outstanding; bumping at decision time would make every timer stale on
+    /// arrival. And [`wait_generation`] resolves on `Running && generation >=
+    /// n`, so bumping on success is what makes `wait_generation(FIRST.next())`
+    /// mean "incarnation 1 is up".
+    ///
+    /// `last_restart` is stamped at the same moment and for the same reason:
+    /// it feeds "has this child been up long enough to count as recovered",
+    /// which is a question about when it came *back*, not when it fell over.
+    ///
+    /// [`wait_generation`]: super::SupervisedChild::wait_generation
+    pub fn complete_start(
+        &mut self,
+        index: ChildIndex,
+        ern: &Ern,
+        handle: ActorHandle,
+        now: Instant,
+    ) -> StartRecorded {
         let Some(slot) = self.slots.get_mut(index.get()) else {
-            return false;
+            return StartRecorded::Refused;
         };
-        if !slot.is_starting() || &slot.ern != ern {
-            return false;
+        let restarted = match slot.state() {
+            SlotState::Starting => false,
+            SlotState::Restarting => true,
+            _ => return StartRecorded::Refused,
+        };
+        if &slot.ern != ern {
+            return StartRecorded::Refused;
         }
 
         slot.set_handle(Some(handle));
+        if restarted {
+            slot.advance_generation();
+            slot.mark_restarted_at(now);
+        }
         slot.set_state(SlotState::Running);
         slot.publish();
+
+        if restarted {
+            StartRecorded::Restart
+        } else {
+            StartRecorded::First
+        }
+    }
+
+    /// Moves a slot whose backoff has elapsed onto the pending-start queue.
+    ///
+    /// Refuses anything that is not exactly the slot the timer was armed for:
+    /// a different position, a different child, a different incarnation, or a
+    /// slot that is no longer waiting on a backoff at all. A timer is the one
+    /// input to this registry that can arrive arbitrarily late, so it is
+    /// checked against all four rather than trusted.
+    ///
+    /// Returns whether the restart was queued.
+    pub fn queue_restart(
+        &mut self,
+        index: ChildIndex,
+        ern: &Ern,
+        generation: RestartGeneration,
+    ) -> bool {
+        let Some(slot) = self.slots.get_mut(index.get()) else {
+            return false;
+        };
+        if !slot.is_awaiting_backoff() || &slot.ern != ern || slot.generation() != generation {
+            return false;
+        }
+
+        slot.set_state(SlotState::AwaitingRestart);
+        slot.publish();
+        self.pending_starts.push_back(index);
         true
     }
 
-    /// Retires a child that never came up, recording why.
+    /// Records that a terminated child is not coming back, and why.
+    ///
+    /// `state` is the caller's decision: [`SlotState::Down`] when nothing
+    /// warranted a restart, [`SlotState::Escalated`] when the child used up its
+    /// allowance. Both are terminal, so a caller waiting on this child's status
+    /// stops waiting rather than watching a state that will never change again.
+    ///
+    /// The slot keeps its name and its position. Unlike a failed *first* start,
+    /// this child existed and its supervisor still has a record of it; freeing
+    /// the identifier here would let a fresh child take a name that is still
+    /// spoken for.
+    pub fn mark_terminal(
+        &mut self,
+        index: ChildIndex,
+        state: SlotState,
+        failure: Option<SupervisionError>,
+    ) {
+        debug_assert!(
+            matches!(state, SlotState::Down | SlotState::Escalated),
+            "mark_terminal records why a child stopped, not that it was released"
+        );
+        let Some(slot) = self.slots.get_mut(index.get()) else {
+            return;
+        };
+        slot.set_handle(None);
+        if let Some(failure) = failure {
+            slot.set_failure(failure);
+        }
+        slot.set_state(state);
+        slot.publish();
+    }
+
+    /// Retires a child the supervisor will not be bringing up, recording why.
     ///
     /// The slot keeps its position but leaves active supervision, which frees
     /// the identifier for another attempt. The reason rides out on the status
     /// channel so that a caller waiting for the child to come up learns what
     /// happened rather than waiting for a start that will never be retried.
     ///
-    /// Only for a slot that has never run. A child that started and then failed
-    /// is the restart engine's business, not this.
+    /// Only for a slot the supervisor still owes an incarnation: queued, being
+    /// built, or waiting out a backoff. A child that is up, or one already
+    /// settled, is not this method's business, and the filter below is what
+    /// says so.
     pub fn fail_start(&mut self, index: ChildIndex, failure: &SupervisionError) {
         let Some(ern) = self
             .slots
             .get(index.get())
-            .filter(|slot| slot.is_unfinished_start())
+            .filter(|slot| slot.is_unfinished_start() || slot.is_awaiting_backoff())
             .map(|slot| slot.ern.clone())
         else {
             return;
@@ -731,12 +953,19 @@ impl SupervisionRegistry {
 
     /// Abandons every start that has not finished, and says why.
     ///
-    /// Called on the way down, and it covers both halves of "not up yet".
+    /// Called on the way down, and it covers every state in which somebody is
+    /// waiting for a child that is not up.
+    ///
     /// A queued child was never handed to anyone, so it simply will not happen.
     /// A child whose start is in flight is a different matter: it may already
     /// exist, and the task holding its handle is the one that will stop it when
     /// it finds nobody to hand it to. What is settled here is the *record* and
     /// the caller's answer, not the child.
+    ///
+    /// A child waiting out a backoff is settled too, and it has to be. Its
+    /// timer will fire into a message loop that has ended, so the restart it
+    /// was arranged for can never happen; without this the caller waits on a
+    /// [`SupervisionState::RestartPending`] that nothing will ever move.
     ///
     /// Returns how many were abandoned, which is what a shutdown logs.
     pub fn cancel_unfinished_starts(&mut self, supervisor: &Ern) -> usize {
@@ -745,7 +974,7 @@ impl SupervisionRegistry {
         let unfinished: Vec<ChildIndex> = self
             .slots
             .iter()
-            .filter(|slot| slot.is_unfinished_start())
+            .filter(|slot| slot.is_unfinished_start() || slot.is_awaiting_backoff())
             .map(ChildSlot::index)
             .collect();
 
@@ -887,6 +1116,23 @@ impl SupervisionRegistry {
             .iter()
             .filter(|slot| slot.state != SlotState::Retired)
             .filter_map(|slot| slot.handle.clone())
+            .collect()
+    }
+
+    /// The identifiers of every child this supervisor could recreate.
+    ///
+    /// "Engine-managed" in one predicate: holding a blueprint is exactly what
+    /// distinguishes a child registered through `supervise_with` or
+    /// `supervise_deferred` from one adopted through the legacy `supervise()`
+    /// path, and it is the same test the restart decision itself turns on.
+    ///
+    /// Retired children are excluded: a released child may still be running,
+    /// and is not the supervisor's to speak for any more.
+    pub fn engine_managed_children(&self) -> Vec<Ern> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.state != SlotState::Retired && slot.is_restartable())
+            .map(|slot| slot.ern.clone())
             .collect()
     }
 
@@ -1342,7 +1588,7 @@ mod tests {
             "and looks no different from outside"
         );
 
-        assert!(registry.complete_start(index, &id, handle(&id)));
+        assert!(registry.complete_start(index, &id, handle(&id), Instant::now()).is_recorded());
 
         let child = registry.slot(index).expect("the slot exists");
         assert_eq!(child.state(), SlotState::Running);
@@ -1362,9 +1608,11 @@ mod tests {
         registry.begin_start().expect("the start is in flight");
         registry.retire(&id).expect("the child is supervised");
 
-        assert!(!registry.complete_start(index, &id, handle(&id)));
+        assert!(!registry.complete_start(index, &id, handle(&id), Instant::now()).is_recorded());
         assert!(
-            !registry.complete_start(ChildIndex::new(9), &id, handle(&id)),
+            !registry
+                .complete_start(ChildIndex::new(9), &id, handle(&id), Instant::now())
+                .is_recorded(),
             "an index that never existed is refused too"
         );
 
@@ -1374,8 +1622,10 @@ mod tests {
         let (slot, _receiver) = pending_slot(&other);
         let index = registry.register_pending(slot).expect("registration succeeds");
         registry.begin_start().expect("the start is in flight");
-        assert!(!registry.complete_start(index, &id, handle(&id)));
-        assert!(registry.complete_start(index, &other, handle(&other)));
+        assert!(!registry.complete_start(index, &id, handle(&id), Instant::now()).is_recorded());
+        assert!(registry
+            .complete_start(index, &other, handle(&other), Instant::now())
+            .is_recorded());
     }
 
     #[test]
@@ -1446,7 +1696,9 @@ mod tests {
         let mut registry = SupervisionRegistry::default();
         let index = registry.register_pending(slot).expect("registration succeeds");
         let ticket = registry.begin_start().expect("one start was queued");
-        assert!(registry.complete_start(ticket.index, &id, handle(&id)));
+        assert!(registry
+            .complete_start(ticket.index, &id, handle(&id), Instant::now())
+            .is_recorded());
 
         assert_eq!(registry.cancel_unfinished_starts(&supervisor), 0);
 
@@ -1456,6 +1708,84 @@ mod tests {
         );
         assert!(receiver.borrow().failure().is_none());
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn cancelling_settles_a_child_that_was_waiting_out_a_backoff() {
+        // A slot in `AwaitingBackoff` has no start in flight and nothing queued,
+        // so it is invisible to a shutdown that only looks for unfinished
+        // starts — and its restart can never happen, because the timer will
+        // fire into a message loop that has ended.
+        //
+        // This is asserted here rather than through a running supervisor
+        // because it is not observable from there: when a supervisor's task
+        // ends it drops the status sender, and a caller blocked on
+        // `wait_running` gets `SupervisorStopped` from the channel closing
+        // whether or not the slot was ever settled. The registry is the only
+        // level at which settling and not settling look different.
+        let supervisor = ern("pool");
+        let id = ern("child");
+        let (slot, receiver) = pending_slot(&id);
+        let mut registry = SupervisionRegistry::default();
+        let index = registry.register_pending(slot).expect("registration succeeds");
+        let ticket = registry.begin_start().expect("one start was queued");
+        assert!(registry
+            .complete_start(ticket.index, &id, handle(&id), Instant::now())
+            .is_recorded());
+
+        // The child ran, then died, and a backoff was armed for it.
+        let child = registry.slot_mut(index).expect("the slot exists");
+        child.set_handle(None);
+        child.set_state(SlotState::AwaitingBackoff);
+        child.publish();
+        assert_eq!(
+            receiver.borrow().state(),
+            SupervisionState::RestartPending,
+            "the caller is watching a restart that is about to become impossible"
+        );
+
+        assert_eq!(
+            registry.cancel_unfinished_starts(&supervisor),
+            1,
+            "a child waiting out a backoff is abandoned like any other start"
+        );
+
+        let published = receiver.borrow().clone();
+        assert!(
+            published.state().is_terminal(),
+            "the caller must stop waiting, not sit on RestartPending"
+        );
+        assert_eq!(
+            published.failure(),
+            Some(&SupervisionError::SupervisorStopped {
+                supervisor: supervisor.clone()
+            }),
+            "and learn why the restart is not coming"
+        );
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn only_children_with_a_blueprint_count_as_engine_managed() {
+        // The one predicate that separates a child the engine looks after from
+        // one adopted through the legacy path, used for restart decisions and
+        // for IPC name removal alike. Two predicates that agree today would
+        // drift; this is the same question asked once.
+        let mut registry = SupervisionRegistry::default();
+        let engine = ern("engine");
+        let (slot, _rx) = new_slot(&engine, true);
+        registry.register(slot).expect("registration succeeds");
+
+        let legacy = ern("legacy");
+        let (slot, _rx) = new_slot(&legacy, false);
+        registry.register(slot).expect("registration succeeds");
+
+        assert_eq!(registry.engine_managed_children(), vec![engine.clone()]);
+
+        // A released child is excluded even though it has a blueprint: it may
+        // still be running, and is not this supervisor's to speak for.
+        registry.retire(&engine).expect("the child is supervised");
+        assert!(registry.engine_managed_children().is_empty());
     }
 
     #[test]

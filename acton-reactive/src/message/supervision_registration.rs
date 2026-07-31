@@ -36,7 +36,8 @@ use acton_ern::Ern;
 use tokio::sync::{watch, SetOnce};
 
 use crate::actor::{
-    ChildIndex, ChildSpawner, RestartPolicy, SupervisionError, SupervisionStatus,
+    ChildIndex, ChildSpawner, RestartGeneration, RestartLimiterConfig, RestartPolicy,
+    SupervisionError, SupervisionStatus,
 };
 use crate::common::ActorHandle;
 
@@ -68,6 +69,18 @@ pub struct RegisterSupervisedChild {
 
     /// Whether this child warrants a restart, and when.
     pub restart_policy: RestartPolicy,
+
+    /// The child's own restart allowance, when it set one.
+    ///
+    /// Carried rather than resolved by the caller, because resolving it needs
+    /// both sides: a child's own setting wins, and a child that set nothing
+    /// inherits its supervisor's. Only the supervisor knows the second half, so
+    /// the message carries the first and the supervisor decides on its own task.
+    ///
+    /// `None` on the legacy `supervise()` path, where it makes no difference:
+    /// such a child has no blueprint, and the decision layer forgets a
+    /// blueprint-less child before the limiter is ever consulted.
+    pub limiter: Option<RestartLimiterConfig>,
 
     /// The publishing end of the child's status channel.
     ///
@@ -111,6 +124,42 @@ pub struct SupervisedChildStarted {
 
     /// The started child, or why it could not be started.
     pub outcome: Result<ActorHandle, SupervisionError>,
+}
+
+/// Tells a supervisor that a child's backoff has elapsed.
+///
+/// Sent by the timer task a restart decision arms, back into the supervisor's
+/// own inbox. The restart itself is not performed on the timer's task: it puts
+/// the slot onto the same pending-start queue a deferred first start uses, and
+/// the supervisor's next turn hands it to the same start task. The restart path
+/// adds a delay and a decision; it adds no second way to create an actor.
+///
+/// # Why a timer rather than a sleep
+///
+/// The supervisor cannot wait out the backoff itself without stopping — it
+/// would take no messages, including its own `Terminate`, for as long as the
+/// backoff lasts, and the default ceiling on that is 30 seconds.
+///
+/// # Every field is a check, not a convenience
+///
+/// This is the one input a supervisor's registry can receive arbitrarily late:
+/// a timer armed before a child was retired, restarted by another path, or
+/// replaced entirely still fires. So the slot is identified three ways over —
+/// position, name and incarnation — and a message that does not match all three
+/// is discarded rather than acted on.
+#[derive(Debug, Clone)]
+pub struct RestartDue {
+    /// The child whose replacement is now due.
+    pub child: Ern,
+
+    /// The slot the restart was decided for.
+    pub index: ChildIndex,
+
+    /// The incarnation the timer was armed under.
+    ///
+    /// A slot that has since advanced has already been dealt with by some other
+    /// path, and this timer is a message from a world that no longer exists.
+    pub generation: RestartGeneration,
 }
 
 /// The cell a caller waits on when releasing a child.

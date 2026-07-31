@@ -42,16 +42,23 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use super::registry::{PendingSlot, StartTicket};
+use super::plan::{evaluate, RestartPlan, SupervisionOutcome};
+use super::registry::{PendingSlot, SlotState, StartRecorded, StartTicket};
 use super::{
-    ChildBlueprint, ChildSpawner, NewSlot, SupervisedChild, SupervisionError, SupervisionRegistry,
-    SupervisionState, SupervisionStatus, TypedSpawner,
+    BackoffDelay, ChildBlueprint, ChildIndex, ChildSpawner, NewSlot, SupervisedChild,
+    SupervisionError, SupervisionRegistry, SupervisionState, SupervisionStatus, TypedSpawner,
 };
 use crate::actor::managed_actor::started::Started;
-use crate::actor::{ActorConfig, Idle, ManagedActor, RestartGeneration, RestartLimiter};
+use crate::actor::{
+    ActorConfig, Idle, ManagedActor, RestartGeneration, RestartLimitExceeded, RestartLimiter,
+    RestartLimiterConfig,
+};
 use crate::common::config::CONFIG;
 use crate::common::ActorHandle;
-use crate::message::{RegisterSupervisedChild, SupervisedChildStarted, UnregisterSupervisedChild};
+use crate::message::{
+    ChildTerminated, RegisterSupervisedChild, RestartDue, SupervisedChildStarted,
+    UnregisterSupervisedChild,
+};
 use crate::traits::ActorHandleInterface;
 
 /// Builds the status channel a supervised child publishes through.
@@ -180,6 +187,31 @@ async fn stop_stray_child(handle: ActorHandle) {
 }
 
 impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
+    /// Builds the restart allowance one child will be held to.
+    ///
+    /// **A child's own setting wins; a child that set none inherits its
+    /// supervisor's.** A child may therefore raise its own `max_restarts` and
+    /// effectively decline its supervisor's policy, which is a deliberate
+    /// choice rather than an oversight: the two settings are set by the same
+    /// author, and a child that knows it is expensive to rebuild is the thing
+    /// that knows it.
+    ///
+    /// One helper, reached from every registration path. The three paths could
+    /// each resolve this inline and would agree today; they would stop agreeing
+    /// the first time somebody edited one of them, and the symptom would be a
+    /// child getting a different restart budget depending on which API
+    /// supervised it — a difference nobody would predict from the signatures.
+    ///
+    /// The limiter is built **per slot**, not shared. A supervisor holding one
+    /// limiter for all its children would let one noisy child eat a sibling's
+    /// allowance and escalate a child that had never failed.
+    fn resolve_limiter(&self, child: Option<&RestartLimiterConfig>) -> RestartLimiter {
+        child.or(self.restart_limiter_config.as_ref()).map_or_else(
+            RestartLimiter::default,
+            |config| RestartLimiter::new(config.clone()),
+        )
+    }
+
     /// Records a child this actor should look after.
     ///
     /// Synchronous: no I/O, no await, nothing to block on.
@@ -189,9 +221,7 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
             handle: message.handle.clone(),
             spawner: message.spawner.clone(),
             restart_policy: message.restart_policy,
-            // The supervisor's configured limiter settings are not yet read
-            // from `ActorConfig`; that plumbing arrives with the restart engine.
-            limiter: RestartLimiter::default(),
+            limiter: self.resolve_limiter(message.limiter.as_ref()),
             status: message.status.clone(),
         };
 
@@ -383,6 +413,7 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
 
         let child_id = config.id();
         let restart_policy = spawner.restart_policy();
+        let limiter = self.resolve_limiter(config.restart_limiter_config());
         let handle = spawner.spawn(self.runtime.clone(), self.handle.clone()).await?;
         let (status, receiver) = status_channel(&child_id, Some(handle.clone()));
 
@@ -391,7 +422,7 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
             handle: handle.clone(),
             spawner: Some(spawner),
             restart_policy,
-            limiter: RestartLimiter::default(),
+            limiter,
             status,
         };
 
@@ -476,6 +507,10 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         C: Default + Send + Debug + 'static,
     {
         let blueprint: Arc<ChildBlueprint<C>> = Arc::new(configure);
+        // Resolved before the configuration is consumed, and through the shared
+        // helper rather than inline, so this path cannot drift from the other
+        // two.
+        let limiter = self.resolve_limiter(config.restart_limiter_config());
         let spawner: Arc<dyn ChildSpawner> = Arc::new(TypedSpawner::new(config, blueprint));
 
         let child_id = spawner.child_id().clone();
@@ -487,9 +522,7 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
             ern: child_id.clone(),
             spawner,
             restart_policy,
-            // The supervisor's configured limiter settings are not yet read from
-            // `ActorConfig`; that plumbing arrives with the restart engine.
-            limiter: RestartLimiter::default(),
+            limiter,
             status,
         })?;
 
@@ -538,6 +571,265 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         }
     }
 
+    /// Decides what to do about a child that has just terminated, and starts
+    /// doing it.
+    ///
+    /// Synchronous, and reached from the message loop **without** suppressing
+    /// handler dispatch — see the interception site for why that asymmetry with
+    /// the other supervision messages is deliberate.
+    ///
+    /// The decision itself lives in [`evaluate`], which is pure. This does the
+    /// three things a decision cannot: record the new slot state, publish it,
+    /// and arm a timer.
+    pub(crate) fn record_child_terminated(&mut self, notice: &ChildTerminated) {
+        let Some(index) = self.supervision.index_of(&notice.child_id) else {
+            // Not a child of this actor's, or one already retired. Either way
+            // there is no record to update; a user handler may still care.
+            return;
+        };
+        let Some(snapshot) = self.supervision.snapshot(index) else {
+            return;
+        };
+
+        let views = self.supervision.views();
+        // The supervisor consults *its own* strategy, not the child's.
+        // `for_supervised_child` builds a child's configuration and a reader may
+        // reasonably expect the strategy set there to govern; it does not. What
+        // to do about a failure is the supervising actor's policy.
+        let strategy = self.supervision_strategy;
+        let now = std::time::Instant::now();
+
+        let Some(slot) = self.supervision.slot_mut(index) else {
+            return;
+        };
+        let outcome = evaluate(notice, &snapshot, strategy, slot.limiter_mut(), &views, now);
+
+        match outcome {
+            // The supervisor asked for this stop, or has already acted on a
+            // notice for this incarnation. Nothing to record.
+            SupervisionOutcome::Ignore => {
+                trace!(
+                    "Actor {} expected child {} to stop; no restart considered",
+                    self.id(),
+                    notice.child_id
+                );
+            }
+            SupervisionOutcome::Forget => self.record_child_down(index, &notice.child_id),
+            SupervisionOutcome::Escalate(exceeded) => {
+                self.record_child_escalated(index, &notice.child_id, exceeded);
+            }
+            SupervisionOutcome::Restart { plan, backoff } => {
+                self.schedule_restart(index, &notice.child_id, &plan, backoff);
+            }
+        }
+    }
+
+    /// Records a child that terminated and is not coming back.
+    fn record_child_down(&mut self, index: ChildIndex, child: &acton_ern::Ern) {
+        trace!("Actor {} is leaving child {} down", self.id(), child);
+        self.supervision.mark_terminal(index, SlotState::Down, None);
+        // Conditional at the call site rather than a helper with an empty body,
+        // so that without the `ipc` feature nothing is compiled at all.
+        #[cfg(feature = "ipc")]
+        self.forget_ipc_names(index, child);
+    }
+
+    /// Records a child that used up its restart allowance.
+    ///
+    /// Terminal, and that is the point of handling it at all: `evaluate` has
+    /// been able to return this since the decision layer landed, and a slot left
+    /// in `AwaitingBackoff` for a restart that will never be arranged leaves
+    /// every caller waiting on a status that cannot change.
+    ///
+    /// What the supervisor does *about* an escalation beyond giving up —
+    /// [`Escalation::NotifyParent`] versus [`Escalation::StopSupervisor`] — is
+    /// not decided here, because there is nothing to decide from:
+    /// [`Escalation`] has no `ActorConfig` setter, so no actor can express a
+    /// preference. Adding the knob and honouring it belong together.
+    ///
+    /// [`Escalation`]: super::Escalation
+    /// [`Escalation::NotifyParent`]: super::Escalation::NotifyParent
+    /// [`Escalation::StopSupervisor`]: super::Escalation::StopSupervisor
+    fn record_child_escalated(
+        &mut self,
+        index: ChildIndex,
+        child: &acton_ern::Ern,
+        exceeded: RestartLimitExceeded,
+    ) {
+        warn!(
+            "Actor {} is giving up on child {}: {}",
+            self.id(),
+            child,
+            exceeded
+        );
+        self.supervision.mark_terminal(
+            index,
+            SlotState::Escalated,
+            Some(SupervisionError::RestartLimit {
+                child: child.clone(),
+                limit: exceeded,
+            }),
+        );
+        #[cfg(feature = "ipc")]
+        self.forget_ipc_names(index, child);
+    }
+
+    /// Drops the IPC names of a child that has reached a terminal state.
+    ///
+    /// Callers otherwise keep sending into a mailbox nobody reads and are told
+    /// nothing; with the names gone they are told there is no such actor.
+    ///
+    /// # Engine-managed children only, and the reason is not arbitrary
+    ///
+    /// Restricted to children the supervisor holds a blueprint for — the ones
+    /// registered through `supervise_with` and `supervise_deferred`. A child
+    /// adopted through the legacy `supervise()` path keeps its names exactly as
+    /// it does today.
+    ///
+    /// That asymmetry is the double-restart firewall wearing different clothes.
+    /// The blueprint is what makes a child engine-managed, and blueprints only
+    /// reach the registry through two APIs that have never appeared in a
+    /// released version, so no existing program can observe any of this. It
+    /// looks like an arbitrary special case without that reasoning, which is why
+    /// the reasoning is here rather than in a commit message somebody would have
+    /// to go looking for.
+    ///
+    /// `Retired` is deliberately not a caller of this. Three slot states are
+    /// terminal and only two of them mean the child is gone:
+    /// [`ActorHandle::release`] retires a slot and hands back a child that is
+    /// still running and still legitimately reachable.
+    ///
+    /// [`ActorHandle::release`]: crate::common::ActorHandle::release
+    #[cfg(feature = "ipc")]
+    fn forget_ipc_names(&self, index: ChildIndex, child: &acton_ern::Ern) {
+        let engine_managed = self
+            .supervision
+            .slot(index)
+            .is_some_and(super::registry::ChildSlot::is_restartable);
+        if !engine_managed {
+            return;
+        }
+
+        let forgotten = self.runtime.ipc_forget(child);
+        if forgotten > 0 {
+            trace!(
+                "Actor {} dropped {} IPC name(s) for departed child {}",
+                self.id(),
+                forgotten,
+                child
+            );
+        }
+    }
+
+    /// Marks a child for a restart and arms the timer that will ask for it.
+    ///
+    /// # The timer is not tracked with the start tasks
+    ///
+    /// A start task holds the only handle to a live child, which is why a
+    /// shutdown waits for those. A backoff timer holds nothing at all. Putting
+    /// it on that tracker would make every shutdown wait out a backoff whose
+    /// default ceiling is 30 seconds against a shutdown deadline of 10, so every
+    /// shutdown with a pending restart would block for the full 10 and then log
+    /// an overrun it did not earn. The rule that falls out is that the tracker
+    /// is for tasks holding a live child, not for every task the actor spawned.
+    ///
+    /// It watches the cancellation token instead, so a supervisor going down
+    /// does not leave a task sleeping out a backoff for a restart that has
+    /// already been abandoned. Even without that the message would simply fail
+    /// delivery into a closed inbox; the token just makes it prompt.
+    fn schedule_restart(
+        &mut self,
+        index: ChildIndex,
+        child: &acton_ern::Ern,
+        plan: &RestartPlan,
+        backoff: BackoffDelay,
+    ) {
+        // `OneForOne` is the default and the only strategy step 7 carries out.
+        // A group plan is charged and planned correctly by the decision layer
+        // but sequenced by nothing yet, so say so rather than silently restart
+        // one child and call it done.
+        if plan.restart.len() > 1 || !plan.stop.is_empty() {
+            warn!(
+                "Actor {} planned a group restart for child {}, which is not carried out yet; \
+                 restarting only the child that failed. See \
+                 https://github.com/govcraft/acton-reactive/issues/8",
+                self.id(),
+                child
+            );
+        }
+
+        let Some(slot) = self.supervision.slot_mut(index) else {
+            return;
+        };
+        slot.set_handle(None);
+        slot.set_state(SlotState::AwaitingBackoff);
+        slot.publish();
+        let due = RestartDue {
+            child: child.clone(),
+            index,
+            generation: slot.generation(),
+        };
+
+        trace!(
+            "Actor {} will restart child {} after {}",
+            self.id(),
+            child,
+            backoff
+        );
+
+        let supervisor = self.handle.clone();
+        let token = self.cancellation_token.clone();
+        let delay = backoff.duration();
+        tokio::spawn(async move {
+            if let Some(token) = token {
+                tokio::select! {
+                    () = token.cancelled() => return,
+                    () = tokio::time::sleep(delay) => {}
+                }
+            } else {
+                tokio::time::sleep(delay).await;
+            }
+
+            let envelope = supervisor.create_envelope(Some(supervisor.reply_address()));
+            if let Err(undeliverable) = envelope.try_send(due).await {
+                trace!(
+                    "Supervisor {} was gone before a restart came due ({})",
+                    supervisor.id(),
+                    undeliverable
+                );
+            }
+        });
+    }
+
+    /// Queues the restart a timer has just reported due.
+    ///
+    /// Synchronous, and it starts nothing: the slot goes onto the same
+    /// pending-start queue a deferred first start uses, and the top of the next
+    /// loop turn hands it to the same start task.
+    pub(crate) fn record_restart_due(&mut self, due: &RestartDue) {
+        if self
+            .supervision
+            .queue_restart(due.index, &due.child, due.generation)
+        {
+            trace!(
+                "Actor {} queued a restart of child {} ({})",
+                self.id(),
+                due.child,
+                due.generation
+            );
+        } else {
+            // Not a failure. The slot was retired, restarted by another path,
+            // or the supervisor began shutting down and settled it. A timer is
+            // the one input that can arrive from a world that no longer exists.
+            trace!(
+                "Actor {} discarded a stale restart timer for child {} ({})",
+                self.id(),
+                due.child,
+                due.generation
+            );
+        }
+    }
+
     /// Records the outcome a start task reported.
     ///
     /// Synchronous, like every other piece of registration bookkeeping. The one
@@ -547,15 +839,23 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     pub(crate) fn record_started_child(&mut self, message: &SupervisedChildStarted) {
         match &message.outcome {
             Ok(handle) => {
-                if self
-                    .supervision
-                    .complete_start(message.index, &message.child, handle.clone())
-                {
+                let recorded = self.supervision.complete_start(
+                    message.index,
+                    &message.child,
+                    handle.clone(),
+                    std::time::Instant::now(),
+                );
+                if recorded.is_recorded() {
                     trace!(
-                        "Actor {} now supervises child {}",
+                        "Actor {} now supervises child {} ({})",
                         self.id(),
-                        message.child
+                        message.child,
+                        recorded
                     );
+                    if recorded == StartRecorded::Restart {
+                        #[cfg(feature = "ipc")]
+                        self.rebind_ipc_names(&message.child, handle);
+                    }
                 } else {
                     // The slot moved on while the start was in flight, so
                     // nothing is supervising this child. It must not be left
@@ -576,6 +876,54 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
                     error
                 );
                 self.supervision.fail_start(message.index, error);
+            }
+        }
+    }
+
+    /// Points a restarted child's IPC names at its new mailbox.
+    ///
+    /// A restart keeps the child's [`Ern`](acton_ern::Ern) and replaces its
+    /// mailbox, and `ipc_expose` stored a handle *by value*. Nothing updated it,
+    /// so before this an actor exposed under a chosen name became unreachable
+    /// over IPC from its first restart onward and reported nothing: sends landed
+    /// in a queue with no reader.
+    #[cfg(feature = "ipc")]
+    fn rebind_ipc_names(&self, child: &acton_ern::Ern, fresh: &ActorHandle) {
+        let repointed = self.runtime.ipc_rebind(child, fresh);
+        if repointed > 0 {
+            trace!(
+                "Actor {} repointed {} IPC name(s) at the new incarnation of {}",
+                self.id(),
+                repointed,
+                child
+            );
+        }
+    }
+
+    /// Drops the IPC names of every engine-managed child, on the way down.
+    ///
+    /// The terminal-state sweep cannot reach these. A cascading shutdown sets
+    /// the registry `shutting_down`, which makes every termination an expected
+    /// stop, which makes `evaluate` return `Ignore`, so no slot ever reaches
+    /// `Down` and nothing calls [`forget_ipc_names`](Self::forget_ipc_names).
+    /// A supervisor that stops while its runtime keeps going would therefore
+    /// leave its children stopped and their names still pointing at dead
+    /// mailboxes — the exact condition the terminal sweep exists to remove,
+    /// reached by a different road.
+    ///
+    /// Engine-managed children only, on the same reasoning as the terminal
+    /// sweep.
+    #[cfg(feature = "ipc")]
+    pub(crate) fn forget_children_ipc_names(&self) {
+        for child in self.supervision.engine_managed_children() {
+            let forgotten = self.runtime.ipc_forget(&child);
+            if forgotten > 0 {
+                trace!(
+                    "Actor {} dropped {} IPC name(s) for child {} while stopping",
+                    self.id(),
+                    forgotten,
+                    child
+                );
             }
         }
     }
@@ -1077,6 +1425,138 @@ mod tests {
         assert!(
             actor.supervision.live_handles().is_empty(),
             "and it was not recorded on the way past"
+        );
+    }
+
+    // ---- whose limiter governs a child ----------------------------------
+    //
+    // Precedence is asserted here rather than through a running supervisor
+    // because this is the level at which it is visible. From outside, two
+    // different allowances only diverge once a child has actually failed the
+    // smaller number of times, which turns a question about configuration into
+    // a test about restart timing.
+
+    /// A supervisor whose own configuration sets a restart allowance.
+    fn supervisor_allowing(
+        runtime: &mut ActorRuntime,
+        max_restarts: u32,
+    ) -> ManagedActor<Started, Supervisor> {
+        let config = ActorConfig::new(
+            Ern::with_root("pool").expect("'pool' is a valid Ern root"),
+            None,
+            None,
+        )
+        .expect("a root Ern with no parent is a valid configuration")
+        .with_restart_limiter(RestartLimiterConfig {
+            max_restarts,
+            ..RestartLimiterConfig::default()
+        });
+
+        runtime.new_actor_with_config::<Supervisor>(config).into()
+    }
+
+    /// Records a child under `actor`, optionally with an allowance of its own.
+    fn queue_child(
+        actor: &mut ManagedActor<Started, Supervisor>,
+        name: &str,
+        max_restarts: Option<u32>,
+    ) -> Ern {
+        let mut config = ActorConfig::for_supervised_child(name, actor.handle.clone(), None)
+            .expect("a name plus a live parent is a valid child configuration");
+        if let Some(max_restarts) = max_restarts {
+            config = config.with_restart_limiter(RestartLimiterConfig {
+                max_restarts,
+                ..RestartLimiterConfig::default()
+            });
+        }
+        let child_id = config.id();
+        actor
+            .supervise_deferred(config, |_child: &mut ManagedActor<Idle, Supervisor>| {})
+            .expect("the first registration of a name succeeds");
+        child_id
+    }
+
+    /// The allowance the supervisor actually recorded for a child.
+    fn recorded_allowance(actor: &mut ManagedActor<Started, Supervisor>, child: &Ern) -> u32 {
+        actor
+            .supervision
+            .slot_of_mut(child)
+            .expect("the child is supervised")
+            .limiter_mut()
+            .stats()
+            .max_restarts
+    }
+
+    #[tokio::test]
+    async fn a_child_that_sets_no_allowance_inherits_its_supervisors() {
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor_allowing(&mut runtime, 9);
+
+        let child = queue_child(&mut actor, "worker", None);
+
+        assert_eq!(recorded_allowance(&mut actor, &child), 9);
+    }
+
+    #[tokio::test]
+    async fn a_childs_own_allowance_overrides_its_supervisors() {
+        // The consequence of the ruling, stated plainly: a child can decline
+        // its supervisor's policy. Accepted deliberately — a child that knows
+        // it is expensive to rebuild is the thing that knows it — so this is a
+        // test of intended behaviour, not a loophole somebody left open.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor_allowing(&mut runtime, 2);
+
+        let child = queue_child(&mut actor, "worker", Some(11));
+
+        assert_eq!(
+            recorded_allowance(&mut actor, &child),
+            11,
+            "the child's own setting wins where both are set"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_child_burning_through_its_allowance_leaves_its_siblings_untouched() {
+        // What per-slot limiter *instances* buy, and the one most likely to
+        // regress silently if a limiter is ever hoisted onto the supervisor:
+        // one noisy child must not spend a sibling's budget, or a child that
+        // has never failed gets escalated for somebody else's crashes.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor_allowing(&mut runtime, 3);
+
+        let noisy = queue_child(&mut actor, "noisy", None);
+        let quiet = queue_child(&mut actor, "quiet", None);
+
+        // Spend the noisy child's entire allowance.
+        {
+            let limiter = actor
+                .supervision
+                .slot_of_mut(&noisy)
+                .expect("the child is supervised")
+                .limiter_mut();
+            for _ in 0..3 {
+                limiter.can_restart().expect("within the allowance");
+                let _ = limiter.record_restart();
+            }
+            assert!(
+                limiter.can_restart().is_err(),
+                "the noisy child is out of restarts"
+            );
+        }
+
+        let quiet_limiter = actor
+            .supervision
+            .slot_of_mut(&quiet)
+            .expect("the child is supervised")
+            .limiter_mut();
+        assert_eq!(
+            quiet_limiter.restarts_in_window(),
+            0,
+            "a sibling's crashes are not charged to this child"
+        );
+        assert!(
+            quiet_limiter.can_restart().is_ok(),
+            "and it keeps its full allowance"
         );
     }
 

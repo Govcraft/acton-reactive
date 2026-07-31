@@ -25,7 +25,7 @@ use tokio_util::task::TaskTracker;
 pub use idle::Idle;
 
 use crate::actor::supervision::SupervisionRegistry;
-use crate::actor::{RestartPolicy, SupervisionStrategy};
+use crate::actor::{RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
 use crate::common::{
     ActorHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap,
 };
@@ -120,10 +120,17 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// The restart policy for this actor when supervised.
     /// Determines whether and when the actor should be restarted after termination.
     pub(crate) restart_policy: RestartPolicy,
-    /// The supervision strategy recorded for this actor.
-    /// Currently recorded from `ActorConfig` but never read by the runtime;
-    /// see <https://github.com/govcraft/acton-reactive/issues/7>.
+    /// How this actor responds when a child it supervises terminates.
+    ///
+    /// The supervisor's own, not the child's: what to do about a failure is the
+    /// supervising actor's policy.
     pub(crate) supervision_strategy: SupervisionStrategy,
+    /// The restart allowance this actor hands to children that set none.
+    ///
+    /// Carried on the actor rather than read off `ActorConfig` at each decision
+    /// because the configuration is consumed at construction. `None` means the
+    /// framework defaults apply.
+    pub(crate) restart_limiter_config: Option<RestartLimiterConfig>,
     /// Whether to automatically expose this actor for IPC access when started.
     /// When `true`, the actor will be registered with the IPC system using its ERN root name.
     pub(crate) expose_for_ipc: bool,

@@ -838,6 +838,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
             managed_actor.restart_policy = config.restart_policy();
             // Apply supervision strategy
             managed_actor.supervision_strategy = config.supervision_strategy();
+            managed_actor.restart_limiter_config = config.restart_limiter_config().cloned();
         }
 
         debug_assert!(
@@ -988,6 +989,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedActor<Idle, State>>
             cancellation_token: value.cancellation_token,
             restart_policy: value.restart_policy,
             supervision_strategy: value.supervision_strategy,
+            restart_limiter_config: value.restart_limiter_config,
             expose_for_ipc: value.expose_for_ipc,
             // Carried rather than reset: an actor may register children before
             // it starts, and those registrations must survive the transition.
@@ -1029,6 +1031,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
             read_only_handlers: HashMap::new(),
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
+            restart_limiter_config: None,
             expose_for_ipc: false,
             supervision: SupervisionRegistry::default(),
             _actor_state: PhantomData,
