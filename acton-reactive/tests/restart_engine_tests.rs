@@ -455,10 +455,84 @@ async fn a_supervisor_stopping_mid_backoff_settles_the_child_it_will_not_restart
     Ok(())
 }
 
-// TODO(step 7 handoff): the firewall wants an integration test of its own here —
-// a child adopted through the legacy `supervise()` path must never be restarted
-// by the engine, because `evaluate` returns `Forget` for a blueprint-less slot
-// before the limiter is touched. It is covered at the unit level in
-// `supervision::plan`; the end-to-end version was drafted against a guessed
-// `ActorHandle::supervise` signature and a `runtime.find_actor` that does not
-// exist, and was removed rather than left guessing.
+#[acton_test]
+async fn a_child_adopted_through_the_legacy_path_is_never_restarted() -> anyhow::Result<()> {
+    // The double-restart firewall, end to end. A child adopted through
+    // `supervise()` registers with no blueprint, so its supervisor has no
+    // recipe for rebuilding it and never tries. That is what makes the restart
+    // engine safe to ship into programs that hand-rolled their own restarts:
+    // it can only reach children registered through `supervise_with` and
+    // `supervise_deferred`, and neither has ever been released.
+    //
+    // # What this test is, honestly
+    //
+    // A characterization test, not a mutation-backed one, and the difference is
+    // worth stating rather than leaving for someone to discover.
+    //
+    // The firewall has two layers. `evaluate` returns `Forget` for a
+    // blueprint-less slot, and `begin_start` independently skips any slot with
+    // no spawner. The second shadows the first, so disabling `evaluate`'s check
+    // leaves end-to-end behaviour identical and **this test stays green**. It
+    // therefore cannot be shown to catch that regression, and it is not
+    // offered as if it could.
+    //
+    // What it does do is lock the user-visible promise, which no unit test
+    // states: adopt a child the old way, kill it, and nothing brings it back.
+    // The layer that *is* mutation-backed is
+    // `a_child_with_no_blueprint_is_left_down_without_spending_an_allowance`,
+    // in the engine's own tests — and note that it asserts the untouched
+    // **limiter**, because with `evaluate`'s check disabled the slot still
+    // reaches `Down`; only the wasted restart charge gives the bug away.
+    let mut runtime = ActonApp::launch_async().await;
+    let parent = runtime.new_actor::<Parent>().start().await;
+
+    // Built through `for_supervised_child` deliberately. `ChildTerminated` goes
+    // to the child's *configured* parent, not to whoever called `supervise()`,
+    // so a child configured without one would never reach the engine at all and
+    // this test would prove nothing.
+    let config = ActorConfig::for_supervised_child("legacy", parent.clone(), None)
+        .expect("a name plus a live parent is a valid child configuration")
+        .with_restart_policy(RestartPolicy::Permanent);
+    let child_id = config.id();
+
+    let builds = Arc::new(AtomicUsize::new(0));
+    let mut child = runtime.new_actor_with_config::<Worker>(config);
+    {
+        let builds = Arc::clone(&builds);
+        child.before_start(move |_actor| {
+            let builds = Arc::clone(&builds);
+            async move {
+                builds.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+    }
+    child.mutate_on::<Ping>(|_actor, _ctx| Reply::ready());
+
+    let child_handle = parent.supervise(child).await?;
+    assert_eq!(builds.load(Ordering::SeqCst), 1, "the child came up once");
+    assert_eq!(child_handle.id(), child_id);
+
+    // `Permanent` plus a normal termination is precisely the combination that
+    // would warrant a restart for a child with a blueprint.
+    child_handle.stop().await?;
+
+    // Give the engine every opportunity to do the thing it must not do. The
+    // default backoff is 100ms, so this is comfortably longer than a restart
+    // would have taken.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        1,
+        "nothing rebuilt a child the supervisor has no blueprint for"
+    );
+
+    // And the supervisor is still healthy rather than stuck on a decision it
+    // could not carry out.
+    tokio::time::timeout(PATIENCE, parent.send(Ping))
+        .await
+        .expect("the supervisor is still taking messages");
+
+    runtime.shutdown_all().await?;
+    Ok(())
+}

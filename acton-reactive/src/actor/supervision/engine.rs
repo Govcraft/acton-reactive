@@ -1560,6 +1560,134 @@ mod tests {
         );
     }
 
+    // ---- the double-restart firewall -------------------------------------
+
+    /// Registers a child the way the legacy `supervise()` path does: running,
+    /// with **no blueprint**, so its supervisor has no recipe for rebuilding it.
+    fn adopt_legacy_child(
+        actor: &mut ManagedActor<Started, Supervisor>,
+        name: &str,
+    ) -> (Ern, watch::Receiver<SupervisionStatus>) {
+        let child = actor
+            .id()
+            .add_part(name)
+            .expect("a short name is a valid Ern part");
+        let (status, receiver) = status_channel(&child, None);
+
+        actor
+            .supervision
+            .register(NewSlot {
+                ern: child.clone(),
+                handle: handle_for(&child),
+                spawner: None,
+                restart_policy: RestartPolicy::Permanent,
+                limiter: RestartLimiter::default(),
+                status,
+            })
+            .expect("the first registration of a name succeeds");
+
+        (child, receiver)
+    }
+
+    /// A real `ActorHandle` with a real mailbox, built without a runtime.
+    fn handle_for(id: &Ern) -> ActorHandle {
+        let (outbox, _inbox) = tokio::sync::mpsc::channel(8);
+        ActorHandle::new(id.clone(), outbox)
+    }
+
+    #[tokio::test]
+    async fn a_child_with_no_blueprint_is_left_down_without_spending_an_allowance() {
+        // The firewall that makes the whole engine safe to ship: a child adopted
+        // through the legacy `supervise()` path has no blueprint, so it is never
+        // restarted, and no program written against a released version can have
+        // a child restarted twice.
+        //
+        // **The load-bearing assertion here is the limiter, not the state.**
+        // `evaluate` returns `Forget` for a blueprint-less slot at check 2,
+        // *before* the limiter is consulted. Delete that check and the outcome
+        // is still `Forget` — `plan_restart` filters on `restartable` too, so
+        // the plan comes back empty — and the slot still reaches `Down`. What
+        // changes is that the child is charged a restart it can never use, and
+        // enough of those escalate a child the supervisor was never going to
+        // rebuild. Measured: with check 2 removed, the state assertion below
+        // still passes and the limiter assertion fails.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor(&mut runtime);
+        let (child, receiver) = adopt_legacy_child(&mut actor, "legacy");
+
+        // `Permanent` + `Normal` is the combination that *would* warrant a
+        // restart, so the blueprint is the only thing standing in the way.
+        actor.record_child_terminated(&ChildTerminated::new(
+            child.clone(),
+            crate::actor::TerminationReason::Normal,
+            RestartPolicy::Permanent,
+        ));
+
+        let slot = actor
+            .supervision
+            .slot_of_mut(&child)
+            .expect("the child is still recorded");
+        assert_eq!(
+            slot.state(),
+            SlotState::Down,
+            "a child nobody can rebuild is left down"
+        );
+        assert_eq!(
+            slot.limiter_mut().restarts_in_window(),
+            0,
+            "and is not charged for a restart that was never going to happen"
+        );
+
+        assert_eq!(receiver.borrow().state(), SupervisionState::Down);
+        assert!(
+            !actor.supervision.has_pending_starts(),
+            "nothing was queued to rebuild it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_child_with_a_blueprint_is_restarted_where_a_legacy_one_is_not() {
+        // The other side of the same predicate, so the test above is shown to
+        // be about the blueprint rather than about something incidental to the
+        // fixture. Identical notification, identical policy, one difference.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor(&mut runtime);
+
+        let engine_managed = queue_child(&mut actor, "worker", None);
+        actor.launch_pending_starts();
+        let handle = handle_for(&engine_managed);
+        assert!(actor
+            .supervision
+            .complete_start(
+                ChildIndex::new(0),
+                &engine_managed,
+                handle,
+                std::time::Instant::now(),
+            )
+            .is_recorded());
+
+        actor.record_child_terminated(&ChildTerminated::new(
+            engine_managed.clone(),
+            crate::actor::TerminationReason::Normal,
+            RestartPolicy::Permanent,
+        ));
+
+        let slot = actor
+            .supervision
+            .slot_of_mut(&engine_managed)
+            .expect("the child is still recorded");
+        assert_eq!(
+            slot.state(),
+            SlotState::AwaitingBackoff,
+            "a child with a blueprint is on its way back"
+        );
+        assert_eq!(
+            slot.limiter_mut().restarts_in_window(),
+            1,
+            "and this one really is charged for it"
+        );
+    }
+
     #[tokio::test]
     async fn a_report_that_lands_after_the_loop_stops_is_not_lost() {
         // The narrow window the drain exists for: delivery succeeded, so the

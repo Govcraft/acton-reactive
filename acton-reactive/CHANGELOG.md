@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   released version can have a child restarted twice**, including one that
   hand-rolls restarts from its own `ChildTerminated` handler.
 
+  That guarantee covers **restarts, and the IPC name sweeps that follow a child
+  reaching a terminal state or being cascaded down with its supervisor**. It
+  does *not* extend to `ActorHandle::unsupervise`, which drops the IPC names of
+  any child it stops — see its own entry below.
+
   That firewall stops applying the moment you migrate a child to
   `supervise_with` or `supervise_deferred`. **When you do, delete your
   hand-rolled restart for that child**, or it will come back twice: once from
@@ -47,9 +52,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A restarted actor stays reachable over IPC.** `ipc_expose` stores a handle
   by value, so before this an actor exposed under a chosen name became
   unreachable from its first restart onward, and silently: sends landed in a
-  mailbox with no reader. Its names now follow it across restarts, and are
-  removed when an engine-managed child stops for good. Children adopted through
-  `supervise()` keep their names exactly as before.
+  mailbox with no reader. Its names now follow it across restarts.
+
+  Names are also dropped when a child reaches a terminal state, and when a
+  supervisor takes its children down with it. **Those two sweeps are limited to
+  children the supervisor holds a blueprint for**, so a child adopted through
+  `supervise()` is unaffected by either.
+
+- **`ActorHandle::unsupervise` now drops the IPC names of the child it stops** —
+  whichever way that child was registered, including through `supervise()`.
+
+  This follows from `unsupervise` stopping the child at all, which is itself
+  new and already breaking. A name that still resolves to a mailbox nobody is
+  reading is the exact failure this area exists to prevent: sends succeed and
+  vanish. So the names go with the actor.
+
+  **If you exposed a child for IPC and later `unsupervise` it, external callers
+  will now be told there is no such actor rather than sending into nothing.** If
+  you want the child to keep serving, use `ActorHandle::release`, which leaves it
+  running and leaves its names alone.
+
+  This is the one place the "no shipped program can observe a difference"
+  reasoning does *not* hold, because `unsupervise` and `supervise()` are both
+  shipped. It is called out separately for that reason rather than folded into
+  the firewall above.
 
 - **Cascading shutdown now reaches every supervised child.** A supervisor keeps
   its own record of the children it supervises, and stops all of them when it
