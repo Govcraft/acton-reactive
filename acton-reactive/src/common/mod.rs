@@ -38,6 +38,8 @@ pub use acton::ActonApp;
 pub use actor_handle::ActorHandle;
 pub use actor_reply::Reply;
 pub use actor_runtime::ActorRuntime;
+#[cfg(feature = "ipc")]
+pub use actor_runtime::IpcNameInUse;
 pub use broker::Broker;
 pub use config::ActonConfig;
 

@@ -280,7 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nPrice feed service started");
 
     // Expose actors for IPC access
-    runtime.ipc_expose("price_feed", price_feed.clone());
+    runtime.ipc_expose("price_feed", price_feed.clone()).expect("IPC name should be unclaimed at startup");
     println!("Exposed actors: price_feed");
 
     // Start the IPC listener

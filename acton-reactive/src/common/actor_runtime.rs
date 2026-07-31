@@ -27,6 +27,49 @@ use crate::common::acton_inner::ActonInner;
 use crate::common::{ActorHandle, BrokerRef};
 use crate::traits::ActorHandleInterface;
 
+/// An IPC name was already claimed by another actor.
+///
+/// Returned by [`ActorRuntime::ipc_expose`] when the requested name is registered.
+/// The existing registration is left in place; see that method for why the first
+/// claim wins.
+#[cfg(feature = "ipc")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpcNameInUse {
+    /// The name that was already taken.
+    name: String,
+    /// The actor currently registered under it.
+    held_by: Ern,
+}
+
+#[cfg(feature = "ipc")]
+impl IpcNameInUse {
+    /// The name that was already taken.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The actor already registered under that name.
+    #[must_use]
+    pub const fn held_by(&self) -> &Ern {
+        &self.held_by
+    }
+}
+
+#[cfg(feature = "ipc")]
+impl std::fmt::Display for IpcNameInUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "IPC name '{}' is already registered to actor {}; hide it first to reuse the name",
+            self.name, self.held_by
+        )
+    }
+}
+
+#[cfg(feature = "ipc")]
+impl std::error::Error for IpcNameInUse {}
+
 /// Represents the initialized and active Acton actor system runtime.
 ///
 /// This struct is obtained after successfully launching the system via [`ActonApp::launch_async().await`].
@@ -227,12 +270,41 @@ impl ActorRuntime {
     /// let handle = actor.start().await;
     ///
     /// // Expose the actor for IPC access
-    /// runtime.ipc_expose("price_service", handle.clone());
+    /// runtime.ipc_expose("price_service", handle.clone())?;
     /// ```
+    ///
+    /// # A name can only be claimed once
+    ///
+    /// If `name` is already registered, the existing registration is **kept** and
+    /// this returns [`IpcNameInUse`]. Replacing it would silently redirect traffic
+    /// away from an actor that is already serving, and that actor would never learn
+    /// it had been displaced — sends addressed to it would simply start arriving
+    /// somewhere else. Refusing confines the problem to the actor that has not begun
+    /// serving yet, which is also the one whose caller is in a position to act on it.
+    ///
+    /// Release a name with [`ipc_hide`](Self::ipc_hide) before reusing it.
+    ///
+    /// This is deliberately the opposite of `ipc_rebind`, which *does* overwrite.
+    /// The two are not inconsistent: this method is a caller **claiming** a name,
+    /// where a second claim on a live name is a conflict, whereas `ipc_rebind` is
+    /// the supervision engine **repointing a name it already owns** at a restarted
+    /// incarnation, where overwriting is the entire purpose.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IpcNameInUse`] if `name` is already registered to an actor.
     #[cfg(feature = "ipc")]
-    pub fn ipc_expose(&self, name: &str, handle: ActorHandle) {
+    pub fn ipc_expose(&self, name: &str, handle: ActorHandle) -> Result<(), IpcNameInUse> {
+        if let Some(existing) = self.0.ipc_actor_registry.get(name) {
+            return Err(IpcNameInUse {
+                name: name.to_string(),
+                held_by: existing.value().id(),
+            });
+        }
+
         trace!("Exposing actor {} for IPC as '{}'", handle.id(), name);
         self.0.ipc_actor_registry.insert(name.to_string(), handle);
+        Ok(())
     }
 
     /// Points every IPC name registered for `child` at its current incarnation.

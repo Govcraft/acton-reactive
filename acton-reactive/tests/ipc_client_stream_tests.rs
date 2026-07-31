@@ -70,7 +70,7 @@ async fn start_streaming_server(
         })
     });
     let handle = counter.start().await;
-    runtime.ipc_expose("counter", handle);
+    runtime.ipc_expose("counter", handle).expect("IPC name should be unclaimed at startup");
 
     let mut config = IpcConfig::default();
     config.socket.path = Some(socket_path);

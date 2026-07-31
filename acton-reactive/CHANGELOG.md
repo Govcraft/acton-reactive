@@ -171,6 +171,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `peer: Option<PeerCredentials>`. **Pass `None` if you do not need the identity
   of the connecting process.**
 
+- **`expose_for_ipc()` now registers the name you chose.** **This is a breaking
+  change that costs you nothing to migrate, and it is worth saying why before
+  anything else:** the old name contained a `UUIDv7` regenerated on every process
+  start, so it was different on every run and no client, config file or script
+  could ever have named it. No working program can have depended on the old
+  value.
+
+  An actor is now exposed under its own name, and a supervised child under its
+  parent's name then its own:
+
+  | Actor | Was | Now |
+  |---|---|---|
+  | `new_actor_with_name("prices")` | `prices_01kyww2gfb…` | `prices` |
+  | child `"alpha"` of `prices` | `prices_01kyww2gfb…` | `prices/alpha` |
+  | child `"beta"` of `prices` | `prices_01kyww2gfb…` | `prices/beta` |
+
+  The middle column is not a typo. A supervised child shares its parent's `Ern`
+  root and is distinguished only by the part the old derivation discarded, so
+  **every child of one parent registered under the same name, and each silently
+  replaced the last** — along with the parent itself. Messages addressed to the
+  first were delivered to whichever actor registered most recently. That is
+  fixed: the retained parts are exactly what tells those actors apart.
+
+  This also makes the documented example true. `expose_for_ipc()` on an actor
+  named `prices` really is reachable as `"prices"` now, which is what the docs
+  claimed and what every in-tree example had to sidestep by calling
+  `ipc_expose` manually.
+
+- **`ActorRuntime::ipc_expose` returns `Result<(), IpcNameInUse>` and no longer
+  replaces an existing registration.** **Handle or `expect()` the result at your
+  call sites**; that is the whole migration.
+
+  Overwriting silently redirected traffic away from an actor that was already
+  serving, and that actor had no way to learn it had been displaced. Refusing
+  the second claim confines the problem to the actor that has not started
+  serving yet — which is also the one whose caller is positioned to do something
+  about it. Release a name with `ipc_hide` if you intend to reuse it.
+
+  `ipc_rebind` still overwrites, deliberately. The two are not inconsistent:
+  `ipc_expose` is a caller *claiming* a name, where a second claim is a
+  conflict, while `ipc_rebind` is the supervision engine *repointing a name it
+  already owns* at a restarted incarnation, where overwriting is the point.
+
+  `expose_for_ipc()` remains infallible and still returns `&mut Self`. A name
+  conflict there is reported by logging at `error!` with both actors named; the
+  actor still starts, but is not reachable under that name. **If you need to
+  handle a conflict in code, call `ipc_expose` and match on the result** —
+  making `expose_for_ipc()` fallible would have forced `start()` to return a
+  `Result` and broken every actor in every program for a fault confined to IPC.
+
 ### Undeprecated
 
 - `ActorConfig::with_supervision_strategy` and `ActorConfig::with_restart_limiter`
@@ -233,6 +283,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CONNECTION_LIMIT_REACHED_CODE` and `CONNECTION_REJECTED_CORRELATION_ID`, the
   wire constants a non-Rust client needs in order to recognise a
   connection-level refusal.
+- `IpcNameInUse`, returned by `ActorRuntime::ipc_expose` when a name is already
+  claimed. Carries the contested name and the `Ern` of the actor holding it.
 
 ### Clarified
 

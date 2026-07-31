@@ -36,6 +36,39 @@ use crate::message::MessageContext;
 use crate::prelude::ActonMessage;
 use crate::traits::{ActonMessageReply, ActorHandleInterface};
 
+/// The IPC name an actor is exposed under, derived from its [`Ern`].
+///
+/// A root actor yields its plain name; a child yields its ancestry joined with `/`:
+///
+/// - `prices_01k…`            -> `prices`
+/// - `prices_01k…/alpha`      -> `prices/alpha`
+/// - `prices_01k…/alpha/deep` -> `prices/alpha/deep`
+///
+/// # Why this shape
+///
+/// Two properties have to hold at once, and only this split delivers both.
+///
+/// *Stable across runs*: the discarded piece is exactly the generated `UUIDv7`
+/// suffix, which is regenerated on every process start. A name containing it could
+/// not be written into a client or a config file.
+///
+/// *Distinct between actors that could collide*: the retained parts are exactly what
+/// distinguishes a child from its parent and from its siblings. A supervised child
+/// shares its parent's root — its own segment lives in the parts — so dropping the
+/// parts would make every child collide with its parent.
+///
+/// Pure: derived entirely from `ern`, consulting no registry.
+#[cfg(feature = "ipc")]
+fn ipc_name_for(ern: &Ern) -> String {
+    let prefix = ern.root().name().prefix();
+
+    if ern.parts().is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}/{}", ern.parts())
+    }
+}
+
 /// Type-state marker for a [`ManagedActor`] that has been configured but not yet started.
 ///
 /// When a `ManagedActor` is in the `Idle` state, it can be configured with message handlers
@@ -745,9 +778,24 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
 
     /// Marks this actor to be automatically exposed for IPC access when started.
     ///
-    /// When an actor is marked for IPC exposure, it will be registered with the IPC system
-    /// during [`start()`](Self::start) using its ERN root name as the logical IPC name.
-    /// This allows external processes to send messages to this actor via Unix domain sockets.
+    /// The actor is registered during [`start()`](Self::start) under the name it was
+    /// given, so external processes can reach it over Unix domain sockets.
+    ///
+    /// # The name
+    ///
+    /// A root actor is exposed under its plain name. A supervised child is exposed
+    /// under its parent's name, then its own, separated by `/`:
+    ///
+    /// | Actor | Exposed as |
+    /// |---|---|
+    /// | `new_actor_with_name("prices")` | `prices` |
+    /// | child `"alpha"` of `prices` | `prices/alpha` |
+    /// | child `"inner"` of that child | `prices/alpha/inner` |
+    ///
+    /// The generated identifier suffix carried by an actor's [`Ern`] is deliberately
+    /// **not** part of the name. That suffix is a fresh `UUIDv7` on every process
+    /// start, so a name built from it could never be written into a client or a
+    /// config file — which is what made this method unusable before.
     ///
     /// # Example
     ///
@@ -755,9 +803,22 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// let mut service = runtime.new_actor_with_name::<MyService>("prices".to_string());
     /// service
     ///     .act_on::<GetPrice>(|actor, ctx| { /* ... */ })
-    ///     .expose_for_ipc()  // Will be accessible as "prices" via IPC
+    ///     .expose_for_ipc()  // Reachable as "prices" via IPC
     ///     .start().await;
     /// ```
+    ///
+    /// # This method cannot fail, and does not report a name conflict in-band
+    ///
+    /// If another actor already holds the name, the existing registration is kept
+    /// and **this actor simply is not reachable over IPC**. The conflict is reported
+    /// by logging at `error!`, naming both actors and the contested name; `start()`
+    /// still returns a working [`ActorHandle`], because a fault confined to IPC
+    /// should not make starting an actor fallible for every program.
+    ///
+    /// **If you need to handle a name conflict in code, call
+    /// [`ActorRuntime::ipc_expose`](crate::prelude::ActorRuntime::ipc_expose) and
+    /// match on its result.** That is the form with an error channel; this one is
+    /// the convenience.
     ///
     /// # Returns
     ///
@@ -765,7 +826,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// # See Also
     ///
-    /// - [`ActorRuntime::ipc_expose`](crate::prelude::ActorRuntime::ipc_expose) for manual IPC exposure with custom names
+    /// - [`ActorRuntime::ipc_expose`](crate::prelude::ActorRuntime::ipc_expose) for manual IPC exposure with custom names, and for handling conflicts
     /// - [`ActorRuntime::ipc_hide`](crate::prelude::ActorRuntime::ipc_hide) for removing IPC exposure
     #[cfg(feature = "ipc")]
     pub const fn expose_for_ipc(&mut self) -> &mut Self {
@@ -892,7 +953,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         #[cfg(feature = "ipc")]
         let should_expose_for_ipc = self.expose_for_ipc;
         #[cfg(feature = "ipc")]
-        let ipc_name = self.id.root().as_str().to_owned();
+        let ipc_name = ipc_name_for(&self.id);
         #[cfg(feature = "ipc")]
         let runtime_for_ipc = self.runtime.clone();
 
@@ -922,7 +983,20 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         #[cfg(feature = "ipc")]
         if should_expose_for_ipc {
             trace!("Exposing actor '{}' for IPC access", ipc_name);
-            runtime_for_ipc.ipc_expose(&ipc_name, actor_ref.clone());
+            if let Err(conflict) = runtime_for_ipc.ipc_expose(&ipc_name, actor_ref.clone()) {
+                // The actor still starts; it is simply not reachable under this
+                // name. Logged at error because nothing else tells the operator:
+                // the caller has no error channel here, and a silent overwrite is
+                // the defect this refusal exists to prevent.
+                error!(
+                    ipc_name = %ipc_name,
+                    wanted_by = %actor_ref.id(),
+                    held_by = %conflict.held_by(),
+                    "IPC name already claimed; this actor will not be reachable under it. \
+                     Give one of the two actors a different name, or use ActorRuntime::ipc_expose \
+                     to choose the name explicitly."
+                );
+            }
         }
 
         trace!("Actor {} started successfully.", actor_ref.id());

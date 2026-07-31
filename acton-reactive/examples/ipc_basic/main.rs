@@ -485,7 +485,7 @@ async fn main() {
 
     // Create and expose price service
     let price_handle = create_price_service(&mut runtime, &printer).await;
-    runtime.ipc_expose("prices", price_handle.clone());
+    runtime.ipc_expose("prices", price_handle.clone()).expect("IPC name should be unclaimed at startup");
 
     printer
         .send(Print(format!(

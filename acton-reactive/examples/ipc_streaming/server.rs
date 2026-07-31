@@ -263,8 +263,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 List service started");
 
     // Expose actors for IPC access
-    runtime.ipc_expose("countdown", countdown.clone());
-    runtime.ipc_expose("list_service", list_service.clone());
+    runtime.ipc_expose("countdown", countdown.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("list_service", list_service.clone()).expect("IPC name should be unclaimed at startup");
     println!("🔗 Exposed actors: countdown, list_service");
 
     // Start the IPC listener

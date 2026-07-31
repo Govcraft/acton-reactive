@@ -629,9 +629,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state_tx.send_modify(|state| state.set_service_running("Config", true));
 
     // Expose actors for IPC
-    runtime.ipc_expose("counter", counter.clone());
-    runtime.ipc_expose("logger", logger.clone());
-    runtime.ipc_expose("config", config.clone());
+    runtime.ipc_expose("counter", counter.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("logger", logger.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("config", config.clone()).expect("IPC name should be unclaimed at startup");
 
     state_tx.send_modify(|state| {
         state.add_activity("Exposed actors: counter, logger, config".to_string());

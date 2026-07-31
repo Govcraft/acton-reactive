@@ -281,8 +281,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📦 Key-Value store service started");
 
     // Expose actors for IPC access
-    runtime.ipc_expose("calculator", calculator.clone());
-    runtime.ipc_expose("kv_store", kv_store.clone());
+    runtime.ipc_expose("calculator", calculator.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("kv_store", kv_store.clone()).expect("IPC name should be unclaimed at startup");
     println!("🔗 Exposed actors: calculator, kv_store");
 
     // Start the IPC listener

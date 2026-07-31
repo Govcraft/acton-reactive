@@ -398,10 +398,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("💰 Price publisher started");
 
     // Expose actors for IPC access
-    runtime.ipc_expose("calculator", calculator.clone());
-    runtime.ipc_expose("search", search.clone());
-    runtime.ipc_expose("logger", logger.clone());
-    runtime.ipc_expose("price_publisher", price_publisher.clone());
+    runtime.ipc_expose("calculator", calculator.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("search", search.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("logger", logger.clone()).expect("IPC name should be unclaimed at startup");
+    runtime.ipc_expose("price_publisher", price_publisher.clone()).expect("IPC name should be unclaimed at startup");
     println!("🔗 Exposed actors: calculator, search, logger, price_publisher");
 
     // Start price ticker for push notifications

@@ -309,7 +309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nKeystroke processor started");
 
     // Expose actor for IPC access
-    runtime.ipc_expose("keystroke_processor", processor.clone());
+    runtime.ipc_expose("keystroke_processor", processor.clone()).expect("IPC name should be unclaimed at startup");
     println!("Exposed actors: keystroke_processor");
 
     // Start the IPC listener

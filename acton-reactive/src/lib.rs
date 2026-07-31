@@ -87,6 +87,7 @@ pub mod ipc {
         SocketConfig, SubscriptionManager, CONNECTION_LIMIT_REACHED_CODE,
         CONNECTION_REJECTED_CORRELATION_ID,
     };
+    pub use crate::common::IpcNameInUse;
 
     /// Wire protocol for IPC message framing.
     ///
