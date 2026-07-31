@@ -272,6 +272,24 @@ impl RestartLimiter {
         self.consecutive_restarts
     }
 
+    /// The sliding window this limiter counts restarts over.
+    ///
+    /// Exists so that a caller which needs the window can take it *from the
+    /// limiter* rather than from a configuration alongside it. A child may
+    /// override its supervisor's limiter settings, so "the limiter" and "the
+    /// window" can come from two different configurations, and a decision made
+    /// against a mismatched pair is wrong in the direction nobody would guess:
+    /// a long window paired with a short one declares a flapping child
+    /// recovered early and resets a backoff that should have compounded, so the
+    /// child restarts *faster* than its own configuration allows.
+    ///
+    /// One accessor makes that pair unconstructible rather than merely
+    /// discouraged.
+    #[must_use]
+    pub const fn window(&self) -> Duration {
+        self.config.window_duration()
+    }
+
     /// Calculate the backoff for the next restart without recording it.
     #[must_use]
     pub fn peek_backoff(&self) -> Duration {
@@ -368,6 +386,22 @@ mod tests {
         assert_eq!(config.initial_backoff_ms, 100);
         assert_eq!(config.max_backoff_ms, 30_000);
         assert!((config.backoff_multiplier - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_limiter_reports_the_window_it_was_configured_with() {
+        // The whole point of the accessor: whoever holds the limiter can get
+        // its window without being handed one separately and risking a pair
+        // that disagrees.
+        let limiter = RestartLimiter::new(RestartLimiterConfig {
+            window_secs: 600,
+            ..RestartLimiterConfig::default()
+        });
+        assert_eq!(limiter.window(), Duration::from_mins(10));
+        assert_eq!(
+            RestartLimiter::new(RestartLimiterConfig::default()).window(),
+            Duration::from_mins(1)
+        );
     }
 
     #[test]

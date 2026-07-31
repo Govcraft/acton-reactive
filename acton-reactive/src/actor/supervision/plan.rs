@@ -28,7 +28,7 @@
 //! Time is a parameter rather than something read from the clock, so a test can
 //! place events days apart without waiting.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::{BackoffDelay, ChildIndex, SupervisionDecision, SupervisionStrategy};
 use crate::actor::{RestartLimitExceeded, RestartLimiter};
@@ -189,6 +189,11 @@ pub fn plan_restart(
 /// deterministic and testable. `limiter` is borrowed mutably because recording
 /// a restart and computing its backoff are one operation.
 ///
+/// The recovery window in check 4 is read off the limiter itself rather than
+/// passed alongside it. A child may override its supervisor's limiter settings,
+/// so the two can come from different configurations, and the mismatched pair
+/// fails silently and backwards — see [`RestartLimiter::window`].
+///
 /// The order of the checks is the correctness core of the whole subsystem:
 ///
 /// 1. An expected stop is ignored. This has to come first. Stopping a sibling
@@ -209,7 +214,6 @@ pub fn evaluate(
     slot: &SlotSnapshot,
     strategy: SupervisionStrategy,
     limiter: &mut RestartLimiter,
-    limiter_window: Duration,
     slots: &[SlotView],
     now: Instant,
 ) -> SupervisionOutcome {
@@ -234,9 +238,12 @@ pub fn evaluate(
 
     // 4. A child that stayed up longer than the limiter's window has recovered,
     //    so the backoff starts over instead of compounding from its last crash.
+    //    The window comes off the limiter being charged, so it always describes
+    //    the same configuration the allowance does.
+    let recovery_window = limiter.window();
     if slot
         .last_restart
-        .is_some_and(|last| now.saturating_duration_since(last) > limiter_window)
+        .is_some_and(|last| now.saturating_duration_since(last) > recovery_window)
     {
         limiter.reset_consecutive();
     }
@@ -259,6 +266,8 @@ pub fn evaluate(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use acton_ern::Ern;
 
     use super::*;
@@ -298,13 +307,12 @@ mod tests {
         }
     }
 
-    /// The limiter window, defined once so the limiter's own `window_secs` and
-    /// the `limiter_window` argument passed to `evaluate` cannot drift apart.
+    /// The window these fixtures build their limiters with.
+    ///
+    /// A test still needs the value in order to place events either side of it;
+    /// `evaluate` no longer takes one, so it is read back off the limiter rather
+    /// than declared a second time.
     const WINDOW_SECS: u64 = 60;
-
-    fn window() -> Duration {
-        Duration::from_secs(WINDOW_SECS)
-    }
 
     fn limiter(max_restarts: u32, initial_backoff_ms: u64, max_backoff_ms: u64) -> RestartLimiter {
         RestartLimiter::new(RestartLimiterConfig {
@@ -536,7 +544,6 @@ mod tests {
             &slot,
             SupervisionStrategy::OneForAll,
             &mut limiter,
-            window(),
             &four_healthy_slots(),
             Instant::now(),
         );
@@ -563,7 +570,6 @@ mod tests {
             &slot,
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window(),
             &four_healthy_slots(),
             Instant::now(),
         );
@@ -587,7 +593,6 @@ mod tests {
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
-                window(),
                 &four_healthy_slots(),
                 Instant::now(),
             );
@@ -604,7 +609,6 @@ mod tests {
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut normal,
-            window(),
             &four_healthy_slots(),
             Instant::now(),
         );
@@ -616,7 +620,6 @@ mod tests {
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut panicked,
-            window(),
             &four_healthy_slots(),
             Instant::now(),
         );
@@ -632,7 +635,6 @@ mod tests {
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window(),
             &four_healthy_slots(),
             Instant::now(),
         );
@@ -653,7 +655,6 @@ mod tests {
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
-                window(),
                 &slots,
                 now,
             );
@@ -675,7 +676,7 @@ mod tests {
 
     #[test]
     fn a_child_that_stayed_up_past_the_window_starts_its_backoff_over() {
-        let window = window();
+        let window = Duration::from_secs(WINDOW_SECS);
         let mut limiter = limiter(10, 100, 10_000);
         let start = Instant::now();
         let slots = four_healthy_slots();
@@ -687,7 +688,6 @@ mod tests {
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
-                window,
                 &slots,
                 start,
             );
@@ -704,7 +704,6 @@ mod tests {
             &recovered,
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window,
             &slots,
             start + window + Duration::from_secs(1),
         );
@@ -720,8 +719,63 @@ mod tests {
     }
 
     #[test]
+    fn the_recovery_window_is_the_one_belonging_to_the_limiter_being_charged() {
+        // The reason `evaluate` no longer takes a window alongside its limiter.
+        // A child may override its supervisor's limiter settings, so the pair
+        // could be mismatched, and the failure is silent and backwards: judged
+        // against a *shorter* window than its own, a flapping child is declared
+        // recovered, its backoff resets, and it restarts faster than its own
+        // configuration allows.
+        //
+        // Here the limiter's own window is ten minutes and the child came back
+        // one minute ago. Under a supervisor's 60s window that is "recovered";
+        // under the limiter's own it is not, and the backoff must compound.
+        let mut limiter = RestartLimiter::new(RestartLimiterConfig {
+            enabled: true,
+            max_restarts: 10,
+            window_secs: 600,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 10_000,
+            backoff_multiplier: 2.0,
+        });
+        assert_eq!(limiter.window(), Duration::from_mins(10));
+
+        let start = Instant::now();
+        let slots = four_healthy_slots();
+        let _ = evaluate(
+            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &snapshot(0),
+            SupervisionStrategy::OneForOne,
+            &mut limiter,
+            &slots,
+            start,
+        );
+
+        let up_for_a_minute = SlotSnapshot {
+            last_restart: Some(start),
+            ..snapshot(0)
+        };
+        let outcome = evaluate(
+            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &up_for_a_minute,
+            SupervisionStrategy::OneForOne,
+            &mut limiter,
+            &slots,
+            start + Duration::from_secs(WINDOW_SECS + 1),
+        );
+
+        match outcome {
+            SupervisionOutcome::Restart { backoff, .. } => assert_eq!(
+                backoff,
+                BackoffDelay::from(Duration::from_millis(200)),
+                "a minute does not clear a ten-minute window, so the backoff compounds"
+            ),
+            other => panic!("expected a restart, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_crash_inside_the_window_keeps_compounding_the_backoff() {
-        let window = window();
         let mut limiter = limiter(10, 100, 10_000);
         let start = Instant::now();
         let slots = four_healthy_slots();
@@ -731,7 +785,6 @@ mod tests {
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window,
             &slots,
             start,
         );
@@ -745,7 +798,6 @@ mod tests {
             &recently_restarted,
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window,
             &slots,
             start + Duration::from_secs(5),
         );
@@ -770,7 +822,6 @@ mod tests {
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
-                window(),
                 &slots,
                 now,
             );
@@ -785,7 +836,6 @@ mod tests {
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window(),
             &slots,
             now,
         );
@@ -812,7 +862,6 @@ mod tests {
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
-                window(),
                 &slots,
                 now,
             );
@@ -838,7 +887,6 @@ mod tests {
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
-            window(),
             &[],
             Instant::now(),
         );
@@ -855,7 +903,6 @@ mod tests {
             &snapshot(1),
             SupervisionStrategy::RestForOne,
             &mut limiter,
-            window(),
             &four_healthy_slots(),
             Instant::now(),
         );
