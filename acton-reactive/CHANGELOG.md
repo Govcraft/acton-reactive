@@ -59,23 +59,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   children the supervisor holds a blueprint for**, so a child adopted through
   `supervise()` is unaffected by either.
 
-- **`ActorHandle::unsupervise` now drops the IPC names of the child it stops** —
-  whichever way that child was registered, including through `supervise()`.
+- **BREAKING: `ActorHandle::unsupervise` now stops the child it releases.**
 
-  This follows from `unsupervise` stopping the child at all, which is itself
-  new and already breaking. A name that still resolves to a mailbox nobody is
-  reading is the exact failure this area exists to prevent: sends succeed and
-  vanish. So the names go with the actor.
+  It previously retired the supervisor's record and left the actor running,
+  which contradicted its own documentation — *"Stops a supervised child and
+  removes it from supervision"* — and contradicted its `pub(crate)` sibling
+  `ManagedActor::unsupervise`, which did stop the child. The test covering it
+  asserted only that the name was freed, so the doc, the sibling and the test
+  name all promised a stop that never happened and nothing could tell.
 
-  **If you exposed a child for IPC and later `unsupervise` it, external callers
-  will now be told there is no such actor rather than sending into nothing.** If
-  you want the child to keep serving, use `ActorHandle::release`, which leaves it
-  running and leaves its names alone.
+  **Signatures are unchanged, so this is a silent behaviour change rather than
+  a compile error** — which is exactly why it ships in a major rather than
+  being smoothed over in a minor. **If you relied on the child surviving,
+  switch to [`ActorHandle::release`]** (below), which is that behaviour under a
+  name that says so.
 
-  This is the one place the "no shipped program can observe a difference"
-  reasoning does *not* hold, because `unsupervise` and `supervise()` are both
-  shipped. It is called out separately for that reason rather than folded into
-  the firewall above.
+  Two consequences follow from the child now being stopped:
+
+  - `unsupervise` does not return until the child really has stopped. The
+    caller does the stopping, not the supervisor: awaiting a child's shutdown
+    on the supervisor's task would stall its message loop for as long as that
+    child took.
+  - **It drops the child's IPC names** — whichever way that child was
+    registered, including through `supervise()`. A name that still resolves to
+    a mailbox nobody is reading is the precise failure this area exists to
+    prevent: sends succeed and vanish. So the names go with the actor. If you
+    exposed a child for IPC and later `unsupervise` it, external callers are
+    now told there is no such actor instead of sending into nothing.
+
+  This second point is **the one place the "no shipped program can observe a
+  difference" reasoning does not hold**, because `unsupervise` and
+  `supervise()` are both shipped APIs. It is stated here rather than folded
+  into the restart firewall above, which genuinely does hold.
+
+  [`ActorHandle::release`]: #added
 
 - **Cascading shutdown now reaches every supervised child.** A supervisor keeps
   its own record of the children it supervises, and stops all of them when it
@@ -120,6 +137,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failing repeatedly cannot consume a sibling's allowance.
 
 ### Added
+
+- `ActorHandle::release`, the counterpart to the corrected
+  `unsupervise`: it retires the supervisor's record and hands the child back
+  **still running**. This is "stop supervising this, but keep it serving" —
+  nothing will restart it and nothing will stop it when its former supervisor
+  stops, and its IPC names are left alone because it is still there to answer
+  them.
+
+  It returns the released child's handle rather than a bare acknowledgement,
+  which is what makes it useful: you need a handle to keep talking to a child
+  you have just released. **This is the migration path if you relied on the old
+  `unsupervise` leaving the child running.**
 
 - `SupervisedChild`, a reference to a supervised child that survives its
   restarts. An `ActorHandle` names one incarnation and goes stale when the child
