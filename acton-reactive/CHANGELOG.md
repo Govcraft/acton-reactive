@@ -122,6 +122,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the framework restarts only children registered through APIs that have never
   shipped, so it cannot be competing with your handler over the same child.
 
+- **The IPC listener now tells a refused client why it was refused.** A server
+  at its connection limit accepted the socket and then dropped it without a
+  word. The client's `connect()` had already succeeded, so the refusal surfaced
+  only as `Broken pipe (os error 32)` on the first write — and nothing in that
+  points at a connection limit. The listener now writes a typed error before
+  closing, and the client reports
+  `IpcError::ConnectionLimitReached { limit }`.
+
+  The effective limit is also logged at listener startup, beside the socket
+  path, so the ceiling is discoverable before it is reached rather than after.
+
+  **`IpcError` has gained a variant and is now `#[non_exhaustive]`, so a
+  downstream `match` that lists every variant will stop compiling.** Add a
+  wildcard arm. This is a one-time cost: because the type is now
+  `#[non_exhaustive]`, later variants are additive and will not break that
+  match again.
+
+  Nothing changes on the wire. `IpcError` is not serialized — a refusal travels
+  as an ordinary error response carrying an `error_code` string — so the
+  protocol version is unchanged and a client built against 8.x still parses the
+  frame.
+
+- **`max_connections` now defaults to 1024, where it previously defaulted to
+  100.** One connection per participant, held for that participant's process
+  lifetime, is an ordinary topology, and 100 was low enough to be reached in
+  normal use. The new figure is sized from the measured per-connection buffer
+  reservation of roughly 20 KiB, so a full listener costs about 20 MiB rather
+  than the ~2 MiB the old default implied.
+
+  **If you were relying on the old default as a resource ceiling, set
+  `limits.max_connections` explicitly.** Nothing else restores 100.
+
+- **`IpcConfig::load()` now prefers a per-application configuration file.** It
+  looks for `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml` first, falls back to
+  `$XDG_CONFIG_HOME/acton/ipc.toml`, and logs which of the two it used.
+  Previously only the shared path was ever read, while the documentation
+  promised the per-application one — so a file placed where the docs said it
+  should go produced default settings, with no warning that it had been
+  ignored.
+
+  **The shared location still loads, so no action is required and no existing
+  configuration stops working.** Move a file to the per-application path only
+  if you want that application's settings to stop being shared with every other
+  acton IPC server on the machine.
+
+- **`SubscriptionManager::register_connection` takes a third argument**,
+  `peer: Option<PeerCredentials>`. **Pass `None` if you do not need the identity
+  of the connecting process.**
+
 ### Undeprecated
 
 - `ActorConfig::with_supervision_strategy` and `ActorConfig::with_restart_limiter`
@@ -162,6 +211,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChildSupervised`, `ChildRestarted` and `SupervisionEscalated` broker events,
   so an unrelated actor can observe supervision without the supervisor knowing.
 - `RestartGeneration`, `ChildIndex` and `BackoffDelay` value types.
+- `IpcError::ConnectionLimitReached { limit }`, reporting the server's
+  configured ceiling to a client it refused.
+- `IpcClient::rejection_reason()`, the reason the server refused this
+  connection, or `None` for a connection it accepted normally.
+- `IpcListenerStats::max_connections()` and `connections_available()`, so an
+  embedder can check headroom against the limit rather than discovering it by
+  being refused.
+- `PeerCredentials`, the kernel-reported identity of the process behind an IPC
+  connection, with `SubscriptionManager::peer_credentials()` and `peer_pid()`
+  to read it.
+
+  **Prefer `uid()` and `gid()` for access-control decisions.** PIDs are
+  recycled, so a check that reads a PID and then acts on it can be defeated by
+  the original process exiting between the two steps; the user and group ids
+  are fixed for the life of the connection. Treat `pid()` as a diagnostic — it
+  is what lets a log line name the process that connected.
+
+- `ConfigSource`, reporting which of the two searched locations supplied the
+  loaded IPC configuration.
+- `CONNECTION_LIMIT_REACHED_CODE` and `CONNECTION_REJECTED_CORRELATION_ID`, the
+  wire constants a non-Rust client needs in order to recognise a
+  connection-level refusal.
 
 ### Clarified
 
