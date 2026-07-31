@@ -37,12 +37,20 @@ use crate::actor::RestartLimitExceeded;
 pub enum SupervisionError {
     /// This actor already supervises a child with this identifier.
     ///
-    /// Not a name collision. Every [`ActorConfig`] mints a fresh [`Ern`] whose
-    /// root carries a generated `UUIDv7` suffix, so two children created with the
-    /// same name never share an identifier. This reports the case that can
-    /// actually happen: the *same* configuration was used to supervise twice.
+    /// Reachable two ways, which need different remedies:
+    ///
+    /// - **A name collision.** Children built from a blueprint derive their
+    ///   identifier from their parent and their name, so two of them sharing a
+    ///   name under one parent are the same child. Rename one.
+    /// - **A reused configuration.** Supervising twice with the same
+    ///   [`ActorConfig`] reuses its identifier. Build a fresh one.
+    ///
+    /// [`ActorConfig::new`] and [`new_with_name`] mint a fresh identifier on
+    /// every call, so children created through those cannot collide by name.
     ///
     /// [`ActorConfig`]: crate::actor::ActorConfig
+    /// [`ActorConfig::new`]: crate::actor::ActorConfig::new
+    /// [`new_with_name`]: crate::actor::ActorConfig::new_with_name
     DuplicateChild {
         /// The identifier that is already supervised.
         child: Ern,
@@ -84,6 +92,15 @@ pub enum SupervisionError {
         waited: Duration,
     },
 
+    /// The supervising actor's task ended before it released the child.
+    ///
+    /// The child is still supervised as far as anything can tell, and is still
+    /// running unless the supervisor's own shutdown stopped it.
+    ReleaseLost {
+        /// The child whose release was never processed.
+        child: Ern,
+    },
+
     /// The supervising actor's task ended before it recorded the registration.
     ///
     /// Distinct from [`SupervisionError::SupervisorStopped`]: the supervisor
@@ -100,7 +117,7 @@ impl fmt::Display for SupervisionError {
         match self {
             Self::DuplicateChild { child } => write!(
                 f,
-                "child '{child}' is already supervised by this actor; build a fresh ActorConfig for each child, or call unsupervise() first to replace this one"
+                "child '{child}' is already supervised by this actor; give the child a different name, build a fresh ActorConfig, or call unsupervise() first to replace it"
             ),
             Self::UnknownChild { child } => write!(
                 f,
@@ -124,6 +141,10 @@ impl fmt::Display for SupervisionError {
                 f,
                 "supervisor stopped before recording child '{child}'; the child may be running unsupervised and should be stopped"
             ),
+            Self::ReleaseLost { child } => write!(
+                f,
+                "supervisor stopped before releasing child '{child}'; the child was not removed from supervision"
+            ),
         }
     }
 }
@@ -137,7 +158,8 @@ impl Error for SupervisionError {
             | Self::ConfigRejected { .. }
             | Self::SupervisorStopped { .. }
             | Self::ChildStopTimeout { .. }
-            | Self::RegistrationLost { .. } => None,
+            | Self::RegistrationLost { .. }
+            | Self::ReleaseLost { .. } => None,
         }
     }
 }
@@ -170,20 +192,26 @@ mod tests {
         .to_string();
         assert!(message.contains(&child.to_string()), "{message}");
         assert!(message.contains("unsupervise()"), "{message}");
-        // The remedy is a fresh configuration, not a different name: every
-        // ActorConfig mints a new Ern, so names never collide on their own.
-        assert!(message.contains("ActorConfig"), "{message}");
+        // Both remedies must be present. Blueprint children derive their
+        // identifier from parent plus name, so a rename genuinely resolves a
+        // collision; reusing one ActorConfig is the other way in, and only a
+        // fresh config resolves that.
         assert!(
-            !message.contains("different name"),
-            "suggesting a rename would send the caller down a dead end: {message}"
+            message.contains("different name"),
+            "the collision case needs a rename: {message}"
+        );
+        assert!(
+            message.contains("ActorConfig"),
+            "the config-reuse case needs a fresh config: {message}"
         );
     }
 
     #[test]
-    fn two_children_built_from_the_same_name_never_share_an_identifier() {
-        // The fact DuplicateChild's wording rests on: Ern roots carry a
-        // generated UUIDv7 suffix, so a duplicate can only come from reusing
-        // one configuration, never from reusing a name.
+    fn two_root_actors_built_from_the_same_name_never_share_an_identifier() {
+        // Half of what DuplicateChild's wording rests on: `Ern::with_root`
+        // carries a generated UUIDv7 suffix, so actors created through
+        // `ActorConfig::new`/`new_with_name` cannot collide by name. The other
+        // half — that blueprint children *can* — is pinned in actor_config.rs.
         let first = Ern::with_root("worker").expect("'worker' is a valid Ern root");
         let second = Ern::with_root("worker").expect("'worker' is a valid Ern root");
 
@@ -252,6 +280,17 @@ mod tests {
     }
 
     #[test]
+    fn release_lost_message_says_the_child_is_still_supervised() {
+        let child = child();
+        let message = SupervisionError::ReleaseLost {
+            child: child.clone(),
+        }
+        .to_string();
+        assert!(message.contains(&child.to_string()), "{message}");
+        assert!(message.contains("not removed"), "{message}");
+    }
+
+    #[test]
     fn registration_lost_message_warns_the_child_may_be_orphaned() {
         let child = child();
         let message = SupervisionError::RegistrationLost {
@@ -289,7 +328,10 @@ mod tests {
                 child: child.clone(),
                 waited: Duration::from_secs(1),
             },
-            SupervisionError::RegistrationLost { child },
+            SupervisionError::RegistrationLost {
+                child: child.clone(),
+            },
+            SupervisionError::ReleaseLost { child },
         ];
         for error in &without_source {
             assert!(error.source().is_none(), "{error}");

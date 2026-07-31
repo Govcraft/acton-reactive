@@ -195,15 +195,6 @@ impl SupervisedChild {
     /// Creates a reference to a child from the receiving end of its status
     /// channel.
     ///
-    /// Scoped to non-test builds: the blueprint path that hands these out lands
-    /// in a later change, but the unit tests below already build them.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "issue #7: the blueprint path that hands out SupervisedChild lands in a later change"
-        )
-    )]
     pub(crate) const fn new(
         ern: Ern,
         supervisor: Ern,

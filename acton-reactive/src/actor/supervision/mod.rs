@@ -40,12 +40,22 @@ pub use registry::{BackoffDelay, ChildIndex, RestartGeneration};
 // nothing outside `registry` names them until registration lands, and an unused
 // re-export is a warning rather than a placeholder.
 pub use registry::{NewSlot, SupervisionRegistry};
-pub use spawner::ChildSpawner;
+pub use spawner::{ChildBlueprint, ChildSpawner, TypedSpawner};
 pub use status::{SupervisedChild, SupervisionState, SupervisionStatus};
 pub use strategy::{SupervisionDecision, SupervisionStrategy};
 
 /// Contains the supervising actor's side of registration.
+///
+/// `supervise_with` and `unsupervise` on `ManagedActor` have no caller yet: they
+/// need `&mut self` held across an `await`, which only the message loop can
+/// provide, and the loop does not drive them until the restart engine lands.
+#[expect(
+    dead_code,
+    reason = "issue #7: the message loop drives these once the restart engine lands"
+)]
 mod engine;
+
+pub use engine::status_channel;
 
 /// Contains the errors returned by the supervision subsystem.
 mod error;
@@ -90,14 +100,6 @@ mod plan;
 mod registry;
 
 /// Contains the recipe a supervisor uses to recreate a child.
-///
-/// Unconditional rather than `cfg(not(test))`: `spawn` has no caller in either
-/// build, because calling it would mean actually starting an actor, which the
-/// registry's runtime-free tests deliberately avoid.
-#[expect(
-    dead_code,
-    reason = "issue #7: the blueprint path that calls this trait lands in a later change"
-)]
 mod spawner;
 
 /// Contains a supervisor's published view of one supervised child.

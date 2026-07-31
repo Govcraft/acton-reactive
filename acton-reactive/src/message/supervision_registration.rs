@@ -92,4 +92,17 @@ pub struct UnregisterSupervisedChild {
     /// may not be supervised at all — and the caller has no other way to find
     /// out.
     pub outcome: RegistrationOutcome,
+
+    /// Proof that this message still exists.
+    ///
+    /// Carried solely so the caller can tell that it *stopped* existing. A
+    /// supervisor that ends its task with this message still queued drops the
+    /// envelope, dropping this sender with it, and the caller's receiver
+    /// observes the closure.
+    ///
+    /// Without it the caller would wait forever: it holds the outcome cell
+    /// alive through its own `Arc`, and a `SetOnce` has no notion of a sender
+    /// going away. Unlike registration, this message creates no other channel
+    /// whose lifetime tracks the supervisor's.
+    pub liveness: watch::Sender<()>,
 }

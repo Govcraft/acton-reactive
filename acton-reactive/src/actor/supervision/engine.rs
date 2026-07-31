@@ -31,12 +31,36 @@ use std::fmt::Debug;
 
 use tracing::{trace, warn};
 
-use super::{NewSlot, SupervisionError, SupervisionRegistry};
+use std::sync::Arc;
+
+use tokio::sync::watch;
+
+use super::{
+    ChildBlueprint, ChildSpawner, NewSlot, SupervisedChild, SupervisionError, SupervisionRegistry,
+    SupervisionState, SupervisionStatus, TypedSpawner,
+};
 use crate::actor::managed_actor::started::Started;
-use crate::actor::{ManagedActor, RestartLimiter};
+use crate::actor::{ActorConfig, Idle, ManagedActor, RestartGeneration, RestartLimiter};
 use crate::common::ActorHandle;
 use crate::message::{RegisterSupervisedChild, UnregisterSupervisedChild};
 use crate::traits::ActorHandleInterface;
+
+/// Builds the status channel a supervised child publishes through.
+pub fn status_channel(
+    child: &acton_ern::Ern,
+    handle: Option<ActorHandle>,
+) -> (
+    watch::Sender<SupervisionStatus>,
+    watch::Receiver<SupervisionStatus>,
+) {
+    watch::channel(SupervisionStatus::new(
+        child.clone(),
+        handle,
+        RestartGeneration::FIRST,
+        SupervisionState::Starting,
+        0,
+    ))
+}
 
 impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// Records a child this actor should look after.
@@ -83,6 +107,13 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// The child is not stopped here. Releasing a child and stopping it are
     /// separate decisions, and only the caller knows which it wants.
     pub(crate) fn unregister_supervised_child(&mut self, message: &UnregisterSupervisedChild) {
+        if message.liveness.receiver_count() == 0 {
+            trace!(
+                "Releasing child {} with no caller waiting on the result",
+                message.child
+            );
+        }
+
         let outcome = match self.supervision.retire(&message.child) {
             Ok(handle) => {
                 trace!(
@@ -162,5 +193,84 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// This actor's record of its children.
     pub(crate) const fn supervision_mut(&mut self) -> &mut SupervisionRegistry {
         &mut self.supervision
+    }
+
+    /// Starts a child under this actor's supervision, recording it directly.
+    ///
+    /// Records **synchronously** into this actor's own registry: no message, no
+    /// round trip, and nothing to wait on.
+    ///
+    /// # Not reachable from user code
+    ///
+    /// Crate-internal on purpose. Calling this needs `&mut self` held across an
+    /// `await`, and no user-facing context provides that. A `mutate_on` handler
+    /// returns a `'static` future that cannot borrow the actor, and all four
+    /// lifecycle hooks take `&ManagedActor<Started, _>` rather than `&mut`. Only
+    /// the framework's own message loop qualifies.
+    ///
+    /// It is kept because the restart engine will drive it from inside that
+    /// loop. Making it public would ship a method nothing could call.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::DuplicateChild`] if this actor already supervises a
+    /// child with that identifier. The freshly started child is stopped before
+    /// returning, so a rejected registration leaves nothing running.
+    pub(crate) async fn supervise_with<C>(
+        &mut self,
+        config: ActorConfig,
+        configure: impl Fn(&mut ManagedActor<Idle, C>) + Send + Sync + 'static,
+    ) -> Result<SupervisedChild, SupervisionError>
+    where
+        C: Default + Send + Debug + 'static,
+    {
+        let blueprint: Arc<ChildBlueprint<C>> = Arc::new(configure);
+        let spawner: Arc<dyn ChildSpawner> =
+            Arc::new(TypedSpawner::new(config.clone(), blueprint));
+
+        let child_id = config.id();
+        let restart_policy = spawner.restart_policy();
+        let handle = spawner.spawn(self.runtime.clone(), self.handle.clone()).await?;
+        let (status, receiver) = status_channel(&child_id, Some(handle.clone()));
+
+        let slot = NewSlot {
+            ern: child_id.clone(),
+            handle: handle.clone(),
+            spawner: Some(spawner),
+            restart_policy,
+            limiter: RestartLimiter::default(),
+            status,
+        };
+
+        // The borrow of the registry ends with this statement, so the stop below
+        // does not hold it across an await.
+        let registered = self.supervision.register(slot);
+        if let Err(error) = registered {
+            // Nothing is supervising this child, so it must not be left running.
+            let _ = handle.stop().await;
+            return Err(error);
+        }
+
+        Ok(SupervisedChild::new(child_id, self.id.clone(), receiver))
+    }
+
+    /// Stops looking after a child, recording it directly. The child is stopped.
+    ///
+    /// Crate-internal for the same reason as
+    /// [`supervise_with`](Self::supervise_with).
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::UnknownChild`] if this actor does not supervise it.
+    pub(crate) async fn unsupervise(&mut self, child: &acton_ern::Ern) -> Result<(), SupervisionError> {
+        let retired = self.supervision.retire(child);
+        match retired {
+            Ok(Some(handle)) => {
+                let _ = handle.stop().await;
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }

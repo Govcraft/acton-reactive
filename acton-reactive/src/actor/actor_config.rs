@@ -182,9 +182,56 @@ impl ActorConfig {
         Self::new(Ern::with_root(name.into())?, None, None)
     }
 
-    /// Returns a clone of the actor's unique identifier (`Ern`).
+    /// Creates a configuration for a child whose identity is derived from its
+    /// parent and its name.
+    ///
+    /// The child's `Ern` is `parent.add_part(name)`, which yields the same
+    /// identifier every time for a given parent and name. That is what lets a
+    /// supervisor recreate a child without its identity drifting, and what makes
+    /// two children of the same parent sharing a name a genuine collision.
+    ///
+    /// This is deliberately **not** how [`new`](Self::new) or
+    /// [`new_with_name`](Self::new_with_name) build identifiers. Those mint a
+    /// fresh root carrying a generated `UUIDv7` suffix, so repeated calls with
+    /// the same name produce different actors. Both keep that behavior
+    /// unchanged; only supervised children built from a blueprint use this.
+    ///
+    /// # Scope of the guarantee
+    ///
+    /// Deterministic **relative to a given parent within one process run**. The
+    /// parent's own root still carries a generated suffix, so the full
+    /// identifier is not reproducible across processes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `name` is not a valid identifier segment.
+    pub fn for_supervised_child(
+        name: impl Into<String>,
+        parent: ParentRef,
+        broker: Option<BrokerRef>,
+    ) -> anyhow::Result<Self> {
+        // The parent's `Ern` is used directly rather than round-tripped through
+        // its string form, which would not reproduce the same identifier.
+        let id = parent.id().add_part(name.into())?;
+        Ok(Self {
+            id,
+            broker,
+            parent: Some(parent),
+            inbox_capacity: None,
+            restart_policy: RestartPolicy::default(),
+            supervision_strategy: SupervisionStrategy::default(),
+            restart_limiter_config: None,
+        })
+    }
+
+    /// Returns a clone of the actor's resolved unique identifier (`Ern`).
+    ///
+    /// Resolved means final: for a child, this is the full hierarchical
+    /// identifier the actor will be created with, not the base name it was
+    /// built from.
     #[inline]
-    pub(crate) fn id(&self) -> Ern {
+    #[must_use]
+    pub fn id(&self) -> Ern {
         self.id.clone()
     }
 
@@ -326,5 +373,80 @@ impl ActorConfig {
     #[allow(dead_code)] // Reserved for the supervision integration tracked in issue #7
     pub(crate) const fn restart_limiter_config(&self) -> Option<&RestartLimiterConfig> {
         self.restart_limiter_config.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod supervised_child_identity_tests {
+    use super::*;
+    use crate::common::ActorHandle;
+
+    fn parent_handle() -> ActorHandle {
+        let parent_ern = Ern::with_root("pool").expect("'pool' is a valid Ern root");
+        let (outbox, _inbox) = tokio::sync::mpsc::channel(8);
+        ActorHandle::new(parent_ern, outbox)
+    }
+
+    #[test]
+    fn the_same_parent_and_name_always_yield_the_same_identifier() {
+        // What makes a blueprint child's identity survive a restart, and what
+        // makes a name collision under one parent a real collision.
+        let parent = parent_handle();
+
+        let first = ActorConfig::for_supervised_child("worker", parent.clone(), None)
+            .expect("'worker' is a valid name");
+        let second = ActorConfig::for_supervised_child("worker", parent, None)
+            .expect("'worker' is a valid name");
+
+        assert_eq!(first.id(), second.id());
+    }
+
+    #[test]
+    fn different_names_under_one_parent_stay_distinct() {
+        let parent = parent_handle();
+
+        let first = ActorConfig::for_supervised_child("reader", parent.clone(), None)
+            .expect("valid name");
+        let second = ActorConfig::for_supervised_child("writer", parent, None)
+            .expect("valid name");
+
+        assert_ne!(first.id(), second.id());
+    }
+
+    #[test]
+    fn the_same_name_under_different_parents_stays_distinct() {
+        let first = ActorConfig::for_supervised_child("worker", parent_handle(), None)
+            .expect("valid name");
+        let second = ActorConfig::for_supervised_child("worker", parent_handle(), None)
+            .expect("valid name");
+
+        assert_ne!(
+            first.id(),
+            second.id(),
+            "each parent has its own generated root"
+        );
+    }
+
+    #[test]
+    fn the_child_identifier_reads_as_the_parent_then_the_name() {
+        let parent = parent_handle();
+        let parent_id = parent.id();
+
+        let config = ActorConfig::for_supervised_child("worker", parent, None)
+            .expect("valid name");
+        let child_id = config.id().to_string();
+
+        assert!(child_id.starts_with(&parent_id.to_string()), "{child_id}");
+        assert!(child_id.ends_with("worker"), "{child_id}");
+    }
+
+    #[test]
+    fn the_ordinary_constructors_keep_minting_fresh_identifiers() {
+        // Guards the narrow scope of the change: only the blueprint path is
+        // deterministic.
+        let first = ActorConfig::new_with_name("worker").expect("valid name");
+        let second = ActorConfig::new_with_name("worker").expect("valid name");
+
+        assert_ne!(first.id(), second.id());
     }
 }

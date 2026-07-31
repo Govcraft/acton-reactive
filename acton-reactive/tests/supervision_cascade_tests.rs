@@ -144,8 +144,10 @@ async fn supervising_through_one_clone_is_invisible_to_another() -> anyhow::Resu
 /// only after the registration message has been processed.
 ///
 /// The case where the parent is stopped before it drains that message is *not*
-/// covered here, because it is not currently fixed — see the module note on
-/// `ManagedActor::supervise_with`.
+/// covered here, because it is still not fixed. `ManagedActor::supervise_with`
+/// was meant to be the answer — it records synchronously — but it is
+/// `async fn(&mut self)` and a handler's asynchronous half is a `'static`
+/// future that cannot borrow the actor, so no user handler can call it.
 #[acton_test]
 async fn a_child_adopted_in_a_handler_is_stopped_with_its_parent() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
