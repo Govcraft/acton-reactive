@@ -143,11 +143,8 @@ async fn supervising_through_one_clone_is_invisible_to_another() -> anyhow::Resu
 /// own `children` map. So this child is reachable only through the registry, and
 /// only after the registration message has been processed.
 ///
-/// The case where the parent is stopped before it drains that message is *not*
-/// covered here, because it is still not fixed. `ManagedActor::supervise_with`
-/// was meant to be the answer — it records synchronously — but it is
-/// `async fn(&mut self)` and a handler's asynchronous half is a `'static`
-/// future that cannot borrow the actor, so no user handler can call it.
+/// A handler that wants the child recorded without a round trip has
+/// `ManagedActor::supervise_deferred` instead — see the test below.
 #[acton_test]
 async fn a_child_adopted_in_a_handler_is_stopped_with_its_parent() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
@@ -178,6 +175,53 @@ async fn a_child_adopted_in_a_handler_is_stopped_with_its_parent() -> anyhow::Re
     assert!(
         wait_for_flag(&stopped).await,
         "child adopted in a handler outlived its parent"
+    );
+
+    Ok(())
+}
+
+/// A child a handler supervised through `supervise_deferred` is stopped with
+/// its parent.
+///
+/// Only the registry can see this one. The child is created by the parent's own
+/// message loop rather than by a `supervise()` call, so no handle's `children`
+/// map ever hears about it — a cascade that read only that map would orphan it.
+#[acton_test]
+async fn a_child_supervised_in_a_handler_is_stopped_with_its_parent() -> anyhow::Result<()> {
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
+
+    let stopped = Arc::new(AtomicBool::new(false));
+    let blueprint = {
+        let stopped = Arc::clone(&stopped);
+        move |child: &mut ManagedActor<Idle, Child>| {
+            let stopped = Arc::clone(&stopped);
+            child.after_stop(move |_actor| {
+                let stopped = Arc::clone(&stopped);
+                async move {
+                    stopped.store(true, Ordering::SeqCst);
+                }
+            });
+        }
+    };
+
+    let mut parent_builder = runtime.new_actor::<Parent>();
+    parent_builder.mutate_on::<AdoptChild>(move |actor, _envelope| {
+        let config = ActorConfig::for_supervised_child("worker", actor.handle().clone(), None)
+            .expect("a name plus a live parent is a valid child configuration");
+        let _ = actor.supervise_deferred(config, blueprint.clone());
+        Reply::ready()
+    });
+    let parent = parent_builder.start().await;
+
+    parent.send(AdoptChild).await;
+    // Let the handler run and the parent's loop create what it queued.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    parent.stop().await?;
+
+    assert!(
+        wait_for_flag(&stopped).await,
+        "child supervised in a handler outlived its parent"
     );
 
     Ok(())

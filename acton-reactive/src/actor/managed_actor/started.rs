@@ -694,6 +694,15 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let termination_reason;
 
         loop {
+            // Children recorded by a handler are created here, at the top of the
+            // turn, before this actor waits for anything else. Deliberately not
+            // inside the message arm: a handler's registration must be acted on
+            // even if no further message ever arrives, and both supervision arms
+            // below `continue` back to here rather than falling through.
+            if self.supervision.has_pending_starts() {
+                self.start_pending_children().await;
+            }
+
             tokio::select! {
                 () = &mut cancel => {
                     trace!("Forceful cancellation triggered for actor: {}", self.id());
@@ -787,6 +796,12 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // a restart on a normal termination, so without this a cascading
         // shutdown would read as a wave of failures worth restarting.
         self.supervision_mut().begin_shutdown();
+
+        // Anything still queued was never created, so there is nothing to stop
+        // — but a caller is waiting on each one's status channel for a start
+        // this actor can no longer perform. Tell them before going any further,
+        // and drop the blueprints they were holding.
+        self.cancel_pending_children();
 
         // Stop accepting new messages on every termination path. The graceful
         // path has already closed the inbox; closing again is a no-op, but the

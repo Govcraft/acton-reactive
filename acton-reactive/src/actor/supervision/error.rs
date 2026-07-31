@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use acton_ern::Ern;
 
+use super::SupervisionState;
 use crate::actor::RestartLimitExceeded;
 
 /// Errors produced by the supervision subsystem.
@@ -101,6 +102,17 @@ pub enum SupervisionError {
         child: Ern,
     },
 
+    /// The child settled in a state it will not leave, without ever running.
+    ///
+    /// Returned to a caller waiting for a child to come up when the supervisor
+    /// published a terminal state instead and recorded no more specific reason.
+    ChildNotRunning {
+        /// The child that was waited on.
+        child: Ern,
+        /// The state it settled in.
+        state: SupervisionState,
+    },
+
     /// The supervising actor's task ended before it recorded the registration.
     ///
     /// Distinct from [`SupervisionError::SupervisorStopped`]: the supervisor
@@ -137,6 +149,10 @@ impl fmt::Display for SupervisionError {
                 f,
                 "child '{child}' did not stop within {waited:?}; the supervisor gave up waiting"
             ),
+            Self::ChildNotRunning { child, state } => write!(
+                f,
+                "child '{child}' is {state} and will not reach running; its supervisor recorded no reason"
+            ),
             Self::RegistrationLost { child } => write!(
                 f,
                 "supervisor stopped before recording child '{child}'; the child may be running unsupervised and should be stopped"
@@ -158,6 +174,7 @@ impl Error for SupervisionError {
             | Self::ConfigRejected { .. }
             | Self::SupervisorStopped { .. }
             | Self::ChildStopTimeout { .. }
+            | Self::ChildNotRunning { .. }
             | Self::RegistrationLost { .. }
             | Self::ReleaseLost { .. } => None,
         }

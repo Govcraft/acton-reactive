@@ -246,13 +246,17 @@ impl ActorHandle {
     /// handler. Registration is a message, and your actor cannot process it
     /// until your handler returns, so the wait would never end.
     ///
-    /// **Supervising from inside your own handler is not currently supported.**
-    /// There is no workaround at this level. Two things do work:
+    /// To supervise from inside your own handler, use
+    /// [`ManagedActor::supervise_deferred`] on the actor the handler is given.
+    /// It records the child synchronously and leaves the start to the message
+    /// loop, so there is no acknowledgement to wait for. Two other things work:
     ///
     /// - Start children before the supervisor begins handling messages — build
     ///   and supervise them during setup, ahead of `start()`.
     /// - Supervise through a handle held outside the handler, from a task or
     ///   `main` that is not the supervisor's own message loop.
+    ///
+    /// [`ManagedActor::supervise_deferred`]: crate::actor::ManagedActor::supervise_deferred
     ///
     /// # Why the `runtime` argument
     ///
@@ -329,7 +333,8 @@ impl ActorHandle {
     ///
     /// Carries the same deadlock caveat as
     /// [`supervise_with`](Self::supervise_with): do not call it on your own
-    /// handle from inside your own handler.
+    /// handle from inside your own handler. Unlike registration, releasing has
+    /// no synchronous counterpart yet — the restart engine lands one.
     ///
     /// # Errors
     ///

@@ -36,9 +36,10 @@ pub use error::SupervisionError;
 pub use escalation::Escalation;
 pub use events::{ChildRestarted, ChildSupervised, SupervisionEscalated};
 pub use registry::{BackoffDelay, ChildIndex, RestartGeneration};
-// `ChildSlot`, `NewSlot` and `SlotState` are deliberately not re-exported yet:
-// nothing outside `registry` names them until registration lands, and an unused
-// re-export is a warning rather than a placeholder.
+// `ChildSlot` and `SlotState` are deliberately not re-exported yet: nothing
+// outside `registry` names them by that path, and an unused re-export is a
+// warning rather than a placeholder. `engine` reaches `ChildSlot` and
+// `PendingSlot` through `super::registry::` directly.
 pub use registry::{NewSlot, SupervisionRegistry};
 pub use spawner::{ChildBlueprint, ChildSpawner, TypedSpawner};
 pub use status::{SupervisedChild, SupervisionState, SupervisionStatus};
@@ -49,6 +50,8 @@ pub use strategy::{SupervisionDecision, SupervisionStrategy};
 /// `supervise_with` and `unsupervise` on `ManagedActor` have no caller yet: they
 /// need `&mut self` held across an `await`, which only the message loop can
 /// provide, and the loop does not drive them until the restart engine lands.
+/// `supervise_deferred` is the user-reachable path in the meantime — it hands
+/// the message loop the `await` instead of needing one itself.
 #[expect(
     dead_code,
     reason = "issue #7: the message loop drives these once the restart engine lands"

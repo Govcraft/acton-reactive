@@ -106,6 +106,7 @@ pub struct SupervisionStatus {
     generation: RestartGeneration,
     state: SupervisionState,
     restarts_in_window: usize,
+    failure: Option<SupervisionError>,
 }
 
 impl SupervisionStatus {
@@ -127,7 +128,20 @@ impl SupervisionStatus {
             generation,
             state,
             restarts_in_window,
+            failure: None,
         }
+    }
+
+    /// Returns this snapshot with a reason attached.
+    ///
+    /// A supervisor attaches one when it knows why a child is not running —
+    /// a start that failed, or a supervisor that stopped before it could run
+    /// one. Without it, a terminal state says only that the child is not
+    /// coming back, which is rarely enough to act on.
+    #[must_use]
+    pub fn with_failure(mut self, failure: SupervisionError) -> Self {
+        self.failure = Some(failure);
+        self
     }
 
     /// The identifier of the supervised child.
@@ -162,6 +176,16 @@ impl SupervisionStatus {
     #[must_use]
     pub const fn restarts_in_window(&self) -> usize {
         self.restarts_in_window
+    }
+
+    /// Why the child is not running, when the supervisor knows.
+    ///
+    /// Present only alongside a state the child did not reach on its own —
+    /// a failed start, or a supervisor that stopped with the start still
+    /// queued. A healthy child carries no failure.
+    #[must_use]
+    pub const fn failure(&self) -> Option<&SupervisionError> {
+        self.failure.as_ref()
     }
 }
 
@@ -260,53 +284,72 @@ impl SupervisedChild {
 
     /// Waits until the child is running, returning that incarnation's handle.
     ///
+    /// Stops early at a terminal state. A child whose start failed, or whose
+    /// supervisor stopped before starting it, will never reach `Running`, and
+    /// waiting for it to would be waiting forever.
+    ///
     /// # Errors
     ///
-    /// [`SupervisionError::SupervisorStopped`] if the supervising actor's task
-    /// ends first.
+    /// - Whatever the supervisor published as the reason the child is not
+    ///   running, when it published one.
+    /// - [`SupervisionError::ChildNotRunning`] if it reached a terminal state
+    ///   with no reason recorded.
+    /// - [`SupervisionError::SupervisorStopped`] if the supervising actor's task
+    ///   ends first.
     pub async fn wait_running(&mut self) -> Result<ActorHandle, SupervisionError> {
         let status = self
             .wait_for(|status| {
-                status.state() == SupervisionState::Running && status.handle().is_some()
+                (status.state() == SupervisionState::Running && status.handle().is_some())
+                    || status.state().is_terminal()
             })
             .await?;
 
-        status
-            .handle()
-            .cloned()
-            .ok_or_else(|| SupervisionError::SupervisorStopped {
-                supervisor: self.supervisor.clone(),
-            })
+        self.running_handle(&status)
     }
 
     /// Waits until the given incarnation of the child is running.
     ///
     /// Accepts any generation at or beyond `generation`, so a caller that asks
     /// for one restart does not hang if the child has already been restarted
-    /// twice by the time it asks.
+    /// twice by the time it asks. Stops early at a terminal state, for the same
+    /// reason [`wait_running`](Self::wait_running) does.
     ///
     /// # Errors
     ///
-    /// [`SupervisionError::SupervisorStopped`] if the supervising actor's task
-    /// ends first.
+    /// The same three as [`wait_running`](Self::wait_running).
     pub async fn wait_generation(
         &mut self,
         generation: RestartGeneration,
     ) -> Result<ActorHandle, SupervisionError> {
         let status = self
             .wait_for(|status| {
-                status.generation() >= generation
+                (status.generation() >= generation
                     && status.state() == SupervisionState::Running
-                    && status.handle().is_some()
+                    && status.handle().is_some())
+                    || status.state().is_terminal()
             })
             .await?;
 
-        status
-            .handle()
-            .cloned()
-            .ok_or_else(|| SupervisionError::SupervisorStopped {
-                supervisor: self.supervisor.clone(),
-            })
+        self.running_handle(&status)
+    }
+
+    /// The handle from a status that reports a running child, or why not.
+    fn running_handle(
+        &self,
+        status: &SupervisionStatus,
+    ) -> Result<ActorHandle, SupervisionError> {
+        if status.state() == SupervisionState::Running {
+            if let Some(handle) = status.handle() {
+                return Ok(handle.clone());
+            }
+        }
+
+        Err(status.failure().cloned().unwrap_or_else(|| {
+            SupervisionError::ChildNotRunning {
+                child: self.ern.clone(),
+                state: status.state(),
+            }
+        }))
     }
 }
 
@@ -501,6 +544,103 @@ mod tests {
         .await
         .expect("wait_generation must not hang")
         .expect("the supervisor published the requested generation");
+
+        assert_eq!(handle.id(), child);
+        publisher.await.expect("publisher task completes");
+    }
+
+    #[tokio::test]
+    async fn a_start_that_failed_ends_the_wait_with_the_reason_it_failed() {
+        // **Fails by hanging** if the wait only looks for Running. A child whose
+        // start failed never reaches it, and the supervisor is still alive, so
+        // the channel never closes either. The timeout is the assertion.
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+        let reason = SupervisionError::ConfigRejected {
+            child: child.clone(),
+            reason: "the spawner said no".to_string(),
+        };
+        sender.send_replace(
+            SupervisionStatus::new(
+                child.clone(),
+                None,
+                RestartGeneration::FIRST,
+                SupervisionState::Retired,
+                0,
+            )
+            .with_failure(reason.clone()),
+        );
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reference.wait_running(),
+        )
+        .await
+        .expect("a terminal state must end the wait")
+        .expect_err("the child never came up");
+
+        assert_eq!(error, reason);
+    }
+
+    #[tokio::test]
+    async fn a_terminal_state_with_no_reason_still_ends_the_wait() {
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+        sender.send_replace(SupervisionStatus::new(
+            child.clone(),
+            None,
+            RestartGeneration::FIRST,
+            SupervisionState::Down,
+            0,
+        ));
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reference.wait_generation(RestartGeneration::FIRST),
+        )
+        .await
+        .expect("a terminal state must end the wait")
+        .expect_err("the child is down");
+
+        assert_eq!(
+            error,
+            SupervisionError::ChildNotRunning {
+                child,
+                state: SupervisionState::Down,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restart_in_progress_is_not_a_reason_to_stop_waiting() {
+        // Only terminal states end the wait. RestartPending and Restarting both
+        // lead back to Running, so a caller must wait through them.
+        let child = child();
+        let (mut reference, sender) = supervised(&child);
+        sender.send_replace(SupervisionStatus::new(
+            child.clone(),
+            None,
+            RestartGeneration::FIRST,
+            SupervisionState::RestartPending,
+            1,
+        ));
+
+        let publisher = {
+            let child = child.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                sender.send_replace(running(&child, RestartGeneration::FIRST));
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            })
+        };
+
+        let handle = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reference.wait_running(),
+        )
+        .await
+        .expect("the wait must not hang")
+        .expect("the child came back");
 
         assert_eq!(handle.id(), child);
         publisher.await.expect("publisher task completes");

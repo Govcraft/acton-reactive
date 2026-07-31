@@ -26,7 +26,7 @@
 //! in its supervisor's start order ([`ChildIndex`]), and how long to wait before
 //! trying again ([`BackoffDelay`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -161,6 +161,14 @@ impl fmt::Display for BackoffDelay {
 /// callers do not, in particular whether a stop was the supervisor's own doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotState {
+    /// Recorded, not yet created.
+    ///
+    /// The supervisor accepted the child — its name is taken and its blueprint
+    /// is held — but has not yet run the spawner, so no incarnation exists and
+    /// the slot has no handle. Only the supervisor's own message loop moves a
+    /// slot out of this state, on its next turn.
+    Pending,
+
     /// Created, not yet confirmed running.
     Starting,
 
@@ -206,7 +214,10 @@ impl SlotState {
     #[must_use]
     pub const fn published(self) -> SupervisionState {
         match self {
-            Self::Starting => SupervisionState::Starting,
+            // A pending child is indistinguishable from a starting one to a
+            // caller: both mean "on its way up, no handle yet". The difference
+            // is only whether the supervisor has run the spawner.
+            Self::Pending | Self::Starting => SupervisionState::Starting,
             Self::Running => SupervisionState::Running,
             Self::AwaitingBackoff => SupervisionState::RestartPending,
             Self::Restarting | Self::ExpectedStop { .. } => SupervisionState::Restarting,
@@ -219,7 +230,9 @@ impl SlotState {
     /// Whether the child is believed to be up and reachable.
     ///
     /// `ExpectedStop` is excluded: the supervisor has already sent it a stop, so
-    /// a group restart must not send it a second one.
+    /// a group restart must not send it a second one. `Pending` is excluded for
+    /// the stronger reason that nothing has been created yet — there is no
+    /// incarnation to reach.
     #[must_use]
     pub const fn is_running(self) -> bool {
         matches!(self, Self::Starting | Self::Running)
@@ -229,7 +242,8 @@ impl SlotState {
     ///
     /// `false` for a stop the supervisor asked for, and for the states that mean
     /// a notice has already been acted on — which is how a duplicate notice from
-    /// a previous incarnation is discarded.
+    /// a previous incarnation is discarded. Also `false` for `Pending`: a slot
+    /// with no incarnation cannot have produced the notice.
     #[must_use]
     pub const fn accepts_termination(self) -> bool {
         matches!(self, Self::Starting | Self::Running)
@@ -239,6 +253,7 @@ impl SlotState {
 impl fmt::Display for SlotState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Pending => f.write_str("pending"),
             Self::Starting => f.write_str("starting"),
             Self::Running => f.write_str("running"),
             Self::AwaitingBackoff => f.write_str("awaiting_backoff"),
@@ -284,6 +299,30 @@ pub struct NewSlot {
     pub status: watch::Sender<SupervisionStatus>,
 }
 
+/// Everything needed to record a child the supervisor has not created yet.
+///
+/// Distinct from [`NewSlot`] in the two ways that matter: there is no handle,
+/// because nothing has been started, and the spawner is required rather than
+/// optional, because running the spawner is the only way this child can ever
+/// come up.
+#[derive(Debug)]
+pub struct PendingSlot {
+    /// The child's identifier, already resolved from its configuration.
+    pub ern: Ern,
+
+    /// How to create the child, which the supervisor will do on its next turn.
+    pub spawner: Arc<dyn ChildSpawner>,
+
+    /// Whether this child warrants a restart, and when.
+    pub restart_policy: RestartPolicy,
+
+    /// This child's own restart allowance and backoff schedule.
+    pub limiter: RestartLimiter,
+
+    /// The publishing end of this child's status channel.
+    pub status: watch::Sender<SupervisionStatus>,
+}
+
 /// One supervised child, as recorded by its supervisor.
 #[derive(Debug)]
 pub struct ChildSlot {
@@ -297,6 +336,7 @@ pub struct ChildSlot {
     state: SlotState,
     last_restart: Option<Instant>,
     status: watch::Sender<SupervisionStatus>,
+    failure: Option<SupervisionError>,
 }
 
 impl ChildSlot {
@@ -338,6 +378,25 @@ impl ChildSlot {
     /// Whether the supervisor holds a recipe for recreating this child.
     pub const fn is_restartable(&self) -> bool {
         self.spawner.is_some()
+    }
+
+    /// Whether the supervisor has recorded this child but not yet created it.
+    pub const fn is_pending(&self) -> bool {
+        matches!(self.state, SlotState::Pending)
+    }
+
+    /// Why this child is not running, when the supervisor knows a reason.
+    ///
+    /// Set when a start or restart fails, so that a caller waiting on the
+    /// status channel learns what went wrong instead of only that the child
+    /// will not be coming.
+    pub const fn failure(&self) -> Option<&SupervisionError> {
+        self.failure.as_ref()
+    }
+
+    /// Records why this child is not running, without publishing it.
+    pub fn set_failure(&mut self, failure: SupervisionError) {
+        self.failure = Some(failure);
     }
 
     /// The recipe for recreating this child, if there is one.
@@ -383,19 +442,25 @@ impl ChildSlot {
     /// compares by `Ern` alone, so a whole-struct comparison would report "no
     /// change" across a handle swap. Only the fields that actually discriminate
     /// are compared, so a state the caller cannot distinguish does not wake it.
+    /// The recorded failure is one of them: learning *why* a child is not
+    /// running is news even when its state is unchanged.
     pub fn publish(&self) -> bool {
-        let next = SupervisionStatus::new(
+        let mut next = SupervisionStatus::new(
             self.ern.clone(),
             self.handle.clone(),
             self.generation,
             self.state.published(),
             self.limiter.restarts_in_window(),
         );
+        if let Some(failure) = self.failure.clone() {
+            next = next.with_failure(failure);
+        }
 
         self.status.send_if_modified(|current| {
             let unchanged = current.generation() == next.generation()
                 && current.state() == next.state()
-                && current.restarts_in_window() == next.restarts_in_window();
+                && current.restarts_in_window() == next.restarts_in_window()
+                && current.failure() == next.failure();
             if unchanged {
                 return false;
             }
@@ -435,6 +500,17 @@ pub struct SupervisionRegistry {
     /// their identifier to be supervised again.
     by_ern: HashMap<Ern, ChildIndex>,
 
+    /// Children recorded but not yet created, in the order they were recorded.
+    ///
+    /// Holds positions rather than spawners: the slot already owns the spawner,
+    /// and [`ChildSlot::spawner`] hands out an owned [`Arc`], so a second copy
+    /// here would only be a second thing to keep in step.
+    ///
+    /// Drained by the supervising actor's message loop. An entry whose slot has
+    /// moved on — retired before its turn came — is discarded rather than
+    /// started, which is why the queue is advisory and the slot is the truth.
+    pending_starts: VecDeque<ChildIndex>,
+
     /// Set before children are terminated, to suppress every restart decision.
     shutting_down: bool,
 }
@@ -467,6 +543,7 @@ impl SupervisionRegistry {
             state: SlotState::Running,
             last_restart: None,
             status: new.status,
+            failure: None,
         };
 
         slot.publish();
@@ -474,6 +551,117 @@ impl SupervisionRegistry {
         self.by_ern.insert(new.ern, index);
 
         Ok(index)
+    }
+
+    /// Records a child the supervisor has not created yet, and queues its start.
+    ///
+    /// Takes the child's name and its blueprint now so that the collision is
+    /// found now: the caller learns about a duplicate at the call site, before
+    /// anything has been built. The slot is recorded [`SlotState::Pending`] with
+    /// no handle, and its position is queued for the supervisor's next turn.
+    ///
+    /// # Errors
+    ///
+    /// [`SupervisionError::DuplicateChild`] if this supervisor already
+    /// supervises that identifier. Nothing is recorded and nothing is queued.
+    pub fn register_pending(&mut self, new: PendingSlot) -> Result<ChildIndex, SupervisionError> {
+        if self.by_ern.contains_key(&new.ern) {
+            return Err(SupervisionError::DuplicateChild { child: new.ern });
+        }
+
+        let index = ChildIndex::new(self.slots.len());
+        let slot = ChildSlot {
+            ern: new.ern.clone(),
+            index,
+            handle: None,
+            spawner: Some(new.spawner),
+            restart_policy: new.restart_policy,
+            limiter: new.limiter,
+            generation: RestartGeneration::FIRST,
+            state: SlotState::Pending,
+            last_restart: None,
+            status: new.status,
+            failure: None,
+        };
+
+        slot.publish();
+        self.slots.push(slot);
+        self.by_ern.insert(new.ern, index);
+        self.pending_starts.push_back(index);
+
+        Ok(index)
+    }
+
+    /// Whether any recorded child is still waiting to be created.
+    ///
+    /// Read once per turn of the supervisor's message loop, so it is a plain
+    /// emptiness check rather than anything the loop pays for.
+    pub fn has_pending_starts(&self) -> bool {
+        !self.pending_starts.is_empty()
+    }
+
+    /// Takes the next child waiting to be created, in the order recorded.
+    pub fn take_pending_start(&mut self) -> Option<ChildIndex> {
+        self.pending_starts.pop_front()
+    }
+
+    /// Records that a pending child is now running behind `handle`.
+    ///
+    /// Ignores a slot that is no longer pending: it was retired while it waited
+    /// its turn, and resurrecting it would supervise a child nobody asked for.
+    /// The caller is responsible for the handle in that case, and is told so by
+    /// the `false` return.
+    pub fn start_pending(&mut self, index: ChildIndex, handle: ActorHandle) -> bool {
+        let Some(slot) = self.slots.get_mut(index.get()) else {
+            return false;
+        };
+        if !slot.is_pending() {
+            return false;
+        }
+
+        slot.set_handle(Some(handle));
+        slot.set_state(SlotState::Running);
+        slot.publish();
+        true
+    }
+
+    /// Retires a pending child that could not be created, recording why.
+    ///
+    /// The slot keeps its position but leaves active supervision, which frees
+    /// the identifier for another attempt. The reason rides out on the status
+    /// channel so that a caller waiting for the child to come up learns what
+    /// happened rather than waiting for a start that will never be retried.
+    pub fn fail_pending(&mut self, index: ChildIndex, failure: &SupervisionError) {
+        let Some(ern) = self.slots.get(index.get()).map(|slot| slot.ern.clone()) else {
+            return;
+        };
+        self.by_ern.remove(&ern);
+
+        let Some(slot) = self.slots.get_mut(index.get()) else {
+            return;
+        };
+        slot.set_handle(None);
+        slot.set_failure(failure.clone());
+        slot.set_state(SlotState::Retired);
+        slot.publish();
+    }
+
+    /// Abandons every queued start, telling each caller the supervisor is gone.
+    ///
+    /// Called on the way down. Nothing queued was ever created, so there is
+    /// nothing to stop — but a caller waiting on one of these status channels
+    /// would otherwise wait for a start that can no longer happen.
+    pub fn cancel_pending_starts(&mut self, supervisor: &Ern) {
+        while let Some(index) = self.pending_starts.pop_front() {
+            if self.slots.get(index.get()).is_some_and(ChildSlot::is_pending) {
+                self.fail_pending(
+                    index,
+                    &SupervisionError::SupervisorStopped {
+                        supervisor: supervisor.clone(),
+                    },
+                );
+            }
+        }
     }
 
     /// Points an existing registration at a new handle for the same child.
@@ -958,6 +1146,226 @@ mod tests {
         assert!(registry.views().is_empty());
         assert!(registry.live_handles().is_empty());
         assert!(!registry.is_shutting_down());
+    }
+
+    // ---- register_pending ------------------------------------------------
+
+    fn pending_slot(id: &Ern) -> (PendingSlot, watch::Receiver<SupervisionStatus>) {
+        let (status, receiver) = status_channel(id);
+        (
+            PendingSlot {
+                ern: id.clone(),
+                spawner: Arc::new(StubSpawner { child: id.clone() }),
+                restart_policy: RestartPolicy::Permanent,
+                limiter: RestartLimiter::default(),
+                status,
+            },
+            receiver,
+        )
+    }
+
+    #[test]
+    fn a_pending_child_is_recorded_without_a_handle_and_queued() {
+        let id = ern("child");
+        let (slot, receiver) = pending_slot(&id);
+        let mut registry = SupervisionRegistry::default();
+
+        let index = registry
+            .register_pending(slot)
+            .expect("first registration succeeds");
+
+        let child = registry.slot(index).expect("the slot exists");
+        assert_eq!(child.state(), SlotState::Pending);
+        assert!(child.is_pending());
+        assert!(child.handle().is_none(), "nothing has been created yet");
+        assert!(child.is_restartable(), "a pending child always has a spawner");
+        assert_eq!(
+            receiver.borrow().state(),
+            SupervisionState::Starting,
+            "pending is indistinguishable from starting to a caller"
+        );
+        assert!(registry.has_pending_starts());
+        assert_eq!(registry.len(), 1, "the name is taken from this moment on");
+    }
+
+    #[test]
+    fn a_pending_duplicate_is_rejected_before_anything_is_built() {
+        // The point of registering before spawning: the collision costs a
+        // rejected call rather than an actor started and then stopped again.
+        let id = ern("child");
+        let mut registry = SupervisionRegistry::default();
+        let (first, _first_rx) = pending_slot(&id);
+        registry
+            .register_pending(first)
+            .expect("first registration succeeds");
+
+        let (second, _second_rx) = pending_slot(&id);
+        let error = registry
+            .register_pending(second)
+            .expect_err("the same Ern cannot be registered twice");
+
+        assert_eq!(error, SupervisionError::DuplicateChild { child: id });
+        assert_eq!(registry.len(), 1, "the rejected slot was not recorded");
+        assert_eq!(
+            registry.take_pending_start(),
+            Some(ChildIndex::new(0)),
+            "and nothing extra was queued"
+        );
+        assert!(!registry.has_pending_starts());
+    }
+
+    #[test]
+    fn a_pending_child_collides_with_a_running_one_of_the_same_name() {
+        let id = ern("child");
+        let mut registry = SupervisionRegistry::default();
+        let (running, _running_rx) = new_slot(&id, true);
+        registry.register(running).expect("registration succeeds");
+
+        let (pending, _pending_rx) = pending_slot(&id);
+        assert!(matches!(
+            registry.register_pending(pending),
+            Err(SupervisionError::DuplicateChild { .. })
+        ));
+    }
+
+    #[test]
+    fn starting_a_pending_child_attaches_its_handle_and_publishes_running() {
+        let id = ern("child");
+        let (slot, receiver) = pending_slot(&id);
+        let mut registry = SupervisionRegistry::default();
+        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = {
+            assert_eq!(registry.take_pending_start(), Some(index));
+            index
+        };
+
+        assert!(registry.start_pending(index, handle(&id)));
+
+        let child = registry.slot(index).expect("the slot exists");
+        assert_eq!(child.state(), SlotState::Running);
+        assert!(child.handle().is_some());
+        assert_eq!(receiver.borrow().state(), SupervisionState::Running);
+        assert!(receiver.borrow().failure().is_none());
+    }
+
+    #[test]
+    fn starting_a_slot_that_moved_on_is_refused() {
+        // A child retired while its start was in flight must not be adopted:
+        // the caller that got `false` is the one holding the live handle.
+        let id = ern("child");
+        let (slot, _receiver) = pending_slot(&id);
+        let mut registry = SupervisionRegistry::default();
+        let index = registry.register_pending(slot).expect("registration succeeds");
+        registry.retire(&id).expect("the child is supervised");
+
+        assert!(!registry.start_pending(index, handle(&id)));
+        assert!(
+            !registry.start_pending(ChildIndex::new(9), handle(&id)),
+            "an index that never existed is refused too"
+        );
+    }
+
+    #[test]
+    fn a_failed_start_retires_the_slot_and_publishes_the_reason() {
+        let id = ern("child");
+        let (slot, receiver) = pending_slot(&id);
+        let mut registry = SupervisionRegistry::default();
+        let index = registry.register_pending(slot).expect("registration succeeds");
+
+        let failure = SupervisionError::ConfigRejected {
+            child: id.clone(),
+            reason: "the spawner said no".to_string(),
+        };
+        registry.fail_pending(index, &failure);
+
+        let published = receiver.borrow().clone();
+        assert!(
+            published.state().is_terminal(),
+            "a caller waiting to see it run must stop waiting"
+        );
+        assert_eq!(published.state(), SupervisionState::Retired);
+        assert_eq!(published.failure(), Some(&failure));
+        assert!(published.handle().is_none());
+
+        assert_eq!(
+            registry.slot(index).and_then(ChildSlot::failure),
+            Some(&failure),
+            "the slot keeps the reason it retired"
+        );
+        assert_eq!(registry.index_of(&id), None, "the name is free again");
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn cancelling_queued_starts_tells_every_waiting_caller() {
+        let supervisor = ern("pool");
+        let mut registry = SupervisionRegistry::default();
+        let mut receivers = Vec::new();
+        for _ in 0..3 {
+            let id = ern("child");
+            let (slot, receiver) = pending_slot(&id);
+            registry.register_pending(slot).expect("registration succeeds");
+            receivers.push(receiver);
+        }
+
+        registry.cancel_pending_starts(&supervisor);
+
+        assert!(!registry.has_pending_starts(), "nothing is left holding a blueprint");
+        assert!(registry.is_empty());
+        for receiver in &receivers {
+            let published = receiver.borrow().clone();
+            assert!(published.state().is_terminal());
+            assert_eq!(
+                published.failure(),
+                Some(&SupervisionError::SupervisorStopped {
+                    supervisor: supervisor.clone()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn cancelling_leaves_children_that_already_started_alone() {
+        let supervisor = ern("pool");
+        let id = ern("child");
+        let (slot, receiver) = pending_slot(&id);
+        let mut registry = SupervisionRegistry::default();
+        let index = registry.register_pending(slot).expect("registration succeeds");
+        let taken = registry.take_pending_start().expect("one start was queued");
+        assert!(registry.start_pending(taken, handle(&id)));
+
+        registry.cancel_pending_starts(&supervisor);
+
+        assert_eq!(
+            registry.slot(index).map(ChildSlot::state),
+            Some(SlotState::Running)
+        );
+        assert!(receiver.borrow().failure().is_none());
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn a_pending_child_contributes_no_handle_to_shutdown() {
+        // It has no mailbox to send a stop to, and asking for one must not
+        // disturb the children that do.
+        let (mut registry, erns) = registry_with(2);
+        let id = ern("not-yet");
+        let (slot, _receiver) = pending_slot(&id);
+        registry.register_pending(slot).expect("registration succeeds");
+
+        let handles = registry.live_handles();
+
+        assert_eq!(handles.len(), 2);
+        assert!(handles.iter().all(|handle| handle.id() != id));
+        assert!(erns.iter().all(|ern| handles.iter().any(|h| &h.id() == ern)));
+    }
+
+    #[test]
+    fn a_pending_child_is_neither_up_nor_a_source_of_terminations() {
+        assert!(!SlotState::Pending.is_running());
+        assert!(!SlotState::Pending.accepts_termination());
+        assert_eq!(SlotState::Pending.published(), SupervisionState::Starting);
+        assert_eq!(SlotState::Pending.to_string(), "pending");
     }
 
     // ---- retire ----------------------------------------------------------
