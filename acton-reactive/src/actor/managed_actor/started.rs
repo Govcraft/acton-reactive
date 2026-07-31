@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
@@ -32,8 +32,9 @@ use crate::common::{
     ReadOnlyHandlerError,
 };
 use crate::message::{
-    BrokerRequestEnvelope, ChildTerminated, MessageAddress, RegisterSupervisedChild,
-    RemoveAllSubscriptions, SupervisedChildStarted, SystemSignal, UnregisterSupervisedChild,
+    BrokerRequestEnvelope, CascadeTerminate, ChildTerminated, MessageAddress,
+    RegisterSupervisedChild, RemoveAllSubscriptions, SupervisedChildStarted, SystemSignal,
+    UnregisterSupervisedChild,
 };
 use crate::traits::ActorHandleInterface;
 
@@ -772,13 +773,19 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                             self.flush_read_only_handlers(&mut read_only_futures).await;
                             last_flush_time = Instant::now();
                         }
-                    } else if matches!(envelope.message.as_any().downcast_ref::<SystemSignal>(), Some(SystemSignal::Terminate)) {
+                    } else if let Some(stop_reason) = graceful_stop_reason(type_id, envelope.message.as_any()) {
+                        // Both stop signals shut down identically; they differ
+                        // only in the reason recorded. `CascadeTerminate` means
+                        // the supervisor above is going away, which must never
+                        // read as a restartable termination, so it reports
+                        // `ParentShutdown` where a user-initiated `stop()`
+                        // reports `Normal`.
                         self.flush_read_only_handlers(&mut read_only_futures).await;
-                        trace!("Terminate signal received for actor: {}. Closing inbox.", self.id());
+                        trace!("Stop signal ({:?}) received for actor: {}. Closing inbox.", stop_reason, self.id());
                         run_lifecycle_hook!(self, before_stop, "before_stop");
                         self.inbox.close();
-                        // Graceful shutdown via Terminate signal - break to avoid overwriting
-                        termination_reason = TerminationReason::Normal;
+                        // Graceful shutdown - break to avoid overwriting
+                        termination_reason = stop_reason;
                         break;
                     } else {
                         trace!("No handler found for message type {:?} for actor {}", type_id, self.id());
@@ -906,6 +913,30 @@ async fn await_start_tasks(start_tasks: &TaskTracker, actor: &acton_ern::Ern) {
     }
 }
 
+/// The termination reason a graceful stop signal calls for, or `None` if this
+/// message is not a stop signal at all.
+///
+/// The one place the two stops are told apart. A cascade is the framework
+/// stopping a child because the supervisor above it is going away, which
+/// [`RestartPolicy::should_restart`](crate::actor::RestartPolicy::should_restart)
+/// never warrants a restart from; a `SystemSignal::Terminate` is someone calling
+/// `stop()`, which a `Permanent` child legitimately is restarted from. Recording
+/// `Normal` for both is what would make a supervisor restart the very children
+/// it is shutting down.
+///
+/// Pure, and takes `&dyn Any` rather than an envelope, so the mapping can be
+/// tested without a running actor.
+fn graceful_stop_reason(type_id: TypeId, message: &dyn Any) -> Option<TerminationReason> {
+    if type_id == TypeId::of::<CascadeTerminate>() {
+        return Some(TerminationReason::ParentShutdown);
+    }
+
+    match message.downcast_ref::<SystemSignal>() {
+        Some(SystemSignal::Terminate) => Some(TerminationReason::Normal),
+        _ => None,
+    }
+}
+
 /// Result of attempting to stop a single child actor.
 enum ChildStopResult {
     /// Child stopped successfully
@@ -941,8 +972,15 @@ async fn terminate_children(children: Vec<crate::common::ActorHandle>, actor_id:
         .map(|child_handle| {
             async move {
                 trace!("Sending stop signal to child: {}", child_handle.id());
-                let stop_res =
-                    tokio_timeout(Duration::from_millis(timeout_ms), child_handle.stop()).await;
+                // Not `stop()`: this is a cascade, so the child must record
+                // `ParentShutdown` rather than `Normal`. Otherwise a `Permanent`
+                // child reads as a normal termination worth restarting, and a
+                // supervisor shutting down restarts the children it is stopping.
+                let stop_res = tokio_timeout(
+                    Duration::from_millis(timeout_ms),
+                    child_handle.stop_for_parent_shutdown(),
+                )
+                .await;
                 match stop_res {
                     Ok(Ok(())) => {
                         trace!(
@@ -1019,4 +1057,36 @@ async fn terminate_children(children: Vec<crate::common::ActorHandle>, actor_id:
     }
 
     trace!("All children stopped for actor: {}.", actor_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cascade is the one thing that must never read as restartable.
+    #[test]
+    fn a_cascade_terminate_maps_to_parent_shutdown() {
+        let signal: &dyn Any = &CascadeTerminate;
+        assert_eq!(
+            graceful_stop_reason(TypeId::of::<CascadeTerminate>(), signal),
+            Some(TerminationReason::ParentShutdown)
+        );
+    }
+
+    /// The regression guard: an ordinary `stop()` stays restartable.
+    #[test]
+    fn a_terminate_signal_maps_to_normal() {
+        let signal: &dyn Any = &SystemSignal::Terminate;
+        assert_eq!(
+            graceful_stop_reason(TypeId::of::<SystemSignal>(), signal),
+            Some(TerminationReason::Normal)
+        );
+    }
+
+    /// Anything else is not a stop signal and must not end the message loop.
+    #[test]
+    fn an_unrelated_message_is_not_a_stop_signal() {
+        let message: &dyn Any = &42_u32;
+        assert_eq!(graceful_stop_reason(TypeId::of::<u32>(), message), None);
+    }
 }

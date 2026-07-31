@@ -32,8 +32,8 @@ use crate::actor::{
 };
 use crate::common::{ActorRuntime, ActorSender, BrokerRef, OutboundEnvelope};
 use crate::message::{
-    BrokerRequest, MessageAddress, RegisterSupervisedChild, RegistrationOutcome, SystemSignal,
-    UnregisterSupervisedChild,
+    BrokerRequest, CascadeTerminate, MessageAddress, RegisterSupervisedChild, RegistrationOutcome,
+    SystemSignal, UnregisterSupervisedChild,
 };
 use crate::prelude::ActonMessage;
 use crate::traits::{ActorHandleInterface, Broadcaster, Subscriber};
@@ -225,6 +225,50 @@ impl ActorHandle {
         .await;
 
         Ok(handle)
+    }
+
+    /// Sends `signal` to the actor and waits for its task to finish.
+    ///
+    /// The shared body of [`stop`](ActorHandleInterface::stop) and
+    /// [`stop_for_parent_shutdown`](Self::stop_for_parent_shutdown). Written
+    /// once so the two stops cannot drift apart: they must differ only in the
+    /// message sent, because that message is the sole thing that decides which
+    /// [`TerminationReason`](crate::actor::TerminationReason) the actor records.
+    async fn stop_with_signal<M: ActonMessage + 'static>(
+        &self,
+        signal: M,
+    ) -> anyhow::Result<()> {
+        let tracker = self.tracker();
+
+        // Create an envelope to send the signal from self to self.
+        let self_envelope = self.create_envelope(Some(self.reply_address()));
+
+        trace!(actor = %self.id, signal = ?signal, "Sending stop signal");
+        self_envelope.send(signal).await;
+
+        // Wait for the actor's main task and any tracked tasks to finish.
+        tracker.wait().await;
+
+        trace!(actor = %self.id, "Actor terminated successfully.");
+        Ok(())
+    }
+
+    /// Stops this actor because the supervisor above it is shutting down.
+    ///
+    /// Identical to [`stop`](ActorHandleInterface::stop) in every observable
+    /// respect except the termination reason the actor records:
+    /// [`ParentShutdown`] rather than [`Normal`]. Restarts are never warranted
+    /// for the former, which is what keeps a supervisor from restarting the very
+    /// children it is in the middle of stopping.
+    ///
+    /// Crate-internal: only a genuine framework-driven cascade may claim this
+    /// reason. Callers reaching for a stop should use
+    /// [`stop`](ActorHandleInterface::stop).
+    ///
+    /// [`ParentShutdown`]: crate::actor::TerminationReason::ParentShutdown
+    /// [`Normal`]: crate::actor::TerminationReason::Normal
+    pub(crate) async fn stop_for_parent_shutdown(&self) -> anyhow::Result<()> {
+        self.stop_with_signal(CascadeTerminate).await
     }
 }
 
@@ -523,22 +567,7 @@ impl ActorHandleInterface for ActorHandle {
     #[allow(clippy::manual_async_fn)] // Keep async_trait style
     #[instrument(skip(self))]
     fn stop(&self) -> impl Future<Output = anyhow::Result<()>> + Send + Sync + '_ {
-        async move {
-            let tracker = self.tracker();
-
-            // Create an envelope to send the signal from self to self.
-            let self_envelope = self.create_envelope(Some(self.reply_address()));
-
-            trace!(actor = %self.id, "Sending Terminate signal");
-            // Send the Terminate signal to initiate graceful shutdown.
-            self_envelope.send(SystemSignal::Terminate).await;
-
-            // Wait for the actor's main task and any tracked tasks to finish.
-            tracker.wait().await;
-
-            trace!(actor = %self.id, "Actor terminated successfully.");
-            Ok(())
-        }
+        self.stop_with_signal(SystemSignal::Terminate)
     }
 
     /// Sends a boxed message to the actor.

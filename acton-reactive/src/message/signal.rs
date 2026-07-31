@@ -47,6 +47,29 @@ pub enum SystemSignal {
     // Wake, Recreate, Suspend, Resume, Supervise, Watch, Unwatch, Failed,
 }
 
+/// Stops an actor because the supervisor above it is shutting down.
+///
+/// Behaves exactly like [`SystemSignal::Terminate`] — the `before_stop` hook
+/// runs, the inbox closes, in-flight read-only handlers are flushed — and
+/// differs in one respect: the actor records
+/// [`TerminationReason::ParentShutdown`] rather than
+/// [`TerminationReason::Normal`]. That distinction is what stops a cascading
+/// shutdown from being read as a wave of normal terminations, each of which a
+/// `Permanent` child would otherwise be restarted from
+/// (see [`RestartPolicy::should_restart`](crate::actor::RestartPolicy::should_restart)).
+///
+/// Deliberately **not** a [`SystemSignal`] variant. That enum is
+/// `#[non_exhaustive]`, so adding one would not break callers, but it would put
+/// a forgeable "my parent is shutting down" signal into the public API: any
+/// caller could send it to any actor and suppress a restart that was warranted.
+/// This type is reachable only from inside the crate, so the reason is recorded
+/// only when the framework itself performed the cascade.
+///
+/// [`TerminationReason::ParentShutdown`]: crate::actor::TerminationReason::ParentShutdown
+/// [`TerminationReason::Normal`]: crate::actor::TerminationReason::Normal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CascadeTerminate;
+
 /// Notification sent to a parent actor when one of its children terminates.
 ///
 /// This message is sent by the child actor's `wake` loop to its parent,
