@@ -107,9 +107,11 @@ pub fn status_channel(
 ///   time. That is a stalled actor, which stops every other message equally;
 ///   nothing here makes it worse, and nothing is lost when it resolves.
 ///
-/// Note that `stop()` waits on the tracker this task runs under. That is an
-/// outside caller waiting, not the supervisor: its loop is still free to run,
-/// close its inbox, and let this task finish.
+/// `ActorHandle::stop` does wait for this task, but indirectly: it waits on the
+/// handle's tracker, which holds the supervisor's message loop, and that loop's
+/// shutdown waits on the tracker holding this one. An outside caller waiting,
+/// then — not the supervisor, whose loop is still free to run, close its inbox,
+/// and let this task finish.
 async fn start_supervised_child(
     ticket: StartTicket,
     runtime: crate::common::ActorRuntime,
@@ -508,8 +510,7 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
 
             let runtime = self.runtime.clone();
             let supervisor = self.handle.clone();
-            self.handle
-                .tracker()
+            self.start_tasks
                 .spawn(start_supervised_child(ticket, runtime, supervisor));
         }
     }
@@ -561,7 +562,7 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// Tracked rather than detached: a shutdown that did not wait for this would
     /// return while the child was still stopping.
     fn stop_disowned_child(&self, handle: ActorHandle) {
-        self.handle.tracker().spawn(async move {
+        self.start_tasks.spawn(async move {
             stop_stray_child(handle).await;
         });
     }
@@ -604,6 +605,10 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// has already exited, that message is sitting in a queue that is about to
     /// be dropped — and with it the only handle to a running actor. Draining it
     /// here turns those into children the shutdown stops.
+    ///
+    /// Sound only because the in-flight starts were awaited first: with every
+    /// start task finished, this queue has no writers left, and what is in it
+    /// now is all there will ever be.
     ///
     /// Everything else in the inbox is discarded, which is what would have
     /// happened anyway: the receiver is dropped moments later, and every

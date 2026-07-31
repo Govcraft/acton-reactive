@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace};
 
 use crate::actor::{ManagedActor, TerminationReason};
@@ -833,14 +834,75 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             self.broker.send(unsubscription).await;
         }
 
+        // Nothing can be building a child by the time the inbox is drained.
+        // Every start task has either delivered its child or, finding the inbox
+        // closed just above, stopped it. Without this the drain would be racing
+        // a writer, and a report that landed after it would take the only handle
+        // to a running actor down with the queue.
+        debug_assert!(
+            self.inbox.is_closed(),
+            "the inbox must be closed first, or a start delivering into it can never finish"
+        );
+        await_start_tasks(&self.start_tasks, self.id()).await;
+
         // A start that *did* deliver, just before the loop exited, is sitting in
-        // the closed inbox right now holding a running child. Taken over as late
-        // as possible, so that anything which landed while the unsubscription
-        // above was in flight is caught too.
+        // the closed inbox right now holding a running child. Nobody is adding
+        // to that queue any more, so what is in it is all there will be.
         let late_arrivals = self.take_late_started_children();
 
         terminate_children(self.shutdown_child_handles(late_arrivals), self.id()).await;
         run_lifecycle_hook!(self, after_stop, "after_stop");
+    }
+}
+
+/// Waits out the start tasks a supervisor still has in flight.
+///
+/// This is what makes the inbox drain that follows it sound rather than merely
+/// likely. A start task ends in one of two states — it delivered its child, or
+/// it found nobody to deliver to and stopped the child itself — and only once
+/// every task has reached one of them is it true that no further report can
+/// arrive. Draining a queue somebody may still be writing to would leave
+/// exactly the gap this closes.
+///
+/// **The inbox must already be closed.** That is what turns a delivery waiting
+/// for capacity into a failed one; waiting first would mean waiting on tasks
+/// that are waiting on this actor.
+///
+/// Waiting is possible at all only because start tasks are tracked separately
+/// from the actor's own message loop. `wait()` completes when the tracker is
+/// closed and empty, and this runs *inside* the loop's task — on the handle's
+/// tracker it would be waiting for itself.
+///
+/// Bounded by the shutdown deadline, like every other wait on the way down. A
+/// start that overruns it is not abandoned: that task still holds its child and
+/// still stops it once it finds the inbox closed. What is lost is only this
+/// actor's chance to stop it first.
+///
+/// A standalone async function for the same reason [`terminate_children`] is
+/// one: an `async fn(&self)` on the actor yields a future holding `&Self`, which
+/// is `Send` only if the user's model is `Sync`. `TaskTracker` and `Ern` are
+/// both `Sync`, so borrowing them individually costs nothing.
+async fn await_start_tasks(start_tasks: &TaskTracker, actor: &acton_ern::Ern) {
+    start_tasks.close();
+    if start_tasks.is_empty() {
+        return;
+    }
+
+    let deadline = Duration::from_millis(CONFIG.timeouts.actor_shutdown);
+    trace!(
+        "Actor {actor} is waiting for {} in-flight child start(s)",
+        start_tasks.len()
+    );
+
+    if tokio::time::timeout(deadline, start_tasks.wait())
+        .await
+        .is_err()
+    {
+        error!(
+            "Actor {actor} stopped with {} child start(s) still in flight after {} ms; each remaining task stops its own child",
+            start_tasks.len(),
+            CONFIG.timeouts.actor_shutdown
+        );
     }
 }
 

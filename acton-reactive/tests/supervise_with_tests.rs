@@ -94,20 +94,6 @@ fn slow_blueprint(
     }
 }
 
-/// Waits for `flag` to be set, up to a bounded time.
-///
-/// Polls rather than sleeping a fixed duration, so a passing test is fast and a
-/// failing one is still decisive.
-async fn wait_for_flag(flag: &Arc<AtomicBool>) -> bool {
-    for _ in 0..300 {
-        if flag.load(Ordering::SeqCst) {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    flag.load(Ordering::SeqCst)
-}
-
 /// A blueprint that counts how many times it has been applied.
 fn counting_blueprint(
     applications: &Arc<AtomicUsize>,
@@ -558,9 +544,14 @@ async fn a_supervisor_that_stops_mid_start_stops_the_child_it_started(
         .await
         .expect("stopping must not hang on an in-flight start")?;
 
+    // Asserted without polling, on purpose. The child is stopped by the start
+    // task, which runs on its own tracker rather than the handle's, so nothing
+    // outside would wait for it by accident. What makes this hold the moment
+    // `stop()` returns is that the supervisor's own shutdown waits for every
+    // in-flight start before it finishes — and `stop()` waits for that.
     assert!(
-        wait_for_flag(&stopped).await,
-        "the child was built after its supervisor stopped and then left running"
+        stopped.load(Ordering::SeqCst),
+        "the supervisor finished stopping while a child of its own was still being built"
     );
 
     Ok(())

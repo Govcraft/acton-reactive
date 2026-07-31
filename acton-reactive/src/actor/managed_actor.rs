@@ -82,8 +82,18 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// access to this `model` to implement the actor's specific behavior and manage its data.
     pub model: Model,
 
-    /// Tracks associated Tokio tasks, primarily the actor's main loop.
-    pub(crate) tracker: TaskTracker,
+    /// Tracks the tasks that build this actor's supervised children.
+    ///
+    /// Deliberately **not** the handle's tracker, which holds this actor's own
+    /// message loop. Shutdown runs inside that loop and has to wait for every
+    /// in-flight start before it can safely stop reading the inbox those starts
+    /// deliver to; waiting on a tracker containing itself would be a deadlock
+    /// rather than a wait. Separating them is what makes that wait possible.
+    ///
+    /// Nothing outside stops waiting because of the split: `ActorHandle::stop`
+    /// waits on the handle's tracker, and the loop's task cannot finish until
+    /// it has awaited this one.
+    pub(crate) start_tasks: TaskTracker,
 
     /// MPSC receiver for incoming messages.
     pub(crate) inbox: Receiver<Envelope>,
