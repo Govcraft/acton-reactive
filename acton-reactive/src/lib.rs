@@ -135,12 +135,15 @@ pub mod ipc {
 /// *   [`crate::common::ActonApp`]: Entry point for initializing the Acton system.
 /// *   [`crate::common::Broker`]: The central message broker implementation.
 /// *   [`crate::common::ActorHandle`]: Handle for interacting with an actor.
+/// *   [`crate::common::BrokerRef`]: Alias for an [`ActorHandle`](crate::common::ActorHandle) that refers to the system broker.
+/// *   [`crate::common::ParentRef`]: Alias for an [`ActorHandle`](crate::common::ActorHandle) that refers to a supervisor.
 /// *   [`crate::common::Reply`]: Utility for creating standard message handler return types.
 /// *   [`crate::common::ActorRuntime`]: Represents the initialized Acton runtime.
 /// *   [`crate::message::BrokerRequest`]: Wrapper for messages intended for broadcast.
 /// *   [`crate::message::BrokerRequestEnvelope`]: Specialized envelope for broadcast messages.
 /// *   [`crate::message::MessageAddress`]: Addressable endpoint of an actor.
 /// *   [`crate::message::OutboundEnvelope`]: Represents a message prepared for sending.
+/// *   [`crate::message::SystemSignal`]: Lifecycle control signals, such as graceful termination.
 /// *   [`crate::traits::ActonMessage`]: Marker trait for all valid messages.
 /// *   [`crate::traits::ActorHandleInterface`]: Core trait defining actor interaction methods.
 /// *   [`crate::traits::Broker`]: Trait defining message broadcasting capabilities.
@@ -172,9 +175,12 @@ pub mod prelude {
         SupervisionDecision, SupervisionError, SupervisionEscalated, SupervisionState,
         SupervisionStatus, SupervisionStrategy, TerminationReason, MAX_SUPERVISION_DEPTH,
     };
-    pub use crate::common::{ActonApp, ActorHandle, ActorRuntime, Broker, Reply};
+    pub use crate::common::{
+        ActonApp, ActorHandle, ActorRuntime, Broker, BrokerRef, ParentRef, Reply,
+    };
     pub use crate::message::{
         BrokerRequest, BrokerRequestEnvelope, ChildTerminated, MessageAddress, OutboundEnvelope,
+        SystemSignal,
     };
     pub use crate::traits::{
         ActonMessage, ActorHandleInterface, Broadcaster, Subscribable, Subscriber,

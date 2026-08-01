@@ -81,6 +81,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`BrokerRef`, `ParentRef`, and `SystemSignal` are now exported from the
+  prelude.** All three were already `pub`, but lived in private modules, so they
+  were unnameable from outside the crate even though public API signatures and
+  documentation referred to them.
+
+  - `BrokerRef` and `ParentRef` are aliases for `ActorHandle`. They appear in
+    the signatures of `ManagedActor::broker`, `ManagedActor::parent`,
+    `ActorRuntime::broker`, `Subscriber::get_broker`, and `ActorConfig::new`,
+    so naming those types in your own code no longer requires spelling out
+    `ActorHandle` and losing the distinction the alias carries.
+  - `SystemSignal` is the lifecycle control signal; `SystemSignal::Terminate` is
+    what `ActorHandle::stop` and `ActorRuntime::shutdown_all` send. It remains
+    `#[non_exhaustive]`, so future signals can be added without a breaking
+    change, and callers must include a wildcard arm when matching on it.
+
+  This is additive: no existing signature, name, or behaviour changed.
+
 - **`ActorConfig::with_escalation`, which makes `Escalation` reachable.**
   `Escalation` shipped in 8.2.0 public, documented, and exported from the
   prelude, with nothing in the crate reading it and no way to set it. It now
