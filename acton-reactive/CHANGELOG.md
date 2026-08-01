@@ -413,3 +413,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle clone**, holding handles that go stale across a restart. Their
   signatures and behavior are unchanged. Use `SupervisedChild` when you need a
   reference that follows restarts.
+
+### Fixed
+
+These are all example-side fixes. None of them touch the library, and all three
+bugs predate this release: they reproduce unchanged on 8.2.0.
+
+- **Service discovery returned nothing in the Python and Node.js client
+  libraries.** Both read the discovery result out of the response's `payload`
+  field, but a discovery response carries `protocol_version`, `actors` and
+  `message_types` at the **top level** of the response object, exactly as
+  `IpcDiscoverResponse` documents. Python silently reported no actors and no
+  message types; Node.js threw `TypeError: Cannot read properties of undefined`,
+  and in both cases the process still exited 0. The Deno client was already
+  correct and is unchanged. Both now read the top-level fields and surface a
+  failed discovery as an error rather than as an empty result.
+
+- **`examples/ipc_fruit_market/start.sh` and `stop.sh` did not exist**, though
+  the example's README and the server's own startup banner both told you to run
+  them. They now exist, modelled on the `rgb_keyboard` pair: `start.sh` builds
+  the examples and lays the server, display client and keyboard client out in a
+  tmux session, and `stop.sh` tears the session down and reaps any stray
+  processes.
+
+- **The Python example client waited 3 seconds for push notifications** while
+  the server's price ticker publishes every 5, so the subscription demo almost
+  always ended by reporting zero notifications received. It now waits 8 seconds,
+  matching the Deno client.
+
+- **The `ipc_client_libraries` server never broadcast `StatusChange`**, though it
+  defined and registered the type, its README documented it as a push service,
+  and all three client libraries subscribe to it. The subscription therefore
+  delivered nothing, forever, with no error: the same silent-nothing failure as
+  the discovery bug above. The price publisher now emits one on every tick,
+  alongside the price, so a subscription is visibly alive within a demo run.
+
+- The `ipc_client_libraries` example and README invoked `npm`; they now use
+  `pnpm` throughout, in line with the rest of the project, and the stale
+  `package-lock.json` is gone.
+
+- Corrected example READMEs against observed behaviour: the `ipc_multi_service`
+  dashboard's socket path (`<app>/ipc.sock`, never `<app>.sock`), the
+  `ipc_subscriptions` client's demo count (four, not three; discovery was
+  undocumented) and its server trade line (no trade-ID suffix), and the
+  `rgb_keyboard` claim of "request-response", which is really fire-and-forget
+  with an application-level correlation ID.

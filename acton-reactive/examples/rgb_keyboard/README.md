@@ -50,7 +50,8 @@ to create a colorful keyboard visualization system.
 - Three instances: R, G, and B (run with `--component R|G|B`)
 - Subscribe to `ColorRequest` push notifications
 - Generate random 0-255 value for their color component
-- Send `ColorResponse` back to server via request-response
+- Send `ColorResponse` back to the server as a fire-and-forget envelope, tagged
+  with the request's `correlation_id` so the server can match it up
 
 ### Input Client (`input_client.rs`)
 - Captures raw keyboard input using crossterm
@@ -66,7 +67,10 @@ to create a colorful keyboard visualization system.
 
 1. **Fire-and-Forget**: Input client sends keystrokes without waiting for response
 2. **Broadcast/Subscription**: Server broadcasts to R/G/B clients; output client subscribes
-3. **Request-Response with Correlation**: Color clients respond with matching correlation IDs
+3. **Application-Level Correlation**: Color clients reply on their own connection
+   with the request's correlation ID. Note this is *not* IPC request-response:
+   every envelope here is fire-and-forget (`expects_reply` is false); the
+   correlation ID is carried in the message body and matched by the server.
 4. **Push Notifications**: Server pushes colored characters to output client
 
 ## Requirements

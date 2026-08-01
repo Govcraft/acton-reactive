@@ -131,10 +131,11 @@ async def demo_subscriptions(client: ActonIpcClient):
     success = await client.subscribe(["PriceUpdate", "StatusChange"])
     print(f"  Subscription result: {'success' if success else 'failed'}")
 
-    # In a real scenario, we would wait for push notifications here
-    # For demo purposes, we'll just show that we're subscribed
-    print("  Waiting for notifications (3 seconds)...")
-    await asyncio.sleep(3)
+    # The server's price ticker publishes every 5 seconds, so wait longer than
+    # one tick. A 3 second window almost always expires having seen nothing,
+    # which reads as a broken subscription rather than a short wait.
+    print("  Waiting for notifications (8 seconds)...")
+    await asyncio.sleep(8)
 
     print(f"  Received {len(received_notifications)} notifications")
 

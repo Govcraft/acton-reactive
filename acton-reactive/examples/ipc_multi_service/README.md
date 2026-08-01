@@ -99,7 +99,7 @@ cargo run --example ipc_multi_service_client --features ipc -- /path/to/socket.s
 ═══════════════════════════════════════════════════════════
   IPC Multi-Actor Server Dashboard
 ═══════════════════════════════════════════════════════════
-  Socket: /run/user/1000/acton/ipc_multi_service_server.sock
+  Socket: /run/user/1000/acton/ipc_multi_service_server/ipc.sock
 
 ┌─ Services ─────────────────────────────────────────────────┐
 │        ●  Counter        15 value         3 ops           │

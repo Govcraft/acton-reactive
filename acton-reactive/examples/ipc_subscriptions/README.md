@@ -70,7 +70,8 @@ In another terminal:
 cargo run --example ipc_subscriptions_client --features ipc
 ```
 
-The client will run three demos:
+The client will run four demos:
+0. **Discovery** - Ask the server which actors and message types it offers
 1. **Subscribe to ALL** - Receive all message types for 15 seconds
 2. **Prices Only** - Subscribe only to `PriceUpdate` for 10 seconds
 3. **Trades Only** - Subscribe only to `TradeExecuted` for 12 seconds
@@ -101,7 +102,7 @@ Socket ready: /run/user/1000/acton/ipc_subscriptions_server/ipc.sock
   [PriceFeed] Broadcasting: GOOGL @ $142.31 (+0.01)
   [PriceFeed] Broadcasting: MSFT @ $378.92 (+0.02)
   [PriceFeed] Broadcasting: AMZN @ $178.28 (+0.03)
-  [PriceFeed] Broadcasting trade: SELL 100 AAPL @ $150.50 (TRD000001)
+  [PriceFeed] Broadcasting trade: SELL 100 AAPL @ $150.50
 ```
 
 **Client:**
@@ -113,6 +114,26 @@ Socket ready: /run/user/1000/acton/ipc_subscriptions_server/ipc.sock
 Socket path: /run/user/1000/acton/ipc_subscriptions_server/ipc.sock
 Connecting to server...
 Connected successfully!
+
+====================================================================
+  Demo 0: Discover Available Actors and Message Types
+====================================================================
+
+Sending discovery request (actors + message types)...
+
+  Discovery successful!
+
+  Available actors (1):
+    - price_feed (ERN: ern:acton:reactive:component:price_feed_01k...)
+
+  Registered message types (3):
+    - TradeExecuted
+    - PriceUpdate
+    - SystemStatus
+
+Sending discovery request (actors only)...
+  Found 1 actor(s)
+  (message types not requested - as expected)
 
 ====================================================================
   Demo 1: Subscribe to ALL Message Types

@@ -353,6 +353,15 @@ class IpcResponse:
     payload: Any = None
     error: str | None = None
     error_code: str | None = None
+    raw: dict = field(default_factory=dict)
+    """The undecoded response object.
+
+    Most responses carry their data under ``payload``, but discovery
+    responses put ``protocol_version``, ``actors`` and ``message_types`` at
+    the top level instead (see ``IpcDiscoverResponse`` in the Rust crate).
+    Keeping the original dict is what lets :meth:`ActonIpcClient.discover`
+    reach those fields.
+    """
 
     @classmethod
     def from_dict(cls, data: dict) -> "IpcResponse":
@@ -362,6 +371,7 @@ class IpcResponse:
             payload=data.get("payload"),
             error=data.get("error"),
             error_code=data.get("error_code"),
+            raw=data,
         )
 
 
@@ -851,8 +861,15 @@ class ActonIpcClient:
 
         response = await asyncio.wait_for(future, timeout=5.0)
 
-        # The response payload contains discovery info
-        return DiscoveryResponse.from_dict(response.payload or {})
+        if not response.success:
+            raise ServerError(
+                response.error or "Discovery failed",
+                response.error_code,
+            )
+
+        # Discovery puts actors/message_types/protocol_version at the top level
+        # of the response rather than inside `payload`, so read the raw object.
+        return DiscoveryResponse.from_dict(response.raw)
 
     async def heartbeat(self) -> None:
         """Send a heartbeat to verify connection."""

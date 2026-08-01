@@ -62,8 +62,8 @@ python example_client.py
 **Node.js:**
 ```bash
 cd acton-reactive/examples/ipc_client_libraries/nodejs
-npm install
-npm run example
+pnpm install
+pnpm run example
 ```
 
 **Deno:**
@@ -135,8 +135,8 @@ with ActonIpcClientSync(socket_path) as client:
 ### Installation
 
 ```bash
-npm install
-# Optional: npm install @msgpack/msgpack  # For MessagePack support
+pnpm install
+# Optional: pnpm add @msgpack/msgpack  # For MessagePack support
 ```
 
 ### Usage

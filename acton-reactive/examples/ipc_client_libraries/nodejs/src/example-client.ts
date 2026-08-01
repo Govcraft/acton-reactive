@@ -1,4 +1,4 @@
-#!/usr/bin/env npx ts-node
+#!/usr/bin/env -S pnpm exec ts-node
 /**
  * Example client demonstrating the Acton IPC client library.
  *
@@ -14,9 +14,9 @@
  *   cargo run --example ipc_client_libraries_server
  *
  *   # Then run this client:
- *   npm run example
+ *   pnpm run example
  *   # or
- *   npx ts-node src/example-client.ts
+ *   pnpm exec ts-node src/example-client.ts
  */
 
 import {

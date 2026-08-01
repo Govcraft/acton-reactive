@@ -202,7 +202,7 @@ class MessagePackSerializer implements Serializer {
     } catch {
       throw new Error(
         "MessagePack support requires @msgpack/msgpack package. " +
-          "Install with: npm install @msgpack/msgpack",
+          "Install with: pnpm add @msgpack/msgpack",
       );
     }
   }
@@ -763,7 +763,24 @@ export class ActonIpcClient extends EventEmitter {
 
       this.pending.set(correlationId, {
         resolve: (response) => {
-          resolve(response.payload as DiscoveryResponse);
+          if (!response.success) {
+            reject(
+              new ServerError(
+                response.error ?? "Discovery failed",
+                response.error_code ?? "UNKNOWN",
+              ),
+            );
+            return;
+          }
+          // Discovery puts protocol_version/actors/message_types at the top
+          // level of the response rather than inside `payload`, so read the
+          // response object directly.
+          const disc = response as unknown as Partial<DiscoveryResponse>;
+          resolve({
+            protocol_version: disc.protocol_version,
+            actors: disc.actors ?? [],
+            message_types: disc.message_types ?? [],
+          } as DiscoveryResponse);
         },
         reject,
         timeout,

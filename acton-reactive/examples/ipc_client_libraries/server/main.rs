@@ -41,7 +41,7 @@
 //!
 //! # Node.js
 //! cd examples/ipc_client_libraries/nodejs
-//! npm install && npm run example
+//! pnpm install && pnpm run example
 //! ```
 
 use std::time::Duration;
@@ -324,9 +324,26 @@ async fn create_price_publisher(runtime: &mut ActorRuntime) -> ActorHandle {
 
         println!("  [Publisher] Publishing: {symbol} @ ${price:.2} ({change:+.2})");
 
+        // Announce a status alongside every price tick. The clients all
+        // subscribe to StatusChange, so emitting it rarely would leave them on
+        // a subscription that appears dead for the length of a demo run.
+        let status = StatusChange {
+            service: "price_publisher".to_string(),
+            status: if tick % 8 == 0 { "degraded" } else { "healthy" }.to_string(),
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+        };
+
+        println!(
+            "  [Publisher] Status: {} is {}",
+            status.service, status.status
+        );
+
         let broker = actor.broker().clone();
         Reply::pending(async move {
             broker.broadcast(update).await;
+            broker.broadcast(status).await;
         })
     });
 
@@ -438,7 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("  Node.js:");
     println!("    cd examples/ipc_client_libraries/nodejs");
-    println!("    npm install && npx ts-node src/example-client.ts");
+    println!("    pnpm install && pnpm exec ts-node src/example-client.ts");
     println!();
     println!("  Available services:");
     println!("    - calculator: Add {{ a, b }}, Multiply {{ a, b }}");
