@@ -34,3 +34,8 @@ logs/
 
 # Allow Python requirements files
 !**/requirements.txt
+
+# Allow example launcher scripts. The blanket *.sh rule above silently
+# swallowed ipc_fruit_market's start.sh and stop.sh, which its README and the
+# server's own startup banner both told users to run.
+!acton-reactive/examples/**/*.sh
