@@ -73,11 +73,7 @@ async fn test_parent_receives_child_terminated_notification() -> anyhow::Result<
     let restart_clone = should_restart.clone();
 
     // Create parent actor that handles ChildTerminated
-    let parent_config = ActorConfig::new(
-        Ern::with_root("supervisor")?,
-        None,
-        None,
-    )?;
+    let parent_config = ActorConfig::new(Ern::with_root("supervisor")?, None);
 
     let mut parent = app.new_actor_with_config::<SupervisorActor>(parent_config);
     parent.model.child_terminated_count = count_clone.clone();
@@ -98,11 +94,7 @@ async fn test_parent_receives_child_terminated_notification() -> anyhow::Result<
     let parent_handle = parent.start().await;
 
     // Create child actor with parent
-    let child_config = ActorConfig::new(
-        Ern::with_root("child")?,
-        Some(parent_handle.clone()),
-        None,
-    )?;
+    let child_config = ActorConfig::for_supervised_child("child", parent_handle.clone(), None)?;
 
     let mut child = app.new_actor_with_config::<TestActor>(child_config);
     child.mutate_on::<Ping>(|actor, _ctx| {
@@ -150,11 +142,7 @@ async fn test_transient_policy_normal_shutdown_no_restart() -> anyhow::Result<()
     let restart_clone = should_restart.clone();
 
     // Create parent actor
-    let parent_config = ActorConfig::new(
-        Ern::with_root("transient-supervisor")?,
-        None,
-        None,
-    )?;
+    let parent_config = ActorConfig::new(Ern::with_root("transient-supervisor")?, None);
 
     let mut parent = app.new_actor_with_config::<SupervisorActor>(parent_config);
     parent.model.should_restart = restart_clone.clone();
@@ -172,12 +160,9 @@ async fn test_transient_policy_normal_shutdown_no_restart() -> anyhow::Result<()
     let parent_handle = parent.start().await;
 
     // Create child actor with Transient policy
-    let child_config = ActorConfig::new(
-        Ern::with_root("transient-child")?,
-        Some(parent_handle.clone()),
-        None,
-    )?
-    .with_restart_policy(RestartPolicy::Transient);
+    let child_config =
+        ActorConfig::for_supervised_child("transient-child", parent_handle.clone(), None)?
+            .with_restart_policy(RestartPolicy::Transient);
 
     let child = app.new_actor_with_config::<TestActor>(child_config);
     let child_handle = child.start().await;
@@ -208,11 +193,7 @@ async fn test_temporary_policy_never_restarts() -> anyhow::Result<()> {
     let restart_clone = should_restart.clone();
 
     // Create parent actor
-    let parent_config = ActorConfig::new(
-        Ern::with_root("temp-supervisor")?,
-        None,
-        None,
-    )?;
+    let parent_config = ActorConfig::new(Ern::with_root("temp-supervisor")?, None);
 
     let mut parent = app.new_actor_with_config::<SupervisorActor>(parent_config);
     parent.model.should_restart = restart_clone.clone();
@@ -230,12 +211,9 @@ async fn test_temporary_policy_never_restarts() -> anyhow::Result<()> {
     let parent_handle = parent.start().await;
 
     // Create child with Temporary policy
-    let child_config = ActorConfig::new(
-        Ern::with_root("temp-child")?,
-        Some(parent_handle.clone()),
-        None,
-    )?
-    .with_restart_policy(RestartPolicy::Temporary);
+    let child_config =
+        ActorConfig::for_supervised_child("temp-child", parent_handle.clone(), None)?
+            .with_restart_policy(RestartPolicy::Temporary);
 
     let child = app.new_actor_with_config::<TestActor>(child_config);
     let child_handle = child.start().await;

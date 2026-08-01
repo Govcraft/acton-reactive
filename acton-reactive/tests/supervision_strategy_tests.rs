@@ -165,7 +165,7 @@ async fn test_requires_group_restart() {
 async fn test_actor_config_with_supervision_strategy() -> anyhow::Result<()> {
     // Test that the builder method works (we can't check the value since it's pub(crate),
     // but we verify the builder pattern compiles and runs without error)
-    let _config = ActorConfig::new(Ern::with_root("supervisor")?, None, None)?
+    let _config = ActorConfig::new(Ern::with_root("supervisor")?, None)
         .with_supervision_strategy(SupervisionStrategy::OneForAll);
 
     Ok(())

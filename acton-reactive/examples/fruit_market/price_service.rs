@@ -43,7 +43,7 @@ impl PriceService {
     #[instrument(skip(runtime))] // Instrument for tracing, skip the runtime param.
     pub(crate) async fn create(runtime: &mut ActorRuntime) -> anyhow::Result<ActorHandle> {
         // Configure the actor's identity (ERN).
-        let config = ActorConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None, None)?;
+        let config = ActorConfig::new(Ern::with_root(PRICE_SERVICE_ROOT).unwrap(), None);
         // Create the actor builder using the runtime and configuration.
         let mut price_service_builder = runtime.new_actor_with_config::<Self>(config);
 

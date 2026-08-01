@@ -208,15 +208,16 @@ async fn test_restart_limit_exceeded_display() {
 #[tokio::test]
 #[allow(deprecated)] // Intentionally exercises the deprecated builder method
 async fn test_actor_config_with_restart_limiter() -> anyhow::Result<()> {
-    let _config = ActorConfig::new(Ern::with_root("worker")?, None, None)?
-        .with_restart_limiter(RestartLimiterConfig {
+    let _config = ActorConfig::new(Ern::with_root("worker")?, None).with_restart_limiter(
+        RestartLimiterConfig {
             enabled: true,
             max_restarts: 3,
             window_secs: 30,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
             backoff_multiplier: 2.0,
-        });
+        },
+    );
 
     Ok(())
 }

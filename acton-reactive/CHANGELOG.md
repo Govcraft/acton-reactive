@@ -221,6 +221,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   making `expose_for_ipc()` fallible would have forced `start()` to return a
   `Result` and broken every actor in every program for a fault confined to IPC.
 
+- **A child built with `create_child` now keeps the name you gave it.** Its
+  `Ern` is its parent's with the name appended, `<parent-ern>/<name>`, and the
+  same parent and name always produce the same identifier.
+
+  Before this, `create_child` parsed the parent's *display string* back into an
+  `Ern` and added the child's `Ern` to the result. Two defects composed there.
+  Parsing calls `EntityRoot::new`, which stamps a **fresh `UUIDv7`** on every
+  call, so the derivation was neither deterministic nor actually descended from
+  the parent. And `Add for Ern` keeps the left root and concatenates parts,
+  while `Ern::with_root(name)` puts the name in the *root* with no parts — so
+  **the child's name contributed nothing at all**.
+
+  Read together: holding the parsed parent fixed, children named `alpha` and
+  `beta` came out **identical**. Siblings differed in practice only because each
+  call happened to draw a new random suffix. Sibling collision was avoided by
+  accident, not by design — and `ActorHandle: PartialEq` compares `Ern` alone,
+  while the supervision registry, the IPC registry, and `unsupervise`/`retire`
+  all key on it.
+
+  | Child of `prices` | Was | Now |
+  |---|---|---|
+  | `create_child("alpha")` | `prices_kywwgfbfehasqebwb` (fresh each call) | `prices_01kyww2gfb…/alpha` |
+  | `create_child("beta")` | `prices_kyxtneevfbykdcws` (fresh each call) | `prices_01kyww2gfb…/beta` |
+
+  **Consequence for IPC names:** a `create_child` actor that calls
+  `expose_for_ipc()` is now reachable as `prices/alpha` rather than
+  `prices_kywwgfbfehasqebwb`. That is the IPC naming change above working
+  correctly on a fixed input, not a separate regression — the old name was
+  unusable anyway, since it was regenerated on every process start.
+
+- **`ActorConfig::new` no longer takes a parent, and no longer returns a
+  `Result`.** It builds root actors only:
+
+  ```rust
+  // Was
+  ActorConfig::new(id, None, broker)?                          // root
+  ActorConfig::new(Ern::with_root(name)?, Some(parent), broker)?  // child
+
+  // Now
+  ActorConfig::new(id, broker)                                 // root, infallible
+  ActorConfig::for_supervised_child(name, parent, broker)?     // child
+  ```
+
+  Downstream code calling the three-argument form will not compile. Migration is
+  mechanical: drop the `None` and the `?`/`expect`/`unwrap` for a root; for a
+  child, pass the plain name where the `Ern` used to be built and keep the `?`.
+
+  The parent branch was where the defect above lived, so it is deleted rather
+  than patched. Taking an `Ern` for what is really a *name* is what let the bug
+  hide in plain sight: `Ern::with_root("alpha")` looks like it carries "alpha",
+  and it does — in a field `Add` never reads. There is now one way to build a
+  child, and it takes a string. The `Result` went with the parent parameter,
+  which held its only failure mode.
+
+- **A supervision chain is limited to `MAX_SUPERVISION_DEPTH` (10) levels**, a
+  new public constant. `for_supervised_child` and `create_child` check depth
+  before building the identifier, so exceeding it reports supervision depth and
+  names the child refused, rather than surfacing `acton-ern`'s generic "cannot
+  exceed maximum of 10 parts".
+
+  The value is not free to change. `acton-ern` 2 hardcodes the same cap inside
+  `Ern::add_part` and exposes no constant, accessor, or `add_part_with_limit` to
+  read it from, so **raising this number requires `acton-ern` 3**; raising it
+  alone would only move which error you get.
+  `a_child_at_the_depth_limit_is_refused_by_name` fails if the two drift apart.
+
 ### Undeprecated
 
 - `ActorConfig::with_supervision_strategy` and `ActorConfig::with_restart_limiter`

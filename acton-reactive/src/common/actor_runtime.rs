@@ -116,10 +116,8 @@ impl ActorRuntime {
     {
         let actor_config = ActorConfig::new(
             Ern::with_root(name).expect("Failed to create root Ern for new actor"), // Use expect for clarity
-            None,                        // No parent for top-level actor
             Some(self.0.broker.clone()), // Use system broker
-        )
-        .expect("Failed to create actor config");
+        );
 
         let runtime = self.clone();
         let new_actor = ManagedActor::new(Some(&runtime), Some(&actor_config));
@@ -675,9 +673,8 @@ impl ActorRuntime {
         State: Default + Send + Debug + 'static,
     {
         // Create a default config, ensuring the system broker is included.
-        let config = ActorConfig::new(Ern::default(), None, Some(self.broker()))?;
+        let config = ActorConfig::new(Ern::default(), Some(self.broker()));
         // Reuse the more general spawn function.
         self.spawn_actor_with_setup_fn(config, setup_fn).await
     }
 }
-

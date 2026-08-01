@@ -514,9 +514,9 @@ fn supervision_spawn_children(bencher: Bencher<'_, '_>, child_count: usize) {
             // Spawn children under supervision
             let mut child_handles = Vec::with_capacity(child_count);
             for i in 0..child_count {
-                let child_config = ActorConfig::new(
-                    Ern::with_root(format!("child_{i}")).unwrap(),
-                    Some(parent_handle.clone()),
+                let child_config = ActorConfig::for_supervised_child(
+                    format!("child_{i}"),
+                    parent_handle.clone(),
                     parent_handle.get_broker(),
                 )
                 .unwrap();

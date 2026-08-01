@@ -15,11 +15,29 @@
  */
 
 use acton_ern::Ern;
-use acton_ern::ErnParser;
 
 use crate::actor::{RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
 use crate::common::{BrokerRef, ParentRef};
 use crate::traits::ActorHandleInterface;
+
+/// How deep a chain of supervised children may go.
+///
+/// A child's identifier is its parent's with one part appended, so this is also
+/// the number of parts an actor's [`Ern`] may carry. Reaching it is refused by
+/// [`ActorConfig::for_supervised_child`] under this name, rather than surfacing
+/// `acton-ern`'s generic message about parts.
+///
+/// # This value is not free to change
+///
+/// It must equal the cap `acton-ern` itself enforces. Version 2 hardcodes 10
+/// inside `Ern::add_part` and exposes no constant, no accessor, and no
+/// `add_part_with_limit` to read it from. Raising this number without an
+/// `acton-ern` 3 that raises its own cap would only move which error you get:
+/// the check below would stop firing first and `add_part` would refuse the same
+/// part anyway, with a worse message.
+///
+/// `a_child_at_the_depth_limit_is_refused_by_name` fails if that drift happens.
+pub const MAX_SUPERVISION_DEPTH: usize = 10;
 
 /// Configuration parameters required to initialize a new actor.
 ///
@@ -28,13 +46,14 @@ use crate::traits::ActorHandleInterface;
 /// and its connection to the system message broker.
 ///
 /// The actor's identity is represented by an [`Ern`](acton_ern::Ern), which supports
-/// hierarchical naming. If a `parent` actor is specified during configuration, the
-/// final `Ern` of the new actor will be derived by appending its base `id` to the
-/// parent's `Ern`.
+/// hierarchical naming. A root actor is built with [`new`](Self::new) or
+/// [`new_with_name`](Self::new_with_name); a child is built with
+/// [`for_supervised_child`](Self::for_supervised_child), which appends the child's
+/// name to its parent's `Ern` as a part.
 #[derive(Default, Debug, Clone)]
 pub struct ActorConfig {
-    /// The unique identifier (`Ern`) for the actor.
-    /// If created under a parent, this will be the fully resolved hierarchical ID.
+    /// The actor's resolved unique identifier (`Ern`).
+    /// For a child, this is the full hierarchical ID, `<parent-ern>/<name>`.
     id: Ern,
     /// Optional handle to the system message broker.
     pub(crate) broker: Option<BrokerRef>,
@@ -60,57 +79,27 @@ pub struct ActorConfig {
 }
 
 impl ActorConfig {
-    /// Creates a new `ActorConfig` instance, potentially deriving a hierarchical ID.
+    /// Creates a configuration for a top-level actor with the identifier you give it.
     ///
-    /// This constructor configures a new actor. If a `parent` handle is provided,
-    /// the actor's final `id` (`Ern`) is constructed by appending the provided `id`
-    /// segment to the parent's `Ern`. If no `parent` is provided, the `id` is used directly.
+    /// The `id` is used as-is. This constructor builds **root** actors only; to
+    /// build a child under a supervisor, use
+    /// [`for_supervised_child`](Self::for_supervised_child), which derives the
+    /// child's identifier from its parent's and its name.
     ///
     /// # Arguments
     ///
-    /// * `id` - The base identifier (`Ern`) for the actor. If `parent` is `Some`, this
-    ///   acts as the final segment appended to the parent's ID. If `parent` is `None`,
-    ///   this becomes the actor's root ID.
-    /// * `parent` - An optional [`ParentRef`] (handle) to the supervising actor.
+    /// * `id` - The identifier (`Ern`) for the actor.
     /// * `broker` - An optional [`BrokerRef`] (handle) to the system message broker.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the configured `ActorConfig` instance.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if parsing the parent's ID string into an `Ern` fails when
-    /// constructing a hierarchical ID.
-    pub fn new(
-        id: Ern,
-        parent: Option<ParentRef>,
-        broker: Option<BrokerRef>,
-    ) -> anyhow::Result<Self> {
-        if let Some(parent_ref) = parent {
-            // Use a different variable name to avoid shadowing
-            // Get the parent ERN
-            let parent_id = ErnParser::new(parent_ref.id().to_string()).parse()?;
-            let child_id = parent_id + id;
-            Ok(Self {
-                id: child_id,
-                broker,
-                parent: Some(parent_ref),
-                inbox_capacity: None,
-                restart_policy: RestartPolicy::default(),
-                supervision_strategy: SupervisionStrategy::default(),
-                restart_limiter_config: None,
-            })
-        } else {
-            Ok(Self {
-                id,
-                broker,
-                parent, // parent is None here
-                inbox_capacity: None,
-                restart_policy: RestartPolicy::default(),
-                supervision_strategy: SupervisionStrategy::default(),
-                restart_limiter_config: None,
-            })
+    #[must_use]
+    pub fn new(id: Ern, broker: Option<BrokerRef>) -> Self {
+        Self {
+            id,
+            broker,
+            parent: None,
+            inbox_capacity: None,
+            restart_policy: RestartPolicy::default(),
+            supervision_strategy: SupervisionStrategy::default(),
+            restart_limiter_config: None,
         }
     }
 
@@ -179,7 +168,7 @@ impl ActorConfig {
     /// Returns an error if creating the root `Ern` from the provided `name` fails
     /// (e.g., if the name is invalid according to `Ern` rules).
     pub fn new_with_name(name: impl Into<String>) -> anyhow::Result<Self> {
-        Self::new(Ern::with_root(name.into())?, None, None)
+        Ok(Self::new(Ern::with_root(name.into())?, None))
     }
 
     /// Creates a configuration for a child whose identity is derived from its
@@ -204,15 +193,27 @@ impl ActorConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if `name` is not a valid identifier segment.
+    /// Returns an error if `name` is not a valid identifier segment, or if the
+    /// parent already sits at [`MAX_SUPERVISION_DEPTH`].
     pub fn for_supervised_child(
         name: impl Into<String>,
         parent: ParentRef,
         broker: Option<BrokerRef>,
     ) -> anyhow::Result<Self> {
+        let parent_id = parent.id();
+        let depth = parent_id.parts().len();
+        if depth >= MAX_SUPERVISION_DEPTH {
+            let name = name.into();
+            return Err(anyhow::anyhow!(
+                "supervision depth limit reached: {parent_id} is already \
+                 {depth} levels deep, and the maximum supervision depth is \
+                 {MAX_SUPERVISION_DEPTH}, so '{name}' cannot be added beneath it"
+            ));
+        }
+
         // The parent's `Ern` is used directly rather than round-tripped through
         // its string form, which would not reproduce the same identifier.
-        let id = parent.id().add_part(name.into())?;
+        let id = parent_id.add_part(name.into())?;
         Ok(Self {
             id,
             broker,
@@ -402,9 +403,68 @@ mod supervised_child_identity_tests {
     use crate::common::ActorHandle;
 
     fn parent_handle() -> ActorHandle {
-        let parent_ern = Ern::with_root("pool").expect("'pool' is a valid Ern root");
-        let (outbox, _inbox) = tokio::sync::mpsc::channel(8);
-        ActorHandle::new(parent_ern, outbox)
+        handle_at_depth(0)
+    }
+
+    /// A handle whose `Ern` already carries `depth` parts.
+    fn handle_at_depth(depth: usize) -> ActorHandle {
+        ActorHandle::new(ern_at_depth(depth), tokio::sync::mpsc::channel(8).0)
+    }
+
+    /// An `Ern` rooted at "pool" carrying `depth` parts.
+    fn ern_at_depth(depth: usize) -> Ern {
+        (0..depth).fold(
+            Ern::with_root("pool").expect("'pool' is a valid Ern root"),
+            |ern, level| {
+                ern.add_part(format!("level{level}"))
+                    .expect("depth is within what acton-ern allows")
+            },
+        )
+    }
+
+    #[test]
+    fn a_child_at_the_depth_limit_is_refused_by_name() {
+        let deep = ern_at_depth(MAX_SUPERVISION_DEPTH);
+
+        let error = ActorConfig::for_supervised_child(
+            "one_too_many",
+            ActorHandle::new(deep.clone(), tokio::sync::mpsc::channel(8).0),
+            None,
+        )
+        .expect_err("the parent is already at the depth limit");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("supervision depth"),
+            "the refusal should name supervision depth rather than acton-ern's \
+             generic message about parts, but said: {message}"
+        );
+        assert!(
+            message.contains("one_too_many"),
+            "the refusal should name the child that was refused: {message}"
+        );
+
+        // `MAX_SUPERVISION_DEPTH` is the dependency's boundary, not merely some
+        // number below it: at this same depth acton-ern refuses the part on its
+        // own. Raising the constant without an acton-ern whose cap also rises
+        // would stop our check firing first, and the assertions above would then
+        // see acton-ern's message instead of ours.
+        assert!(
+            deep.add_part("one_too_many").is_err(),
+            "acton-ern's own cap must sit exactly at MAX_SUPERVISION_DEPTH"
+        );
+    }
+
+    #[test]
+    fn a_child_one_below_the_depth_limit_is_still_allowed() {
+        let parent = handle_at_depth(MAX_SUPERVISION_DEPTH - 1);
+
+        let config = ActorConfig::for_supervised_child("last_level", parent, None)
+            .expect("one level remains beneath the limit");
+
+        assert_eq!(config.id().parts().len(), MAX_SUPERVISION_DEPTH);
+        let id = config.id().to_string();
+        assert!(id.ends_with("last_level"), "{id}");
     }
 
     #[test]

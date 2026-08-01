@@ -82,7 +82,7 @@ fn worker_reporting_to(
     observer: &ActorHandle,
     name: &str,
 ) -> anyhow::Result<ManagedActor<Idle, Worker>> {
-    let config = ActorConfig::new(Ern::with_root(name)?, Some(observer.clone()), None)?;
+    let config = ActorConfig::for_supervised_child(name, observer.clone(), None)?;
     Ok(runtime.new_actor_with_config::<Worker>(config))
 }
 

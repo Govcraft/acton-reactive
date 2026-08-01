@@ -97,7 +97,7 @@ async fn test_ern_hierarchy() -> anyhow::Result<()> {
     let service = runtime.new_actor_with_name::<ServiceState>("payment-service".to_string());
 
     // Create child with config
-    let child_config = ActorConfig::new(Ern::with_root("worker-1").unwrap(), None, None)?;
+    let child_config = ActorConfig::new(Ern::with_root("worker-1").unwrap(), None);
     let child = runtime.new_actor_with_config::<WorkerState>(child_config);
 
     let service_handle = service.start().await;
@@ -183,8 +183,7 @@ async fn test_worker_pool_pattern() -> anyhow::Result<()> {
     let mut worker_handles = Vec::new();
     for i in 0..3 {
         let counter = total_tasks.clone();
-        let config =
-            ActorConfig::new(Ern::with_root(format!("worker-{i}")).unwrap(), None, None)?;
+        let config = ActorConfig::new(Ern::with_root(format!("worker-{i}")).unwrap(), None);
 
         let mut worker = runtime.new_actor_with_config::<Worker>(config);
 
@@ -279,7 +278,7 @@ async fn test_find_child() -> anyhow::Result<()> {
     let parent = runtime.new_actor::<Parent>();
     let parent_handle = parent.start().await;
 
-    let config = ActorConfig::new(Ern::with_root("my-child").unwrap(), None, None)?;
+    let config = ActorConfig::new(Ern::with_root("my-child").unwrap(), None);
     let child = runtime.new_actor_with_config::<Child>(config);
     let child_id = child.id().clone();
 

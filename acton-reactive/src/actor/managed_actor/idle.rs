@@ -837,8 +837,8 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// Creates the configuration for a new child actor under this actor's supervision.
     ///
     /// This method generates a `ManagedActor<Idle, State>` instance pre-configured
-    /// to be a child of the current actor. It automatically derives a hierarchical
-    /// [`Ern`] for the child based on the parent's ID and the provided `name`.
+    /// to be a child of the current actor. The child's [`Ern`] is its parent's with
+    /// `name` appended as a part, so it reads as `<parent-ern>/<name>`.
     /// The child inherits the parent's broker reference.
     ///
     /// The returned actor is in the `Idle` state and still needs to be configured
@@ -846,9 +846,17 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// The parent actor typically calls `handle.supervise(child_handle)` after the child
     /// is started to register it formally.
     ///
+    /// # The name is part of the identifier
+    ///
+    /// Two children of one parent given different names get different
+    /// identifiers *because of their names*, and the same parent and name always
+    /// yield the same identifier. Before 9.0.0 neither held: the name was
+    /// discarded and each call drew a fresh random suffix, so siblings differed
+    /// only by accident.
+    ///
     /// # Arguments
     ///
-    /// * `name`: The name segment for the child actor's [`Ern`].
+    /// * `name`: The name segment appended to the parent's [`Ern`].
     ///
     /// # Returns
     ///
@@ -857,14 +865,16 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// # Errors
     ///
-    /// Returns an error if creating the child's `Ern` fails or if creating the
-    /// `ActorConfig` fails (e.g., parsing the parent ID).
+    /// Returns an error if `name` is not a valid identifier segment, or if this
+    /// actor already sits at
+    /// [`MAX_SUPERVISION_DEPTH`](crate::actor::MAX_SUPERVISION_DEPTH).
     #[instrument(skip(self))]
     pub fn create_child(&self, name: String) -> anyhow::Result<Self> {
-        // Configure the child with parent and broker references.
-        let config = ActorConfig::new(
-            Ern::with_root(name)?,       // Child's name segment
-            Some(self.handle.clone()),   // Parent handle
+        // Derived through the supervised-child constructor so the child's
+        // identifier keeps its name and is reproducible for a given parent.
+        let config = ActorConfig::for_supervised_child(
+            name,
+            self.handle.clone(),         // Parent handle
             Some(self.runtime.broker()), // Inherited broker handle
         )?;
         // Create the Idle actor using the internal constructor.

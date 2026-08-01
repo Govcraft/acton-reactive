@@ -117,8 +117,7 @@ impl Broker {
     /// Returns the `ActorHandle` of the initialized broker actor.
     #[instrument]
     pub(crate) async fn initialize(runtime: ActorRuntime) -> BrokerRef {
-        let actor_config = ActorConfig::new(Ern::with_root("broker_main").unwrap(), None, None)
-            .expect("Couldn't create initial broker config");
+        let actor_config = ActorConfig::new(Ern::with_root("broker_main").unwrap(), None);
 
         // Assert that the cancellation_token in the runtime is not cancelled before actor creation.
         assert!(

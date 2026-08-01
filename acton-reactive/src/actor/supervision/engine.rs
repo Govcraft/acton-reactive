@@ -1444,9 +1444,7 @@ mod tests {
         let config = ActorConfig::new(
             Ern::with_root("pool").expect("'pool' is a valid Ern root"),
             None,
-            None,
         )
-        .expect("a root Ern with no parent is a valid configuration")
         .with_restart_limiter(RestartLimiterConfig {
             max_restarts,
             ..RestartLimiterConfig::default()

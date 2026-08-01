@@ -37,7 +37,7 @@
  */
 
 // Re-export key types for easier access within the crate and potentially the prelude.
-pub use actor_config::ActorConfig;
+pub use actor_config::{ActorConfig, MAX_SUPERVISION_DEPTH};
 pub use managed_actor::Idle;
 pub use managed_actor::ManagedActor;
 pub use managed_actor::started::Started; // Note: `Started` is defined within a submodule

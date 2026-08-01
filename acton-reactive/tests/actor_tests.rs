@@ -59,7 +59,7 @@ async fn test_async_reactor() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // Configure the actor's identity (ERN) and relationship (no parent, no broker needed here).
-    let actor_config = ActorConfig::new(Ern::with_root("improve_show").unwrap(), None, None)?;
+    let actor_config = ActorConfig::new(Ern::with_root("improve_show").unwrap(), None);
     // Create an actor builder for the `Comedian` state (`model`).
     // The builder is in an `Idle` state, ready for configuration.
     let mut comedian_actor_builder = runtime.new_actor_with_config::<Comedian>(actor_config);
@@ -234,20 +234,12 @@ async fn test_child_actor() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // --- Parent Actor ---
-    let parent_config = ActorConfig::new(
-        Ern::with_root("test_child_actor_parent").unwrap(),
-        None,
-        None,
-    )?;
+    let parent_config = ActorConfig::new(Ern::with_root("test_child_actor_parent").unwrap(), None);
     // Create the parent actor builder. No specific handlers needed for the parent itself in this test.
     let parent_actor_builder = runtime.new_actor_with_config::<PoolItem>(parent_config);
 
     // --- Child Actor ---
-    let child_config = ActorConfig::new(
-        Ern::with_root("test_child_actor_chile").unwrap(),
-        None,
-        None,
-    )?;
+    let child_config = ActorConfig::new(Ern::with_root("test_child_actor_chile").unwrap(), None);
     // Create the child actor builder.
     let mut child_actor_builder = runtime.new_actor_with_config::<PoolItem>(child_config);
 
@@ -344,11 +336,8 @@ async fn test_find_child_actor() -> anyhow::Result<()> {
     let parent_handle = parent_actor_builder.start().await;
 
     // --- Child Actor ---
-    let child_config = ActorConfig::new(
-        Ern::with_root("test_find_child_actor_child").unwrap(),
-        None,
-        None,
-    )?;
+    let child_config =
+        ActorConfig::new(Ern::with_root("test_find_child_actor_child").unwrap(), None);
     let child_actor_builder = runtime.new_actor_with_config::<PoolItem>(child_config);
     // Get the child's ID before supervision.
     let child_id = child_actor_builder.id().clone();
@@ -402,8 +391,7 @@ async fn test_actor_mutation() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     // Configure and create the Comedian actor builder.
-    let actor_config =
-        ActorConfig::new(Ern::with_root("test_actor_mutation").unwrap(), None, None)?;
+    let actor_config = ActorConfig::new(Ern::with_root("test_actor_mutation").unwrap(), None);
     let mut comedian_actor_builder = runtime.new_actor_with_config::<Comedian>(actor_config);
 
     // Configure actor behavior.
@@ -545,7 +533,7 @@ async fn test_child_count_in_reactor() -> anyhow::Result<()> {
 
     // --- Child Actor (Counter) ---
     // Configure and create the child actor builder.
-    let child_config = ActorConfig::new(Ern::with_root("child").unwrap(), None, None)?;
+    let child_config = ActorConfig::new(Ern::with_root("child").unwrap(), None);
     let mut child_actor_builder = runtime.new_actor_with_config::<Counter>(child_config);
     info!(
         "Created child actor builder with id: {}",

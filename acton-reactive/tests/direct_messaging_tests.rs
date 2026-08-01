@@ -100,8 +100,7 @@ impl PriceService {
     /// Creates, configures, and starts a new `PriceService` actor.
     /// Returns a struct containing the handle to the started actor.
     pub(crate) async fn new(runtime: &mut ActorRuntime) -> Self {
-        let config = ActorConfig::new(Ern::with_root("price_service").unwrap(), None, None)
-            .expect("Failed to create actor config");
+        let config = ActorConfig::new(Ern::with_root("price_service").unwrap(), None);
         // Create the actor builder.
         let mut price_service_builder = runtime.new_actor_with_config::<Self>(config);
         // Configure the actor's behavior.
@@ -130,8 +129,7 @@ impl ShoppingCart {
     /// Creates, configures, and starts a new `ShoppingCart` actor.
     /// Returns a struct containing the handle to the started actor and the `PriceService` handle.
     pub(crate) async fn new(price_service_handle: ActorHandle, runtime: &mut ActorRuntime) -> Self {
-        let config = ActorConfig::new(Ern::with_root("shopping_cart").unwrap(), None, None)
-            .expect("Failed to create actor config");
+        let config = ActorConfig::new(Ern::with_root("shopping_cart").unwrap(), None);
         // Create the actor builder.
         let mut shopping_cart_builder = runtime.new_actor_with_config::<Self>(config);
         // Configure actor behavior

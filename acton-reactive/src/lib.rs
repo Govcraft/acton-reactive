@@ -170,7 +170,7 @@ pub mod prelude {
         ManagedActor, RestartGeneration, RestartLimitExceeded, RestartLimiter,
         RestartLimiterConfig, RestartPolicy, RestartStats, Started, SupervisedChild,
         SupervisionDecision, SupervisionError, SupervisionEscalated, SupervisionState,
-        SupervisionStatus, SupervisionStrategy, TerminationReason,
+        SupervisionStatus, SupervisionStrategy, TerminationReason, MAX_SUPERVISION_DEPTH,
     };
     pub use crate::common::{ActonApp, ActorHandle, ActorRuntime, Broker, Reply};
     pub use crate::message::{

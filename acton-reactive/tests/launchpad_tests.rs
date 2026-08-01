@@ -65,7 +65,7 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
     let broker_handle = runtime.broker();
 
     // Configuration for the parent actor.
-    let parent_config = ActorConfig::new(Ern::with_root("parent")?, None, None)?;
+    let parent_config = ActorConfig::new(Ern::with_root("parent")?, None);
 
     // Clone broker handle for broadcasting later.
     let broker_handle_clone = broker_handle.clone();
@@ -82,9 +82,7 @@ async fn test_launch_passing_acton() -> anyhow::Result<()> {
                 let child_config = ActorConfig::new(
                     Ern::with_root("child").expect("Could not create child ARN root"),
                     None,
-                    None,
-                )
-                .expect("Couldn't create child config");
+                );
 
                 // Get a clone of the runtime handle from the parent builder's context.
                 // This is needed to spawn the child actor.

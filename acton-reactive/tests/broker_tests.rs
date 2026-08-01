@@ -73,11 +73,11 @@ async fn test_broker() -> anyhow::Result<()> {
 
     // --- Counter Actor ---
     // Configure the counter actor, explicitly providing the broker handle.
+    // Provide broker handle for potential direct use (though subscribe uses handle's broker).
     let counter_config = ActorConfig::new(
         Ern::with_root("counter").unwrap(),
-        None,
-        Some(broker_handle.clone()), // Provide broker handle for potential direct use (though subscribe uses handle's broker)
-    )?;
+        Some(broker_handle.clone()),
+    );
     let mut counter_actor_builder = runtime.new_actor_with_config::<Counter>(counter_config);
 
     // Configure Counter actor's handlers.
@@ -168,9 +168,8 @@ async fn test_broker_from_handler() -> anyhow::Result<()> {
     // --- Counter Actor ---
     let counter_config = ActorConfig::new(
         Ern::with_root("counter").unwrap(),
-        None,
         Some(broker_handle.clone()),
-    )?;
+    );
     let mut counter_actor_builder = runtime.new_actor_with_config::<Counter>(counter_config);
 
     // Configure Counter handler.
@@ -368,7 +367,7 @@ async fn test_stopped_actor_is_unsubscribed_from_broker() -> anyhow::Result<()> 
     let recorder_id = Ern::with_root("recorder").unwrap();
 
     // --- First incarnation: subscribe, start, then stop ---
-    let first_config = ActorConfig::new(recorder_id.clone(), None, Some(broker_handle.clone()))?;
+    let first_config = ActorConfig::new(recorder_id.clone(), Some(broker_handle.clone()));
     let mut first_builder = runtime.new_actor_with_config::<Recorder>(first_config);
     let first_pongs = first_builder.model.pongs.clone();
     first_builder.mutate_on::<Pong>(|actor, _envelope| {
@@ -380,7 +379,7 @@ async fn test_stopped_actor_is_unsubscribed_from_broker() -> anyhow::Result<()> 
     first_handle.stop().await?;
 
     // --- Second incarnation: same Ern, fresh actor and subscription ---
-    let second_config = ActorConfig::new(recorder_id, None, Some(broker_handle.clone()))?;
+    let second_config = ActorConfig::new(recorder_id, Some(broker_handle.clone()));
     let mut second_builder = runtime.new_actor_with_config::<Recorder>(second_config);
     let second_pongs = second_builder.model.pongs.clone();
     second_builder.mutate_on::<Pong>(|actor, _envelope| {

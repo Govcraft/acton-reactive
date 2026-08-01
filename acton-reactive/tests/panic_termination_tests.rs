@@ -81,7 +81,7 @@ async fn start_supervisor(
     name: &str,
     captured: Arc<Mutex<Option<ChildTerminated>>>,
 ) -> anyhow::Result<ActorHandle> {
-    let parent_config = ActorConfig::new(Ern::with_root(name)?, None, None)?;
+    let parent_config = ActorConfig::new(Ern::with_root(name)?, None);
 
     let mut parent = app.new_actor_with_config::<SupervisorActor>(parent_config);
     parent.model.last_notification = captured;
@@ -105,15 +105,11 @@ async fn test_parent_notified_of_panic_termination() -> anyhow::Result<()> {
     let mut app = ActonApp::launch_async().await;
 
     let captured = Arc::new(Mutex::new(None));
-    let parent_handle =
-        start_supervisor(&mut app, "panic-supervisor", captured.clone()).await?;
+    let parent_handle = start_supervisor(&mut app, "panic-supervisor", captured.clone()).await?;
 
     // Create child actor whose Boom handler panics with a &str payload
-    let child_config = ActorConfig::new(
-        Ern::with_root("panicking-child")?,
-        Some(parent_handle.clone()),
-        None,
-    )?;
+    let child_config =
+        ActorConfig::for_supervised_child("panicking-child", parent_handle.clone(), None)?;
 
     let mut child = app.new_actor_with_config::<PanickingChild>(child_config);
     child.mutate_on::<Boom>(|_actor, _ctx| {
@@ -153,9 +149,9 @@ async fn test_panic_reason_preserves_string_payload_and_policy() -> anyhow::Resu
         start_supervisor(&mut app, "transient-panic-supervisor", captured.clone()).await?;
 
     // Create child with Transient policy whose handler panics with a String payload
-    let child_config = ActorConfig::new(
-        Ern::with_root("transient-panicking-child")?,
-        Some(parent_handle.clone()),
+    let child_config = ActorConfig::for_supervised_child(
+        "transient-panicking-child",
+        parent_handle.clone(),
         None,
     )?
     .with_restart_policy(RestartPolicy::Transient);
@@ -210,11 +206,8 @@ async fn test_notification_survives_after_stop_panic() -> anyhow::Result<()> {
     let parent_handle =
         start_supervisor(&mut app, "cleanup-panic-supervisor", captured.clone()).await?;
 
-    let child_config = ActorConfig::new(
-        Ern::with_root("double-panicking-child")?,
-        Some(parent_handle.clone()),
-        None,
-    )?;
+    let child_config =
+        ActorConfig::for_supervised_child("double-panicking-child", parent_handle.clone(), None)?;
 
     let mut child = app.new_actor_with_config::<PanickingChild>(child_config);
     child
@@ -252,11 +245,8 @@ async fn test_after_stop_panic_reported_on_clean_termination() -> anyhow::Result
     let parent_handle =
         start_supervisor(&mut app, "cleanup-only-panic-supervisor", captured.clone()).await?;
 
-    let child_config = ActorConfig::new(
-        Ern::with_root("cleanup-panicking-child")?,
-        Some(parent_handle.clone()),
-        None,
-    )?;
+    let child_config =
+        ActorConfig::for_supervised_child("cleanup-panicking-child", parent_handle.clone(), None)?;
 
     let mut child = app.new_actor_with_config::<PanickingChild>(child_config);
     child.after_stop(|_actor| {
@@ -314,8 +304,7 @@ async fn test_panicked_actor_is_unsubscribed_from_broker() -> anyhow::Result<()>
     let recorder_id = Ern::with_root("panic-recorder")?;
 
     // --- First incarnation: subscribe, then panic ---
-    let first_config =
-        ActorConfig::new(recorder_id.clone(), None, Some(broker_handle.clone()))?;
+    let first_config = ActorConfig::new(recorder_id.clone(), Some(broker_handle.clone()));
     let mut first = app.new_actor_with_config::<Recorder>(first_config);
     let first_pongs = first.model.pongs.clone();
     first
@@ -336,7 +325,7 @@ async fn test_panicked_actor_is_unsubscribed_from_broker() -> anyhow::Result<()>
     first_handle.stop().await?;
 
     // --- Second incarnation: same root Ern, fresh subscription ---
-    let second_config = ActorConfig::new(recorder_id, None, Some(broker_handle.clone()))?;
+    let second_config = ActorConfig::new(recorder_id, Some(broker_handle.clone()));
     let mut second = app.new_actor_with_config::<Recorder>(second_config);
     let second_pongs = second.model.pongs.clone();
     second.mutate_on::<Pong>(|actor, _ctx| {

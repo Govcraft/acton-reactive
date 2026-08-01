@@ -48,7 +48,7 @@ impl std::error::Error for TestErr2 {}
 async fn test_result_and_error_handler_fires() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
-    let actor_config = ActorConfig::new(Ern::with_root("error_handler_demo").unwrap(), None, None)?;
+    let actor_config = ActorConfig::new(Ern::with_root("error_handler_demo").unwrap(), None);
 
     let mut actor_builder = runtime.new_actor_with_config::<Counter>(actor_config);
 
@@ -126,8 +126,7 @@ async fn test_try_act_on_error_handler_fires() -> anyhow::Result<()> {
     let actor_config = ActorConfig::new(
         Ern::with_root("read_only_error_handler_demo").unwrap(),
         None,
-        None,
-    )?;
+    );
 
     let mut actor_builder = runtime.new_actor_with_config::<Counter>(actor_config);
 
@@ -163,8 +162,7 @@ async fn test_try_act_on_unhandled_error_logs_and_continues() -> anyhow::Result<
     let actor_config = ActorConfig::new(
         Ern::with_root("read_only_unhandled_error_demo").unwrap(),
         None,
-        None,
-    )?;
+    );
 
     let mut actor_builder = runtime.new_actor_with_config::<Counter>(actor_config);
 
@@ -198,11 +196,8 @@ async fn test_try_act_on_unhandled_error_logs_and_continues() -> anyhow::Result<
 async fn test_try_act_on_handlers_remain_concurrent() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
-    let actor_config = ActorConfig::new(
-        Ern::with_root("read_only_concurrency_demo").unwrap(),
-        None,
-        None,
-    )?;
+    let actor_config =
+        ActorConfig::new(Ern::with_root("read_only_concurrency_demo").unwrap(), None);
 
     let mut actor_builder = runtime.new_actor_with_config::<ConcurrentFallible>(actor_config);
     actor_builder.model.started_at = Some(std::time::Instant::now());
@@ -256,8 +251,7 @@ async fn test_try_act_on_handlers_remain_concurrent() -> anyhow::Result<()> {
 async fn test_fallible_handler_returns_value() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
-    let actor_config =
-        ActorConfig::new(Ern::with_root("fallible_return_demo").unwrap(), None, None)?;
+    let actor_config = ActorConfig::new(Ern::with_root("fallible_return_demo").unwrap(), None);
 
     let mut actor_builder = runtime.new_actor_with_config::<Counter>(actor_config);
 
