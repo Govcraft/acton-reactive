@@ -14,6 +14,7 @@
 //!     messages, stopping, supervising).
 //! *   [`Broker`]: The central publish-subscribe message broker implementation.
 //! *   [`Reply`]: A utility struct for creating standard return types for message handlers.
+//! *   [`AskError`]: Why a request/reply exchange produced no reply.
 //!
 //! Internal types and submodules handle the implementation details for these components.
 
@@ -37,6 +38,7 @@
 pub use acton::ActonApp;
 pub use actor_handle::ActorHandle;
 pub use actor_reply::Reply;
+pub use ask::{AskError, DEFAULT_ASK_TIMEOUT};
 pub use actor_runtime::ActorRuntime;
 #[cfg(feature = "ipc")]
 pub use actor_runtime::IpcNameInUse;
@@ -60,6 +62,8 @@ mod acton_inner;
 mod actor_handle;
 /// Defines the `Reply` utility.
 mod actor_reply;
+/// Defines request/reply support: [`AskError`] and the machinery behind `ask`.
+pub mod ask;
 /// Defines the `ActorRuntime` for managing the system.
 mod actor_runtime;
 /// Defines the `Broker` implementation.

@@ -139,6 +139,8 @@ pub mod ipc {
 /// *   [`crate::common::ParentRef`]: Alias for an [`ActorHandle`](crate::common::ActorHandle) that refers to a supervisor.
 /// *   [`crate::common::Reply`]: Utility for creating standard message handler return types.
 /// *   [`crate::common::ActorRuntime`]: Represents the initialized Acton runtime.
+/// *   [`crate::common::AskError`]: Why a request/reply exchange produced no reply.
+/// *   [`crate::common::DEFAULT_ASK_TIMEOUT`]: The deadline `ask` applies by default.
 /// *   [`crate::message::BrokerRequest`]: Wrapper for messages intended for broadcast.
 /// *   [`crate::message::BrokerRequestEnvelope`]: Specialized envelope for broadcast messages.
 /// *   [`crate::message::MessageAddress`]: Addressable endpoint of an actor.
@@ -147,6 +149,7 @@ pub mod ipc {
 /// *   [`crate::traits::ActonMessage`]: Marker trait for all valid messages.
 /// *   [`crate::traits::ActorHandleInterface`]: Core trait defining actor interaction methods.
 /// *   [`crate::traits::Broadcaster`]: Trait defining message broadcasting capabilities.
+/// *   [`crate::traits::Request`]: Marks a message as expecting one reply, enabling `ask`.
 /// *   [`crate::traits::Subscribable`]: Trait for managing message subscriptions.
 /// *   [`crate::traits::Subscriber`]: Trait for accessing the message broker.
 ///
@@ -182,14 +185,15 @@ pub mod prelude {
         SupervisionStatus, SupervisionStrategy, TerminationReason, MAX_SUPERVISION_DEPTH,
     };
     pub use crate::common::{
-        ActonApp, ActorHandle, ActorRuntime, Broker, BrokerRef, ParentRef, Reply,
+        ActonApp, ActorHandle, ActorRuntime, AskError, Broker, BrokerRef, ParentRef, Reply,
+        DEFAULT_ASK_TIMEOUT,
     };
     pub use crate::message::{
         BrokerRequest, BrokerRequestEnvelope, ChildTerminated, MessageAddress, OutboundEnvelope,
         SystemSignal,
     };
     pub use crate::traits::{
-        ActonMessage, ActorHandleInterface, Broadcaster, Subscribable, Subscriber,
+        ActonMessage, ActorHandleInterface, Broadcaster, Request, Subscribable, Subscriber,
     };
 
     // IPC types (feature-gated)

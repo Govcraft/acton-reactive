@@ -26,6 +26,7 @@ use tracing::{instrument, trace}; // Removed error, warn as they weren't used in
 use crate::common::{ActorHandle, OutboundEnvelope}; // Keep wildcard import if necessary, or specify types
 use crate::message::{BrokerRequest, MessageAddress}; // BrokerRequest used in send_sync default
 use crate::traits::acton_message::ActonMessage;
+use crate::traits::request::Request;
 
 /// Defines the core asynchronous interface for interacting with an actor via its handle.
 ///
@@ -116,6 +117,130 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
             trace!(sender = %self.id(), recipient = %self.id(), "Default send implementation");
             envelope.send(message).await;
         }
+    }
+
+    /// Sends a request and waits for the actor's reply.
+    ///
+    /// This is the counterpart to [`send`](Self::send), which is fire-and-forget and
+    /// tells you nothing about whether the message was processed. `ask` resolves only
+    /// once the actor has answered, so it establishes the happens-before that
+    /// `send`-then-continue does not:
+    ///
+    /// ```ignore
+    /// let count = handle.ask(GetCount).await?;
+    /// ```
+    ///
+    /// Reach for it wherever code would otherwise sleep and hope. Because an actor
+    /// processes its inbox in order, a completed `ask` also proves every message you
+    /// sent that actor beforehand has been processed.
+    ///
+    /// The message must implement [`Request`], which names the reply type. The handler
+    /// answers through its reply envelope exactly as it always has; `ask` places no new
+    /// obligation on the handler side, and an actor cannot tell an `ask` from a `send`.
+    ///
+    /// # Deadlock
+    ///
+    /// **Do not `ask` from inside a mutable (`mutate_on`) handler.** Mutable handlers
+    /// are awaited inline on the actor's message loop, so a handler that waits for a
+    /// reply stops its own actor from processing anything — including the very message
+    /// that would produce the reply. Asking your *own* handle this way can never
+    /// succeed, and asking another actor deadlocks as soon as the two wait on each
+    /// other.
+    ///
+    /// This mirrors the restriction on
+    /// [`supervise_with`](crate::common::ActorHandle::supervise_with), and the ways out
+    /// are the same shape:
+    ///
+    /// * Send instead of asking, and let the reply arrive as an ordinary message — the
+    ///   handler is already given a reply envelope for exactly this.
+    /// * Move the exchange off the message loop: clone the handle into a
+    ///   `Reply::pending(async move { .. })` future, or a spawned task, so the loop is
+    ///   free to keep processing.
+    /// * Ask from outside the actor — from a task, a test, or `main`.
+    ///
+    /// A caller that deadlocks anyway is released by the deadline rather than stuck
+    /// forever, and gets [`AskError::TimedOut`] to say so.
+    ///
+    /// # How this resolves when no reply comes
+    ///
+    /// `ask` always finishes. Two mechanisms cover different cases:
+    ///
+    /// * It holds no reply address of its own while waiting, so the moment the actor
+    ///   lets go of the request — returning without replying, stopping, panicking, or
+    ///   being restarted — the reply channel closes and the call returns
+    ///   [`AskError::NoReply`], in microseconds and naming the situation.
+    /// * [`DEFAULT_ASK_TIMEOUT`] backstops the cases that closure cannot see, where the
+    ///   reply address is still alive but no answer is coming: a wedged actor, a
+    ///   forgotten reply envelope, a self-inflicted deadlock.
+    ///
+    /// Use [`ask_with_timeout`](Self::ask_with_timeout) for a different bound.
+    ///
+    /// # Scope
+    ///
+    /// **One actor, in-process.**
+    ///
+    /// * *Not the broker.* [`broadcast`](crate::traits::Broadcaster::broadcast) has no
+    ///   single replier — zero or many subscribers may answer — so request/reply has no
+    ///   meaning over it. `ask` addresses the actor this handle names, and nothing else.
+    /// * *Not across a process boundary yet.* The reply address is an in-process
+    ///   channel, so `ask` cannot presently reach an actor over IPC. Typed request/reply
+    ///   for IPC is being added separately, on top of the correlated transport
+    ///   `IpcClient::request` already provides; until it lands, use that directly.
+    ///
+    /// # Errors
+    ///
+    /// * [`AskError::Undeliverable`] — the actor's inbox was already closed.
+    /// * [`AskError::Cancelled`] — delivery was abandoned during shutdown.
+    /// * [`AskError::NoReply`] — delivered, but no reply will arrive.
+    /// * [`AskError::TimedOut`] — the deadline expired with the reply outstanding.
+    /// * [`AskError::UnexpectedReply`] — the handler replied with a different type.
+    ///
+    /// [`Request`]: crate::traits::Request
+    /// [`AskError`]: crate::common::AskError
+    /// [`AskError::Undeliverable`]: crate::common::AskError::Undeliverable
+    /// [`AskError::Cancelled`]: crate::common::AskError::Cancelled
+    /// [`AskError::NoReply`]: crate::common::AskError::NoReply
+    /// [`AskError::TimedOut`]: crate::common::AskError::TimedOut
+    /// [`AskError::UnexpectedReply`]: crate::common::AskError::UnexpectedReply
+    /// [`DEFAULT_ASK_TIMEOUT`]: crate::common::DEFAULT_ASK_TIMEOUT
+    fn ask<R: Request>(
+        &self,
+        request: R,
+    ) -> impl Future<Output = Result<R::Response, crate::common::AskError>> + Send + '_ {
+        self.ask_with_timeout(request, crate::common::DEFAULT_ASK_TIMEOUT)
+    }
+
+    /// Sends a request and waits for the reply, giving up after `timeout`.
+    ///
+    /// [`ask`](Self::ask) with an explicit deadline instead of
+    /// [`DEFAULT_ASK_TIMEOUT`](crate::common::DEFAULT_ASK_TIMEOUT). Pairs with `ask` the
+    /// way `IpcClient::request_with_timeout` pairs with `IpcClient::request`, so local
+    /// and remote requests are bounded the same way.
+    ///
+    /// The deadline covers the whole exchange, delivery included: a full inbox makes
+    /// delivery itself wait, and a caller asking for a bound wants it on the operation
+    /// rather than on one phase of it.
+    ///
+    /// Every caveat on [`ask`](Self::ask) applies unchanged — in particular the
+    /// `# Deadlock` section, which a shorter deadline turns from a hang into a prompt
+    /// [`AskError::TimedOut`](crate::common::AskError::TimedOut) but does not fix.
+    ///
+    /// # Errors
+    ///
+    /// As [`ask`](Self::ask).
+    #[instrument(skip(self, request), fields(request_type = std::any::type_name::<R>()))]
+    fn ask_with_timeout<R: Request>(
+        &self,
+        request: R,
+        timeout: std::time::Duration,
+    ) -> impl Future<Output = Result<R::Response, crate::common::AskError>> + Send + '_ {
+        // The envelope is built only to borrow the cancellation token that governs
+        // sends to this actor; the request itself travels in an envelope whose return
+        // address is the private reply channel, not this actor.
+        let cancellation_token = self.create_envelope(None).cancellation_token;
+        let recipient = self.reply_address();
+        trace!(recipient = %self.id(), "Asking actor and awaiting its reply");
+        crate::common::ask::send_request(recipient, cancellation_token, request, timeout)
     }
 
     /// Sends a message synchronously to a specified recipient actor.

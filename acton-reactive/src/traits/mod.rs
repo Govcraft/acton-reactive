@@ -14,6 +14,9 @@
 //! *   [`Broadcaster`]: Defines the interface for broadcasting messages throughout the system,
 //!     typically implemented by [`ActorHandle`](crate::common::ActorHandle) which delegates to the
 //!     central [`Broker`](crate::common::Broker).
+//! *   [`Request`]: Marks a message as expecting exactly one reply, of the type its
+//!     [`Response`](Request::Response) associated type names. This is what makes a message
+//!     usable with [`ActorHandleInterface::ask`].
 //! *   [`Subscriber`]: Defines the interface for accessing the system's message broker handle.
 //! *   [`Subscribable`]: Defines the interface for actors to manage their subscriptions to
 //!     message types via the broker.
@@ -39,6 +42,7 @@ pub use acton_message::ActonMessage;
 pub use acton_message_reply::ActonMessageReply;
 pub use actor_handle_interface::ActorHandleInterface;
 pub use broker::Broadcaster;
+pub use request::Request;
 pub use subscribable::Subscribable;
 pub use subscriber::Subscriber;
 
@@ -51,6 +55,8 @@ mod acton_message_reply;
 mod actor_handle_interface;
 /// Defines the [`Broadcaster`] trait for message broadcasting.
 mod broker;
+/// Defines the [`Request`] trait, which pairs a message with the reply it expects.
+mod request;
 /// Defines the [`Subscribable`] trait for managing subscriptions.
 mod subscribable;
 /// Defines the [`Subscriber`] trait for accessing the broker.

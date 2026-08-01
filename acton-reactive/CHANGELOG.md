@@ -147,6 +147,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     change, and callers must include a wildcard arm when matching on it.
 
   This is additive: no existing signature, name, or behaviour changed.
+- **`ActorHandleInterface::ask` and `ask_with_timeout`: request/reply that waits
+  for the answer.** `send` returns `()`, so a caller had no way to learn that a
+  message had been processed, let alone what it produced. Awaiting a result meant
+  hand-rolling a channel per call site or sleeping and hoping.
+
+  ```rust
+  let count = handle.ask(GetCount).await?;
+  ```
+
+  A message becomes askable by implementing the new `Request` trait, which names
+  the reply through an associated `Response` type — so the call needs no turbofish
+  and a mismatched pair is a compile error. Handlers are unchanged: they answer
+  through the reply envelope exactly as before, and an actor cannot tell an `ask`
+  from a `send`. Because an inbox is a FIFO, a completed `ask` also proves every
+  message sent to that actor beforehand has been processed.
+
+  **`ask` always finishes**, by two layered mechanisms. It keeps no reply address
+  of its own while waiting, so the moment the actor lets go of the request the
+  reply channel closes and the call returns in microseconds. A deadline
+  (`DEFAULT_ASK_TIMEOUT`, 30s, matching `IpcClient::request`) backstops the cases
+  closure cannot see — a wedged actor, a stored-and-forgotten reply envelope, a
+  self-inflicted deadlock. Outcomes are reported through the new
+  `#[non_exhaustive]` `AskError`:
+
+  - `NoReply` — delivered, but no answer is coming: the handler returned without
+    replying (entirely legal), the actor stopped or was restarted with the request
+    still in hand, or the handler panicked.
+  - `TimedOut { after }` — the actor still holds a live reply address and has not
+    answered. Deliberately distinct from `NoReply`.
+  - `Undeliverable` — the inbox was already closed, so no handler ran.
+  - `Cancelled` — delivery was abandoned during shutdown.
+  - `UnexpectedReply` — the handler answered with a type the request does not
+    declare, reported rather than mistaken for a lost reply.
+
+  **Do not `ask` from inside a `mutate_on` handler.** Mutable handlers are awaited
+  inline on the message loop, so waiting for a reply stops the actor from
+  processing the very message that would produce it. This mirrors the restriction
+  on `supervise_with`; the method's `# Deadlock` section gives the ways out. The
+  deadline turns such a mistake into a prompt error rather than a permanent hang.
+
+  **Scope: one actor, in-process.** `ask` has no meaning over `broadcast`, which
+  has no single replier, and cannot yet reach an actor over IPC — its reply address
+  is an in-process channel. Typed request/reply for IPC is being added separately,
+  on top of the correlated transport `IpcClient::request` already provides.
+
+  Purely additive — `send` is untouched, and existing code is unaffected.
 
 - **`ActorConfig::with_escalation`, which makes `Escalation` reachable.**
   `Escalation` shipped in 8.2.0 public, documented, and exported from the
