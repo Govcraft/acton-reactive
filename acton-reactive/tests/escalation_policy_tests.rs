@@ -244,13 +244,41 @@ async fn stop_supervisor_stops_the_supervisor_itself() -> anyhow::Result<()> {
         SupervisionState::Escalated
     );
 
-    // The supervisor stops rather than carrying on. One check is enough:
-    // `supervisor_still_answers` already waits out its own patience before
-    // concluding nothing answered, and the escalation was recorded before the
-    // child's status settled above.
+    // The supervisor stops rather than carrying on.
+    //
+    // # Why the child's status is not enough to go on
+    //
+    // This test used to assert straight from here that the supervisor no longer
+    // answers, on the reasoning that `supervisor_still_answers` waits out its
+    // own patience and that the escalation was recorded before the child's
+    // status settled. Both halves of that were wrong.
+    //
+    // The patience is one-directional. `supervisor_still_answers` waits out the
+    // full two seconds only when *nothing* answers; the moment something does it
+    // returns early. So the patience guards against a slow stop and not at all
+    // against an early ping — which is the direction that was failing.
+    //
+    // And the ordering is the other way round. The supervisor publishes the
+    // child's terminal `Escalated` status *before* it cancels itself: the two
+    // happen in that order in one turn of the supervisor's loop, and its own
+    // stop then completes on a later turn. So at this point the supervisor is
+    // typically still running and still answering, and it was always going to
+    // stop a moment later. Nothing here synchronised the two, and the test
+    // failed roughly one run in ten.
+    //
+    // The supervisor's task ending is the fact worth waiting on, so wait on it.
+    // A supervisor that never stops — the `NotifyParent` behaviour this policy
+    // must not collapse into — waits out `PATIENCE` here and fails.
+    let stopped = chain.parent.tracker();
+    tokio::time::timeout(PATIENCE, stopped.wait())
+        .await
+        .expect("StopSupervisor must stop the supervisor, not merely log about it");
+
+    // And it is gone as a correspondent, not merely as a task: a supervisor that
+    // has stopped answers nothing.
     assert!(
         !supervisor_still_answers(&chain.parent, &chain.pings).await,
-        "StopSupervisor must stop the supervisor, not merely log about it"
+        "a stopped supervisor does not answer messages"
     );
 
     chain.runtime.shutdown_all().await?;
