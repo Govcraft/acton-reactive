@@ -65,7 +65,76 @@ struct Ping;
 /// The ordering rules are the entire content of a group restart — stop in
 /// reverse start order, start in start order — so a test that does not observe
 /// the order is not testing the strategy.
-type EventLog = Arc<Mutex<Vec<String>>>;
+///
+/// Every event is kept twice over: appended to `recorded`, which is what the
+/// ordering assertions read, and announced on `announce`, which is how a caller
+/// *waits* for an event rather than sleeping and hoping it has landed. The
+/// append happens before the announcement, so a caller that has received `n`
+/// announcements is guaranteed to find those `n` events already in `recorded`.
+#[derive(Clone)]
+struct EventLog {
+    recorded: Arc<Mutex<Vec<String>>>,
+    announce: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+/// The announcement of every event, in the order the events were recorded.
+type EventStream = tokio::sync::mpsc::UnboundedReceiver<String>;
+
+impl EventLog {
+    fn new() -> (Self, EventStream) {
+        let (announce, stream) = tokio::sync::mpsc::unbounded_channel();
+        let log = Self {
+            recorded: Arc::new(Mutex::new(Vec::new())),
+            announce,
+        };
+        (log, stream)
+    }
+
+    fn record(&self, event: String) {
+        self.recorded
+            .lock()
+            .expect("the log mutex is never poisoned")
+            .push(event.clone());
+        // A test that is not watching the stream has dropped the receiver. That
+        // is not a failure; it just means nobody is waiting on this event.
+        let _ = self.announce.send(event);
+    }
+
+    /// The events recorded since `from`, which is where the failure was injected.
+    fn since(&self, from: usize) -> Vec<String> {
+        self.recorded
+            .lock()
+            .expect("the log mutex is never poisoned")
+            .iter()
+            .skip(from)
+            .cloned()
+            .collect()
+    }
+
+    fn len(&self) -> usize {
+        self.recorded
+            .lock()
+            .expect("the log mutex is never poisoned")
+            .len()
+    }
+}
+
+/// Waits for the next recorded event, failing loudly rather than hanging.
+async fn next_event(stream: &mut EventStream) -> String {
+    tokio::time::timeout(PATIENCE, stream.recv())
+        .await
+        .expect("a lifecycle event must arrive rather than the test waiting out the clock")
+        .expect("the log's sender outlives the actors that write to it")
+}
+
+/// Waits for the next `count` events, in the order they were recorded.
+async fn next_events(stream: &mut EventStream, count: usize) -> Vec<String> {
+    let mut events = Vec::with_capacity(count);
+    for _ in 0..count {
+        events.push(next_event(stream).await);
+    }
+    events
+}
 
 /// Per-child counters, indexed the same as [`NAMES`].
 #[derive(Clone)]
@@ -132,7 +201,7 @@ fn supervising_parent(
     let mut parent = runtime.new_actor_with_config::<Parent>(config);
 
     let counters = counters.clone();
-    let log = Arc::clone(log);
+    let log = log.clone();
     parent.mutate_on::<HireWorkers>(move |actor, _ctx| {
         for (index, name) in NAMES.iter().enumerate() {
             let child_config =
@@ -160,7 +229,7 @@ fn worker_blueprint(
 ) -> impl Fn(&mut ManagedActor<Idle, Worker>) + Clone + Send + Sync + 'static {
     let builds = Arc::clone(&counters.builds[index]);
     let pings = Arc::clone(&counters.pings[index]);
-    let log = Arc::clone(log);
+    let log = log.clone();
     let name = NAMES[index];
 
     move |actor: &mut ManagedActor<Idle, Worker>| {
@@ -175,21 +244,15 @@ fn worker_blueprint(
             Reply::ready()
         });
 
-        let started = Arc::clone(&log);
+        let started = log.clone();
         actor.after_start(move |_actor| {
-            started
-                .lock()
-                .expect("the log mutex is never poisoned")
-                .push(format!("start:{name}"));
+            started.record(format!("start:{name}"));
             Reply::ready()
         });
 
-        let stopped = Arc::clone(&log);
+        let stopped = log.clone();
         actor.after_stop(move |_actor| {
-            stopped
-                .lock()
-                .expect("the log mutex is never poisoned")
-                .push(format!("stop:{name}"));
+            stopped.record(format!("stop:{name}"));
             Reply::ready()
         });
     }
@@ -250,20 +313,6 @@ async fn wait_for_builds(counters: &Counters, expected: [usize; 3]) -> [usize; 3
     [counters.builds(0), counters.builds(1), counters.builds(2)]
 }
 
-/// The events recorded since `from`, which is where the failure was injected.
-fn events_since(log: &EventLog, from: usize) -> Vec<String> {
-    log.lock()
-        .expect("the log mutex is never poisoned")
-        .iter()
-        .skip(from)
-        .cloned()
-        .collect()
-}
-
-fn log_len(log: &EventLog) -> usize {
-    log.lock().expect("the log mutex is never poisoned").len()
-}
-
 /// The generation a child reaches after `restarts` restarts.
 fn generation_after(restarts: u32) -> RestartGeneration {
     let mut generation = RestartGeneration::FIRST;
@@ -289,7 +338,9 @@ async fn one_for_all_restarts_every_child_when_one_of_them_fails() -> anyhow::Re
     let mut runtime = ActonApp::launch_async().await;
     let (registered, mut registrations) = tokio::sync::mpsc::unbounded_channel();
     let counters = Counters::new();
-    let log: EventLog = Arc::new(Mutex::new(Vec::new()));
+    // Held rather than dropped so the log keeps its announcements; this test
+    // reads the recorded order directly instead of waiting on them.
+    let (log, _stream) = EventLog::new();
 
     let parent = supervising_parent(
         &mut runtime,
@@ -360,10 +411,29 @@ async fn one_for_all_stops_in_reverse_start_order_and_stops_everything_before_st
     // guaranteed, and an assertion on it would be a flaky test dressed up as a
     // specification. What *is* guaranteed, and asserted here, is that every
     // stop precedes every start.
+    //
+    // # Why this waits on events rather than on counters or a clock
+    //
+    // Both waits below are for the events themselves, because every cheaper
+    // proxy is wrong here, and was:
+    //
+    // - **`wait_running()` does not mean `after_start` has run.** It resolves
+    //   when the *supervisor* publishes `Running`, which it does as soon as the
+    //   child's task is spawned; `after_start` runs on that task and can still
+    //   be pending. Snapshotting the log's length after `hire_all` therefore
+    //   left opening `start:` events to be recorded *after* the snapshot, where
+    //   they read as starts belonging to the restart. `first_start` then pointed
+    //   at an event from before the failure was even injected and the ordering
+    //   assertion failed against a system that had behaved perfectly.
+    // - **`builds` does not mean `after_start` has run either.** The blueprint
+    //   increments it, and the blueprint runs before the actor is started.
+    // - **A count of events is not the events.** The previous wait stopped at
+    //   five of the six, so an assertion could run against a log still missing
+    //   a start.
     let mut runtime = ActonApp::launch_async().await;
     let (registered, mut registrations) = tokio::sync::mpsc::unbounded_channel();
     let counters = Counters::new();
-    let log: EventLog = Arc::new(Mutex::new(Vec::new()));
+    let (log, mut stream) = EventLog::new();
 
     let parent = supervising_parent(
         &mut runtime,
@@ -376,21 +446,55 @@ async fn one_for_all_stops_in_reverse_start_order_and_stops_everything_before_st
     .await;
 
     let children = hire_all(&parent, &mut registrations).await?;
-    let injected_at = log_len(&log);
+
+    // Drain the three opening starts, so that everything read below genuinely
+    // belongs to the restart rather than to the hiring that preceded it.
+    let mut opening = next_events(&mut stream, NAMES.len()).await;
+    opening.sort();
+    assert_eq!(
+        opening,
+        ["start:alpha", "start:bravo", "start:charlie"],
+        "the opening events are the three children starting, once each"
+    );
 
     children[1].1.stop().await?;
-    assert_eq!(wait_for_builds(&counters, [2, 2, 2]).await, [2, 2, 2]);
 
-    // Give the last child's `after_start` a moment to land in the log.
-    for _ in 0..200 {
-        if events_since(&log, injected_at).len() >= 5 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // A group restart is exactly six events: every child stops, then every child
+    // starts. Waiting for the sixth is what makes the assertions below read a
+    // finished restart rather than one caught in the middle.
+    let events = next_events(&mut stream, 2 * NAMES.len()).await;
 
-    let events = events_since(&log, injected_at);
+    // Deterministic now rather than polled: every child's `after_start` has run,
+    // and a blueprint always runs before the `after_start` of the incarnation it
+    // built, so the build counts cannot still be settling.
+    assert_eq!(
+        [counters.builds(0), counters.builds(1), counters.builds(2)],
+        [2, 2, 2],
+        "the whole group was rebuilt exactly once: {events:?}"
+    );
 
+    // Each child stopped once and started once, and nothing else happened.
+    // Without this, "stops everything" rested entirely on `position` panicking
+    // rather than on anything asserted, and a group that stopped a child twice
+    // or started a fourth would have passed.
+    let mut seen: Vec<&str> = events.iter().map(String::as_str).collect();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        [
+            "start:alpha",
+            "start:bravo",
+            "start:charlie",
+            "stop:alpha",
+            "stop:bravo",
+            "stop:charlie",
+        ],
+        "a group restart stops each child exactly once and starts each exactly once: {events:?}"
+    );
+
+    // `bravo` is excluded from the sequencer's stop list — it is the child that
+    // failed, and it is already down — so the ordering the strategy controls is
+    // charlie before alpha.
     assert!(
         position(&events, "stop:charlie") < position(&events, "stop:alpha"),
         "siblings stop in reverse start order, so charlie goes before alpha: {events:?}"
@@ -428,7 +532,9 @@ async fn rest_for_one_leaves_the_children_started_before_the_failure_untouched(
     let mut runtime = ActonApp::launch_async().await;
     let (registered, mut registrations) = tokio::sync::mpsc::unbounded_channel();
     let counters = Counters::new();
-    let log: EventLog = Arc::new(Mutex::new(Vec::new()));
+    // Held rather than dropped so the log keeps its announcements; this test
+    // reads the recorded order directly instead of waiting on them.
+    let (log, _stream) = EventLog::new();
 
     let parent = supervising_parent(
         &mut runtime,
@@ -512,7 +618,9 @@ async fn a_group_restart_is_charged_to_the_child_that_failed_and_not_to_its_sibl
     let mut runtime = ActonApp::launch_async().await;
     let (registered, mut registrations) = tokio::sync::mpsc::unbounded_channel();
     let counters = Counters::new();
-    let log: EventLog = Arc::new(Mutex::new(Vec::new()));
+    // Held rather than dropped so the log keeps its announcements; this test
+    // reads the recorded order directly instead of waiting on them.
+    let (log, _stream) = EventLog::new();
 
     let parent = supervising_parent(
         &mut runtime,
@@ -589,7 +697,9 @@ async fn a_group_restart_stops_a_child_it_cannot_bring_back_and_leaves_it_down(
     let mut runtime = ActonApp::launch_async().await;
     let (registered, mut registrations) = tokio::sync::mpsc::unbounded_channel();
     let counters = Counters::new();
-    let log: EventLog = Arc::new(Mutex::new(Vec::new()));
+    // Held rather than dropped so the log keeps its announcements; this test
+    // reads the recorded order directly instead of waiting on them.
+    let (log, _stream) = EventLog::new();
 
     let parent = supervising_parent(
         &mut runtime,
@@ -611,18 +721,16 @@ async fn a_group_restart_stops_a_child_it_cannot_bring_back_and_leaves_it_down(
     let mut adopted = runtime.new_actor_with_config::<Worker>(adopted_config);
     {
         let builds = Arc::clone(&adopted_builds);
-        let log = Arc::clone(&log);
+        let log = log.clone();
         builds.fetch_add(1, Ordering::SeqCst);
         adopted.after_stop(move |_actor| {
-            log.lock()
-                .expect("the log mutex is never poisoned")
-                .push("stop:adopted".to_string());
+            log.record("stop:adopted".to_string());
             Reply::ready()
         });
     }
     parent.supervise(adopted).await?;
 
-    let injected_at = log_len(&log);
+    let injected_at = log.len();
 
     children[1].1.stop().await?;
 
@@ -635,7 +743,8 @@ async fn a_group_restart_stops_a_child_it_cannot_bring_back_and_leaves_it_down(
 
     // The adopted one was stopped for consistency and stays down.
     for _ in 0..200 {
-        if events_since(&log, injected_at)
+        if log
+            .since(injected_at)
             .iter()
             .any(|event| event == "stop:adopted")
         {
@@ -643,7 +752,7 @@ async fn a_group_restart_stops_a_child_it_cannot_bring_back_and_leaves_it_down(
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let events = events_since(&log, injected_at);
+    let events = log.since(injected_at);
 
     assert!(
         events.iter().any(|event| event == "stop:adopted"),
