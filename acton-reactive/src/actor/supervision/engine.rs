@@ -186,6 +186,29 @@ async fn stop_stray_child(handle: ActorHandle) {
     }
 }
 
+/// Stops one sibling as a step of a group restart, within the shutdown
+/// deadline.
+///
+/// Bounded for a reason particular to this caller: the stops are sequential, so
+/// one child that will not go down would otherwise stop every child before it
+/// from being asked, and hold the whole group open. Missing the deadline costs
+/// that one child its restart, which is the smaller failure.
+async fn stop_group_member(handle: ActorHandle) {
+    let deadline = std::time::Duration::from_millis(CONFIG.timeouts.actor_shutdown);
+    match tokio::time::timeout(deadline, handle.stop()).await {
+        Ok(Ok(())) => trace!("Stopped {} for a group restart", handle.id()),
+        Ok(Err(error)) => warn!(
+            "Child {} reported an error while stopping for a group restart: {error:?}",
+            handle.id()
+        ),
+        Err(_) => warn!(
+            "Child {} did not stop within {} ms, so its group restart may be refused as stale",
+            handle.id(),
+            CONFIG.timeouts.actor_shutdown
+        ),
+    }
+}
+
 impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// Builds the restart allowance one child will be held to.
     ///
@@ -614,14 +637,61 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
                     notice.child_id
                 );
             }
+            SupervisionOutcome::GroupStopLanded { then_restart } => {
+                self.record_group_stop_landed(index, &notice.child_id, then_restart);
+            }
             SupervisionOutcome::Forget => self.record_child_down(index, &notice.child_id),
             SupervisionOutcome::Escalate(exceeded) => {
                 self.record_child_escalated(index, &notice.child_id, exceeded);
             }
             SupervisionOutcome::Restart { plan, backoff } => {
-                self.schedule_restart(index, &notice.child_id, &plan, backoff);
+                self.schedule_restart(&notice.child_id, &plan, backoff);
             }
         }
+    }
+
+    /// Records a sibling that has finished stopping for a group restart.
+    ///
+    /// The half of a group restart the message loop owns. The task sequencing
+    /// the group asked for this stop and will ask for the restart; what it
+    /// cannot do is move the slot, because slots belong to the actor.
+    ///
+    /// `then_restart` is the whole decision, made by
+    /// [`evaluate`](super::plan::evaluate) from state this actor recorded when
+    /// the stop was issued. A child on its way back waits in
+    /// [`SlotState::AwaitingBackoff`], which is the only state
+    /// [`queue_restart`](SupervisionRegistry::queue_restart) will accept a
+    /// restart from. A child the group could not recreate goes down for good,
+    /// through the same path as any other child that is not coming back — so it
+    /// gives up its IPC names exactly as that one does.
+    fn record_group_stop_landed(
+        &mut self,
+        index: ChildIndex,
+        child: &acton_ern::Ern,
+        then_restart: bool,
+    ) {
+        if !then_restart {
+            trace!(
+                "Actor {} stopped child {} for a group restart and is leaving it down",
+                self.id(),
+                child
+            );
+            self.record_child_down(index, child);
+            return;
+        }
+
+        let Some(slot) = self.supervision.slot_mut(index) else {
+            return;
+        };
+        slot.set_handle(None);
+        slot.set_state(SlotState::AwaitingBackoff);
+        slot.publish();
+
+        trace!(
+            "Actor {} has child {} down and waiting on its group's restart",
+            self.id(),
+            child
+        );
     }
 
     /// Records a child that terminated and is not coming back.
@@ -721,66 +791,161 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         }
     }
 
-    /// Marks a child for a restart and arms the timer that will ask for it.
+    /// Carries out a restart plan: stops what it says to stop, and arranges for
+    /// what it says to start.
     ///
-    /// # The timer is not tracked with the start tasks
+    /// # One task owns the whole sequence
+    ///
+    /// A group restart is stop-everything-then-start-everything, and both
+    /// halves are ordered. Handing that to a single task rather than spreading
+    /// it across the message loop is what keeps the ordering rules in one
+    /// readable place, and it is why no group bookkeeping lives in the
+    /// registry: there is no rendezvous to arrange.
+    ///
+    /// [`SupervisionStrategy::OneForOne`] falls out of the same code with
+    /// nothing special about it — an empty `stop` and a single-entry `restart`.
+    ///
+    /// [`SupervisionStrategy::OneForOne`]: super::SupervisionStrategy::OneForOne
+    fn schedule_restart(
+        &mut self,
+        child: &acton_ern::Ern,
+        plan: &RestartPlan,
+        backoff: BackoffDelay,
+    ) {
+        let stops = self.begin_group_stops(plan);
+        let dues = self.park_group_for_restart(plan);
+
+        trace!(
+            "Actor {} will stop {} child(ren) and restart {} after {}, prompted by child {}",
+            self.id(),
+            stops.len(),
+            dues.len(),
+            backoff,
+            child
+        );
+
+        self.spawn_group_restart(stops, dues, backoff);
+    }
+
+    /// Marks every child the plan stops and collects handles to stop them with.
+    ///
+    /// The state goes on before any stop is sent, so that a termination racing
+    /// back into the inbox finds a slot that already knows the stop was asked
+    /// for. `then_restart` is read straight off the plan: a child in `stop` but
+    /// not in `restart` is one the supervisor had to take down for consistency
+    /// and cannot recreate, and it must not be resurrected.
+    ///
+    /// The handle is deliberately **not** cleared here. It is what a cascading
+    /// shutdown reaches these children through, and the stop this issues is not
+    /// a reason to make them unreachable before they are actually down.
+    fn begin_group_stops(&mut self, plan: &RestartPlan) -> Vec<ActorHandle> {
+        let mut stops = Vec::with_capacity(plan.stop.len());
+        for index in &plan.stop {
+            let then_restart = plan.restart.contains(index);
+            let Some(slot) = self.supervision.slot_mut(*index) else {
+                continue;
+            };
+            let handle = slot.handle().cloned();
+            slot.set_state(SlotState::ExpectedStop { then_restart });
+            slot.publish();
+            if let Some(handle) = handle {
+                stops.push(handle);
+            }
+        }
+        stops
+    }
+
+    /// Parks the children that are already down, and names every restart to ask
+    /// for when the group's backoff elapses.
+    ///
+    /// Two groups reach [`SlotState::AwaitingBackoff`] and they arrive by
+    /// different roads. A child that is *not* being stopped is already down —
+    /// the child that failed, plus any sibling that was down when it did — so
+    /// it is parked now. A child that is being stopped gets there when its
+    /// termination lands, through
+    /// [`SupervisionOutcome::GroupStopLanded`](super::plan::SupervisionOutcome::GroupStopLanded).
+    ///
+    /// The generation is captured here for both, and that is safe for the ones
+    /// still stopping: a generation only advances in
+    /// [`complete_start`](SupervisionRegistry::complete_start), which cannot run
+    /// for a child on its way down. Captured early and checked late is the whole
+    /// point — anything that moves a slot on in the meantime makes the restart
+    /// stale, and [`record_restart_due`](Self::record_restart_due) refuses it.
+    fn park_group_for_restart(&mut self, plan: &RestartPlan) -> Vec<RestartDue> {
+        let mut dues = Vec::with_capacity(plan.restart.len());
+        for index in &plan.restart {
+            let being_stopped = plan.stop.contains(index);
+            let Some(slot) = self.supervision.slot_mut(*index) else {
+                continue;
+            };
+            if !being_stopped {
+                slot.set_handle(None);
+                slot.set_state(SlotState::AwaitingBackoff);
+                slot.publish();
+            }
+            dues.push(RestartDue {
+                child: slot.ern().clone(),
+                index: *index,
+                generation: slot.generation(),
+            });
+        }
+        dues
+    }
+
+    /// Runs a group restart to completion on its own task.
+    ///
+    /// # Why the restarts cannot outrun the stops
+    ///
+    /// A child's `ChildTerminated` is delivered to its supervisor's inbox
+    /// *before* [`ActorHandle::stop`] returns, and this task sends every
+    /// [`RestartDue`] strictly after the last `stop` returned. The supervisor's
+    /// inbox is a single-consumer FIFO, so it reads every termination — moving
+    /// each slot to [`SlotState::AwaitingBackoff`] — before it reads the first
+    /// restart request. The backoff sleep helps nothing here and is not what
+    /// makes this safe; the ordering is.
+    ///
+    /// A child that misses the stop deadline is the one exception. Its
+    /// termination may arrive after the restart request, in which case
+    /// [`queue_restart`](SupervisionRegistry::queue_restart) refuses the stale
+    /// request and the child stays down until the supervisor stops. That is
+    /// preferable to waiting on it forever: a child that will not stop must not
+    /// be able to hold a group restart open indefinitely.
+    ///
+    /// # Not tracked with the start tasks
     ///
     /// A start task holds the only handle to a live child, which is why a
-    /// shutdown waits for those. A backoff timer holds nothing at all. Putting
-    /// it on that tracker would make every shutdown wait out a backoff whose
-    /// default ceiling is 30 seconds against a shutdown deadline of 10, so every
-    /// shutdown with a pending restart would block for the full 10 and then log
-    /// an overrun it did not earn. The rule that falls out is that the tracker
-    /// is for tasks holding a live child, not for every task the actor spawned.
+    /// shutdown waits for those. This task holds handles to children it is
+    /// stopping and then holds nothing at all. Putting it on that tracker would
+    /// make every shutdown wait out a backoff whose default ceiling is 30
+    /// seconds against a shutdown deadline of 10, so every shutdown with a
+    /// pending restart would block for the full 10 and then log an overrun it
+    /// did not earn. The rule that falls out is that the tracker is for tasks
+    /// holding a live child in order to hand it over, not for every task the
+    /// actor spawned.
     ///
     /// It watches the cancellation token instead, so a supervisor going down
     /// does not leave a task sleeping out a backoff for a restart that has
     /// already been abandoned. Even without that the message would simply fail
     /// delivery into a closed inbox; the token just makes it prompt.
-    fn schedule_restart(
-        &mut self,
-        index: ChildIndex,
-        child: &acton_ern::Ern,
-        plan: &RestartPlan,
+    fn spawn_group_restart(
+        &self,
+        stops: Vec<ActorHandle>,
+        dues: Vec<RestartDue>,
         backoff: BackoffDelay,
     ) {
-        // `OneForOne` is the default and the only strategy step 7 carries out.
-        // A group plan is charged and planned correctly by the decision layer
-        // but sequenced by nothing yet, so say so rather than silently restart
-        // one child and call it done.
-        if plan.restart.len() > 1 || !plan.stop.is_empty() {
-            warn!(
-                "Actor {} planned a group restart for child {}, which is not carried out yet; \
-                 restarting only the child that failed. See \
-                 https://github.com/govcraft/acton-reactive/issues/8",
-                self.id(),
-                child
-            );
-        }
-
-        let Some(slot) = self.supervision.slot_mut(index) else {
-            return;
-        };
-        slot.set_handle(None);
-        slot.set_state(SlotState::AwaitingBackoff);
-        slot.publish();
-        let due = RestartDue {
-            child: child.clone(),
-            index,
-            generation: slot.generation(),
-        };
-
-        trace!(
-            "Actor {} will restart child {} after {}",
-            self.id(),
-            child,
-            backoff
-        );
-
         let supervisor = self.handle.clone();
         let token = self.cancellation_token.clone();
         let delay = backoff.duration();
+
         tokio::spawn(async move {
+            // Reverse start order, each child fully down before the one before
+            // it is asked. Sequential rather than concurrent because that
+            // ordering is the entire content of the strategy: a later child
+            // that depends on an earlier one has to go first.
+            for handle in stops {
+                stop_group_member(handle).await;
+            }
+
             if let Some(token) = token {
                 tokio::select! {
                     () = token.cancelled() => return,
@@ -790,13 +955,19 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
                 tokio::time::sleep(delay).await;
             }
 
-            let envelope = supervisor.create_envelope(Some(supervisor.reply_address()));
-            if let Err(undeliverable) = envelope.try_send(due).await {
-                trace!(
-                    "Supervisor {} was gone before a restart came due ({})",
-                    supervisor.id(),
-                    undeliverable
-                );
+            // Start order, so an earlier child is back before the ones that
+            // may depend on it. Delivery order into a FIFO inbox is what
+            // carries that ordering to the supervisor.
+            for due in dues {
+                let envelope = supervisor.create_envelope(Some(supervisor.reply_address()));
+                if let Err(undeliverable) = envelope.try_send(due).await {
+                    trace!(
+                        "Supervisor {} was gone before a restart came due ({})",
+                        supervisor.id(),
+                        undeliverable
+                    );
+                    return;
+                }
             }
         });
     }
@@ -1683,6 +1854,188 @@ mod tests {
             slot.limiter_mut().restarts_in_window(),
             1,
             "and this one really is charged for it"
+        );
+    }
+
+    // ---- group restarts ---------------------------------------------------
+
+    /// A supervisor with a group strategy, one child it can rebuild at index 0
+    /// and one adopted child it cannot at index 1, both running.
+    ///
+    /// The shape that makes `then_restart` observable: the adopted child is in
+    /// the plan's `stop` list and not in its `restart` list, which is the only
+    /// way that flag is ever `false`.
+    fn group_of_one_managed_and_one_adopted(
+        actor: &mut ManagedActor<Started, Supervisor>,
+    ) -> (Ern, Ern) {
+        actor.supervision_strategy = super::super::SupervisionStrategy::OneForAll;
+
+        let managed = queue_child(actor, "worker", None);
+        actor.launch_pending_starts();
+        assert!(actor
+            .supervision
+            .complete_start(
+                ChildIndex::new(0),
+                &managed,
+                handle_for(&managed),
+                std::time::Instant::now(),
+            )
+            .is_recorded());
+
+        let (adopted, _status) = adopt_legacy_child(actor, "adopted");
+
+        (managed, adopted)
+    }
+
+    #[tokio::test]
+    async fn a_group_restart_marks_a_sibling_it_cannot_rebuild_as_not_coming_back() {
+        // `then_restart` is read off the plan, and this is the only case where
+        // the two lists disagree. Setting it unconditionally to `true` leaves
+        // this slot in `ExpectedStop { then_restart: true }`, which becomes
+        // `AwaitingBackoff` when the stop lands and then waits forever for a
+        // restart the plan never asked for — a caller watching it is told
+        // `Restarting` for the rest of the supervisor's life.
+        //
+        // Measured as slot state rather than as "was it rebuilt", because it is
+        // *not* rebuilt either way: no `RestartDue` is ever sent for a child
+        // outside the plan's restart list. The resting state is the whole
+        // observable difference.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor(&mut runtime);
+        let (managed, adopted) = group_of_one_managed_and_one_adopted(&mut actor);
+
+        actor.record_child_terminated(&ChildTerminated::new(
+            managed,
+            crate::actor::TerminationReason::Normal,
+            RestartPolicy::Permanent,
+        ));
+
+        assert_eq!(
+            actor
+                .supervision
+                .slot_of(&adopted)
+                .expect("the adopted child is still recorded")
+                .state(),
+            SlotState::ExpectedStop {
+                then_restart: false
+            },
+            "a sibling the supervisor holds no blueprint for is stopped and not promised back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_group_restart_marks_a_sibling_it_can_rebuild_as_coming_back() {
+        // The other side of the same read, so the test above is shown to be
+        // about the plan rather than about something incidental to the fixture.
+        // Identical group, identical failure, one difference: this sibling has
+        // a blueprint, so it is in both lists.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor(&mut runtime);
+        actor.supervision_strategy = super::super::SupervisionStrategy::OneForAll;
+
+        let failed = queue_child(&mut actor, "worker", None);
+        let sibling = queue_child(&mut actor, "sibling", None);
+        actor.launch_pending_starts();
+        for (index, child) in [(0, &failed), (1, &sibling)] {
+            assert!(actor
+                .supervision
+                .complete_start(
+                    ChildIndex::new(index),
+                    child,
+                    handle_for(child),
+                    std::time::Instant::now(),
+                )
+                .is_recorded());
+        }
+
+        actor.record_child_terminated(&ChildTerminated::new(
+            failed,
+            crate::actor::TerminationReason::Normal,
+            RestartPolicy::Permanent,
+        ));
+
+        assert_eq!(
+            actor
+                .supervision
+                .slot_of(&sibling)
+                .expect("the sibling is still recorded")
+                .state(),
+            SlotState::ExpectedStop { then_restart: true },
+        );
+    }
+
+    #[tokio::test]
+    async fn a_landed_group_stop_moves_a_sibling_to_the_state_its_flag_names() {
+        // The engine's half of the crux. `evaluate` reports which half of the
+        // group a landed stop belongs to; this is what that report is *for*.
+        // A child on its way back has to reach `AwaitingBackoff`, because that
+        // is the only state `queue_restart` will accept a restart from — land
+        // it anywhere else and the group's own restart is refused as stale.
+        for (then_restart, expected) in [
+            (true, SlotState::AwaitingBackoff),
+            (false, SlotState::Down),
+        ] {
+            let mut runtime = ActonApp::launch_async().await;
+            let mut actor = supervisor(&mut runtime);
+            let (child, _receiver) = adopt_legacy_child(&mut actor, "sibling");
+            actor
+                .supervision
+                .slot_of_mut(&child)
+                .expect("the child is supervised")
+                .set_state(SlotState::ExpectedStop { then_restart });
+
+            actor.record_child_terminated(&ChildTerminated::new(
+                child.clone(),
+                crate::actor::TerminationReason::Normal,
+                RestartPolicy::Permanent,
+            ));
+
+            assert_eq!(
+                actor
+                    .supervision
+                    .slot_of(&child)
+                    .expect("the child is still recorded")
+                    .state(),
+                expected,
+                "a group stop with then_restart={then_restart} must come to rest in {expected}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_supervisor_shutting_down_abandons_a_group_restart_instead_of_driving_it() {
+        // A shutdown makes every termination expected, and that has to outrank
+        // the group. Driving the group here would have the supervisor rebuild,
+        // during its own shutdown, children it is in the middle of stopping.
+        let mut runtime = ActonApp::launch_async().await;
+        let mut actor = supervisor(&mut runtime);
+        let (child, _receiver) = adopt_legacy_child(&mut actor, "sibling");
+        actor
+            .supervision
+            .slot_of_mut(&child)
+            .expect("the child is supervised")
+            .set_state(SlotState::ExpectedStop { then_restart: true });
+        actor.supervision.begin_shutdown();
+
+        actor.record_child_terminated(&ChildTerminated::new(
+            child.clone(),
+            crate::actor::TerminationReason::Normal,
+            RestartPolicy::Permanent,
+        ));
+
+        assert_eq!(
+            actor
+                .supervision
+                .slot_of(&child)
+                .expect("the child is still recorded")
+                .state(),
+            SlotState::ExpectedStop { then_restart: true },
+            "a shutdown leaves the slot alone rather than parking it for a restart \
+             that will never be performed"
+        );
+        assert!(
+            !actor.supervision.has_pending_starts(),
+            "and nothing is queued to come back"
         );
     }
 

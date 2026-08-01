@@ -16,13 +16,17 @@
 
 //! Supervision strategies for deciding how to respond to child terminations.
 //!
-//! This module provides Erlang/OTP-style supervision strategies as *decision
-//! helpers*: given a [`ChildTerminated`] notification, a strategy tells a
-//! supervising actor which children it should restart. The framework itself
-//! does not restart actors automatically — it only delivers the notification
-//! to the parent, which applies the strategy manually in its own handler.
-//! These strategies work in conjunction with [`RestartPolicy`] to provide
-//! comprehensive fault-tolerance capabilities.
+//! This module provides the Erlang/OTP supervision strategies. A strategy says
+//! *which* children a supervisor restarts when one of them terminates; the
+//! child's [`RestartPolicy`] says *whether* a given termination warrants a
+//! restart at all. The two are consulted together.
+//!
+//! **The framework carries these out.** A supervisor set to one of these
+//! strategies stops and rebuilds the children the strategy names, in order,
+//! after a backoff, without a line of handler code. Set it with
+//! [`ActorConfig::with_supervision_strategy`], and register children through
+//! [`supervise_with`] or [`supervise_deferred`] so the supervisor holds a
+//! blueprint it can rebuild them from.
 //!
 //! # Strategies
 //!
@@ -35,19 +39,28 @@
 //! ```rust,ignore
 //! use acton_reactive::prelude::*;
 //!
-//! // Apply a strategy manually from the parent's ChildTerminated handler.
-//! let strategy = SupervisionStrategy::OneForOne;
-//! supervisor.mutate_on::<ChildTerminated>(move |actor, ctx| {
-//!     let notification = ctx.message().clone();
-//!     match strategy.decide(&notification, 0) {
-//!         SupervisionDecision::RestartChild => {
-//!             // Re-create and re-supervise the failed child here.
-//!         }
-//!         _ => { /* NoRestart, RestartAll, RestartFrom, Escalate */ }
-//!     }
-//!     Reply::ready()
-//! });
+//! // Interdependent children: one failing makes the others' state suspect,
+//! // so the supervisor stops and rebuilds the whole set.
+//! let config = ActorConfig::new_with_name("pipeline")?
+//!     .with_supervision_strategy(SupervisionStrategy::OneForAll);
 //! ```
+//!
+//! # Applying a strategy by hand
+//!
+//! [`SupervisionStrategy::decide`] is public and is what the engine itself
+//! calls, so a supervisor with its own reasons — children it built outside the
+//! blueprint paths, or a decision that depends on state only its handler can
+//! see — can still consult a strategy from a `ChildTerminated` handler and act
+//! on the answer.
+//!
+//! That is now the exception rather than the way strategies are used, and it
+//! does not compose with the engine: a child registered through
+//! [`supervise_with`] or [`supervise_deferred`] is already being restarted, so
+//! a handler that also restarts it brings it back twice.
+//!
+//! [`ActorConfig::with_supervision_strategy`]: crate::actor::ActorConfig::with_supervision_strategy
+//! [`supervise_with`]: crate::common::ActorHandle::supervise_with
+//! [`supervise_deferred`]: crate::actor::ManagedActor::supervise_deferred
 
 use serde::{Deserialize, Serialize};
 
@@ -59,10 +72,18 @@ use crate::message::ChildTerminated;
 /// which children should be restarted (if any). This decision is made in
 /// conjunction with the child's [`RestartPolicy`].
 ///
-/// A strategy is a decision helper, not an engine: the supervising actor calls
-/// [`SupervisionStrategy::decide`] from its own [`ChildTerminated`] handler and
-/// performs any restarts itself. The framework does not restart actors
-/// automatically.
+/// The strategy consulted is the **supervisor's**, not the child's. That is
+/// worth stating outright, because
+/// [`ActorConfig::for_supervised_child`](crate::actor::ActorConfig::for_supervised_child)
+/// builds a *child's* configuration and a reader may reasonably expect a
+/// strategy set there to govern what happens when that child dies. It does not:
+/// what to do about a failure is the supervising actor's policy.
+///
+/// The supervisor carries the strategy out itself — stopping and rebuilding the
+/// children it names, in order, after a backoff. It governs children the
+/// supervisor holds a blueprint for; a child adopted through the legacy
+/// `supervise()` path is one it has no recipe for rebuilding, so no strategy
+/// applies to it and it is left down.
 ///
 /// These strategies follow Erlang/OTP supervision patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]

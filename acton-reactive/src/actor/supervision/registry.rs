@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use acton_ern::Ern;
 use tokio::sync::watch;
 
-use super::plan::{SlotSnapshot, SlotView};
+use super::plan::{ExpectedTermination, SlotSnapshot, SlotView};
 use super::{ChildSpawner, SupervisionError, SupervisionState, SupervisionStatus};
 use crate::actor::{RestartLimiter, RestartPolicy};
 use crate::common::ActorHandle;
@@ -324,6 +324,25 @@ impl SlotState {
     pub const fn is_awaiting_backoff(self) -> bool {
         matches!(self, Self::AwaitingBackoff)
     }
+
+    /// Whether this child is part-way through a group restart.
+    ///
+    /// Its own third category on the way down. Such a slot publishes as
+    /// [`SupervisionState::Restarting`], so a caller is waiting on a new
+    /// incarnation — but nobody is building one yet and no timer is armed, so
+    /// neither of the other two predicates covers it and without this a
+    /// shutdown would leave that caller waiting forever.
+    ///
+    /// Both values of `then_restart` count, and the reason is
+    /// [`published`](Self::published): it maps the whole variant to
+    /// [`SupervisionState::Restarting`], so a caller watching a child that is
+    /// *not* coming back is waiting on exactly the same state as one that is.
+    /// Whether the supervisor meant to disappoint it does not change that it
+    /// would be left waiting.
+    #[must_use]
+    pub const fn is_awaiting_group_restart(self) -> bool {
+        matches!(self, Self::ExpectedStop { .. })
+    }
 }
 
 impl fmt::Display for SlotState {
@@ -524,17 +543,23 @@ impl ChildSlot {
         self.state.is_being_started()
     }
 
-    /// Whether the supervisor still owes this child an incarnation.
-    ///
-    /// Both halves of "not up yet": queued, and being built. What a shutdown
-    /// has to answer for, and what a caller is still waiting on.
-    pub const fn is_unfinished_start(&self) -> bool {
-        self.state.is_unfinished_start()
-    }
-
     /// Whether this child is down with a backoff timer armed.
     pub const fn is_awaiting_backoff(&self) -> bool {
         self.state.is_awaiting_backoff()
+    }
+
+    /// Whether somebody is waiting on an incarnation of this child that nothing
+    /// is currently working towards.
+    ///
+    /// The union of every state a shutdown has to settle: queued, being built,
+    /// waiting out a backoff, and part-way through a group restart. One
+    /// predicate rather than the disjunction spelled out at each call site,
+    /// because the two places that ask are answering the same question and
+    /// drifted apart is exactly how a caller ends up waiting forever.
+    pub const fn is_owed_an_incarnation(&self) -> bool {
+        self.state.is_unfinished_start()
+            || self.state.is_awaiting_backoff()
+            || self.state.is_awaiting_group_restart()
     }
 
     /// Why this child is not running, when the supervisor knows a reason.
@@ -928,14 +953,14 @@ impl SupervisionRegistry {
     /// happened rather than waiting for a start that will never be retried.
     ///
     /// Only for a slot the supervisor still owes an incarnation: queued, being
-    /// built, or waiting out a backoff. A child that is up, or one already
-    /// settled, is not this method's business, and the filter below is what
-    /// says so.
+    /// built, waiting out a backoff, or part-way through a group restart. A
+    /// child that is up, or one already settled, is not this method's business,
+    /// and the filter below is what says so.
     pub fn fail_start(&mut self, index: ChildIndex, failure: &SupervisionError) {
         let Some(ern) = self
             .slots
             .get(index.get())
-            .filter(|slot| slot.is_unfinished_start() || slot.is_awaiting_backoff())
+            .filter(|slot| slot.is_owed_an_incarnation())
             .map(|slot| slot.ern.clone())
         else {
             return;
@@ -967,6 +992,11 @@ impl SupervisionRegistry {
     /// was arranged for can never happen; without this the caller waits on a
     /// [`SupervisionState::RestartPending`] that nothing will ever move.
     ///
+    /// So is a child part-way through a group restart, for the same reason
+    /// reached by a different road: the task sequencing that group will find
+    /// the inbox closed when it asks for the restarts, and the slot publishes
+    /// [`SupervisionState::Restarting`] until somebody says otherwise.
+    ///
     /// Returns how many were abandoned, which is what a shutdown logs.
     pub fn cancel_unfinished_starts(&mut self, supervisor: &Ern) -> usize {
         self.pending_starts.clear();
@@ -974,7 +1004,7 @@ impl SupervisionRegistry {
         let unfinished: Vec<ChildIndex> = self
             .slots
             .iter()
-            .filter(|slot| slot.is_unfinished_start() || slot.is_awaiting_backoff())
+            .filter(|slot| slot.is_owed_an_incarnation())
             .map(ChildSlot::index)
             .collect();
 
@@ -1095,14 +1125,29 @@ impl SupervisionRegistry {
     /// Everything the planner needs about the child that just terminated.
     ///
     /// `None` if no such slot exists.
+    ///
+    /// The three expected-termination reasons are ranked here rather than in
+    /// the planner because only the registry knows all three. Shutdown outranks
+    /// a group stop: a supervisor on its way down abandons a group restart
+    /// instead of driving it.
     pub fn snapshot(&self, index: ChildIndex) -> Option<SlotSnapshot> {
         let slot = self.slot(index)?;
+        // A shutdown makes every termination expected, which is what stops a
+        // cascading stop from being read as a wave of failures.
+        let expected = if self.shutting_down {
+            Some(ExpectedTermination::Shutdown)
+        } else if let SlotState::ExpectedStop { then_restart } = slot.state {
+            Some(ExpectedTermination::GroupStop { then_restart })
+        } else if slot.state.accepts_termination() {
+            None
+        } else {
+            Some(ExpectedTermination::Stale)
+        };
+
         Some(SlotSnapshot {
             index: slot.index,
             restartable: slot.is_restartable(),
-            // A shutdown makes every termination expected, which is what stops
-            // a cascading stop from being read as a wave of failures.
-            expected_stop: self.shutting_down || !slot.state.accepts_termination(),
+            expected,
             last_restart: slot.last_restart,
         })
     }
@@ -2009,26 +2054,48 @@ mod tests {
 
         assert_eq!(snapshot.index, index);
         assert!(snapshot.restartable);
-        assert!(
-            !snapshot.expected_stop,
+        assert_eq!(
+            snapshot.expected, None,
             "a running child terminating is news"
         );
         assert!(snapshot.last_restart.is_none());
     }
 
     #[test]
-    fn a_snapshot_of_a_child_we_stopped_reads_as_expected() {
-        // Feeds evaluate's first check: expected_stop wins over everything.
+    fn a_snapshot_of_a_child_we_stopped_for_a_group_says_so_and_says_which_half() {
+        // Feeds evaluate's first check. The reason has to survive the trip:
+        // reporting a bare "expected" would leave the engine to rediscover
+        // `then_restart` from slot state, which is the decision this snapshot
+        // exists to carry.
+        for then_restart in [true, false] {
+            let (mut registry, erns) = registry_with(1);
+            registry
+                .slot_of_mut(&erns[0])
+                .expect("supervised")
+                .set_state(SlotState::ExpectedStop { then_restart });
+            let index = registry.index_of(&erns[0]).expect("supervised");
+
+            let snapshot = registry.snapshot(index).expect("the slot exists");
+
+            assert_eq!(
+                snapshot.expected,
+                Some(ExpectedTermination::GroupStop { then_restart })
+            );
+        }
+    }
+
+    #[test]
+    fn a_snapshot_of_a_slot_that_could_not_have_produced_the_notice_reads_as_stale() {
         let (mut registry, erns) = registry_with(1);
         registry
             .slot_of_mut(&erns[0])
             .expect("supervised")
-            .set_state(SlotState::ExpectedStop { then_restart: true });
+            .set_state(SlotState::Down);
         let index = registry.index_of(&erns[0]).expect("supervised");
 
         let snapshot = registry.snapshot(index).expect("the slot exists");
 
-        assert!(snapshot.expected_stop);
+        assert_eq!(snapshot.expected, Some(ExpectedTermination::Stale));
     }
 
     #[test]
@@ -2042,7 +2109,66 @@ mod tests {
         for id in &erns {
             let index = registry.index_of(id).expect("supervised");
             let snapshot = registry.snapshot(index).expect("the slot exists");
-            assert!(snapshot.expected_stop);
+            assert_eq!(snapshot.expected, Some(ExpectedTermination::Shutdown));
+        }
+    }
+
+    #[test]
+    fn a_shutdown_outranks_a_group_stop_in_the_reason_it_reports() {
+        // The ranking that stops a supervisor from fighting itself. A slot
+        // caught mid-group-restart when the shutdown starts satisfies both
+        // conditions, and the answer decides whether the supervisor spends its
+        // shutdown rebuilding children it is about to stop again.
+        let (mut registry, erns) = registry_with(1);
+        registry
+            .slot_of_mut(&erns[0])
+            .expect("supervised")
+            .set_state(SlotState::ExpectedStop { then_restart: true });
+        registry.begin_shutdown();
+        let index = registry.index_of(&erns[0]).expect("supervised");
+
+        let snapshot = registry.snapshot(index).expect("the slot exists");
+
+        assert_eq!(
+            snapshot.expected,
+            Some(ExpectedTermination::Shutdown),
+            "a shutdown must outrank the group restart it interrupted"
+        );
+    }
+
+    #[test]
+    fn a_shutdown_settles_a_child_left_part_way_through_a_group_restart() {
+        // `ExpectedStop { then_restart: true }` publishes as `Restarting`, so a
+        // caller is waiting on an incarnation. Nothing is building one and no
+        // timer is armed, so neither of the other two shutdown predicates
+        // reaches it — without this the caller waits forever.
+        let (mut registry, erns) = registry_with(2);
+        registry
+            .slot_of_mut(&erns[0])
+            .expect("supervised")
+            .set_state(SlotState::ExpectedStop { then_restart: true });
+        registry
+            .slot_of_mut(&erns[1])
+            .expect("supervised")
+            .set_state(SlotState::ExpectedStop {
+                then_restart: false,
+            });
+
+        let abandoned = registry.cancel_unfinished_starts(&ern("supervisor"));
+
+        assert_eq!(
+            abandoned, 2,
+            "both halves of the group publish as Restarting, so both have a caller waiting"
+        );
+        for index in 0..2 {
+            assert_eq!(
+                registry
+                    .slot(ChildIndex::new(index))
+                    .expect("the slot exists")
+                    .state(),
+                SlotState::Retired,
+                "the caller waiting on slot {index} is told the supervisor stopped"
+            );
         }
     }
 

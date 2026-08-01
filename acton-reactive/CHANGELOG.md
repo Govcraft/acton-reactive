@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ActorHandle::supervise_with` or `ManagedActor::supervise_deferred` that
   terminates in a way its `RestartPolicy` warrants a restart from is rebuilt
   from its blueprint, after an exponential backoff, keeping its identifier.
-  `SupervisionStrategy::OneForOne` — the default — is what is carried out.
+  All three supervision strategies are carried out; see the group-restart entry
+  below for `OneForAll` and `RestForOne`.
 
   **This cannot restart a child in any existing program.** A supervisor can only
   rebuild a child it holds a blueprint for, and blueprints reach the registry
@@ -39,9 +40,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only runs first, so a handler that inspects its supervisor sees a settled
   registry rather than a half-updated one.
 
-  `SupervisionStrategy::OneForAll` and `RestForOne` are recorded and planned but
-  not yet sequenced. Setting one today restarts the child that failed and logs
-  that the rest of the plan was not carried out.
+- **`SupervisionStrategy::OneForAll` and `RestForOne` are now carried out.**
+  Previously they were planned correctly and then ignored: the supervisor
+  restarted only the child that failed and logged that the rest of the plan was
+  not performed.
+
+  A group restart stops the siblings the strategy names in **reverse start
+  order**, each one fully down before the one before it is asked, and the whole
+  group is down before any of it comes back. The rebuilds are then *requested*
+  in start order — but not awaited in that order, because each start runs on its
+  own task so that a child's `before_start` cannot stop the supervisor taking
+  messages. A child that cannot come up until a sibling is ready should wait for
+  it rather than assume start order has done that for it.
+
+  **One backoff is charged for the whole group**, against the child that failed.
+  A sibling stopped and rebuilt by a group restart it did not cause spends none
+  of its own restart allowance.
+
+  A sibling the supervisor holds no blueprint for is still **stopped** and
+  simply never comes back. That is deliberate: the point of `OneForAll` is that
+  the children are interdependent, so leaving one running against a freshly
+  restarted set would expose exactly the inconsistent state the strategy exists
+  to prevent. In practice this only reaches children adopted through the legacy
+  `supervise()` path.
+
+  A supervisor that begins shutting down mid-group-restart abandons the group
+  rather than driving it, and settles every child left part-way through so that
+  nothing waits on an incarnation that will never be built.
+
+- **Fixed: a group plan listed the child that failed among the children to
+  stop.** The registry is consulted before the supervisor records the
+  termination, so the child that just died still read as running. Harmless while
+  group plans were never performed; now it would have sent a stop to a dead
+  mailbox and waited for a termination notice that had already been delivered,
+  leaving the group incomplete and the failed child down for good.
 
 - **A child that exhausts its restart allowance now reaches a terminal state.**
   Its supervisor gives up, publishes `SupervisionState::Escalated`, and records

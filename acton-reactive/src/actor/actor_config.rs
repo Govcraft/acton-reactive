@@ -65,16 +65,11 @@ pub struct ActorConfig {
     /// The restart policy for this actor when supervised.
     /// Defaults to `RestartPolicy::Permanent`.
     restart_policy: RestartPolicy,
-    /// The supervision strategy recorded for this actor.
-    /// Defaults to `SupervisionStrategy::OneForOne`.
-    ///
-    /// NOTE: This value is recorded but never read by the runtime; see
-    /// <https://github.com/govcraft/acton-reactive/issues/7>.
+    /// How this actor responds when one of the children it supervises
+    /// terminates. Defaults to `SupervisionStrategy::OneForOne`.
     supervision_strategy: SupervisionStrategy,
-    /// Optional restart limiter configuration recorded for this actor.
-    ///
-    /// NOTE: This value is recorded but never read by the runtime; see
-    /// <https://github.com/govcraft/acton-reactive/issues/7>.
+    /// How many times a child may be restarted and how long to wait between
+    /// attempts. `None` means inherit the supervisor's.
     restart_limiter_config: Option<RestartLimiterConfig>,
 }
 
@@ -272,19 +267,36 @@ impl ActorConfig {
     /// govern what happens when that child dies. It does not: what to do about
     /// a failure is the supervising actor's policy.
     ///
-    /// # What is carried out today
+    /// # What each one does
+    ///
+    /// All three are carried out in full, and the supervisor keeps taking
+    /// messages throughout.
     ///
     /// [`SupervisionStrategy::OneForOne`] — the default, and therefore what
-    /// every unconfigured actor gets — is honoured in full: the failed child is
-    /// restarted from its blueprint after a backoff, and the supervisor keeps
-    /// taking messages throughout.
+    /// every unconfigured actor gets — restarts the failed child from its
+    /// blueprint after a backoff and leaves its siblings alone.
     ///
-    /// [`OneForAll`] and [`RestForOne`] are recorded and planned correctly but
-    /// **not yet sequenced**: carrying a multi-child plan out needs a
-    /// stop-then-restart sequencer with ordering rules of its own. Setting one
-    /// of them today restarts the child that failed and logs that the rest of
-    /// the plan was not carried out. Tracked as
-    /// <https://github.com/govcraft/acton-reactive/issues/8>.
+    /// [`OneForAll`] and [`RestForOne`] restart a group. The siblings the
+    /// strategy names are stopped in **reverse start order**, each one fully
+    /// down before the one before it is asked — so a child that depends on an
+    /// earlier sibling goes first. The whole group is down before any of it
+    /// comes back. One backoff is charged for the whole group, because a group
+    /// restart is one supervisory event rather than several.
+    ///
+    /// The rebuilds are then *requested* in start order. They are not awaited
+    /// in start order, and the difference matters if your children have startup
+    /// dependencies: each start runs on its own task, because a child's
+    /// `before_start` is user code of unbounded duration and waiting for it
+    /// would stop the supervisor taking messages. So an earlier sibling is
+    /// asked for first but may finish starting after a later one. A child that
+    /// cannot come up until a sibling is ready should wait for it rather than
+    /// assume start order has done that for it.
+    ///
+    /// A sibling the supervisor cannot recreate is still **stopped** by a group
+    /// restart and simply never comes back. That is deliberate: the point of
+    /// [`OneForAll`] is that the children are interdependent, so leaving one
+    /// running against a freshly restarted set would expose exactly the
+    /// inconsistent state the strategy exists to prevent.
     ///
     /// # Only children with a blueprint
     ///

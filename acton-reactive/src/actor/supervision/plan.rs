@@ -77,6 +77,39 @@ pub struct SlotView {
     pub alive: bool,
 }
 
+/// Why a supervisor already knew one of its children was going to stop.
+///
+/// A termination the supervisor asked for is not a failure, but the three
+/// reasons it can have asked are not interchangeable — only one of them leaves
+/// the supervisor with something still to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedTermination {
+    /// The supervisor is shutting down, so every child stopping is expected.
+    ///
+    /// Checked ahead of [`GroupStop`](Self::GroupStop): a supervisor on its way
+    /// down abandons a group restart rather than driving it, or it would spend
+    /// its shutdown rebuilding children it is about to stop again.
+    Shutdown,
+
+    /// The supervisor stopped this child as one step of a group restart.
+    ///
+    /// The only expected termination that leaves work outstanding: the group
+    /// does not advance on its own.
+    GroupStop {
+        /// Whether the supervisor intends to bring this child back.
+        ///
+        /// `false` for a sibling a group restart had to stop but cannot
+        /// recreate — see [`plan_restart`] for why those are stopped at all.
+        then_restart: bool,
+    },
+
+    /// The slot was not in a state that could have produced a fresh notice.
+    ///
+    /// A duplicate from an incarnation already accounted for, or a slot that
+    /// has no incarnation yet.
+    Stale,
+}
+
 /// Everything the planner needs to know about the child that just terminated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotSnapshot {
@@ -86,11 +119,8 @@ pub struct SlotSnapshot {
     /// Whether the supervisor holds a blueprint and can therefore recreate it.
     pub restartable: bool,
 
-    /// Whether the supervisor asked for this stop itself.
-    ///
-    /// Set while a group restart is stopping siblings, so their terminations
-    /// are recognised as expected rather than treated as fresh failures.
-    pub expected_stop: bool,
+    /// Why this termination was expected, or `None` if it is fresh news.
+    pub expected: Option<ExpectedTermination>,
 
     /// When this child was last restarted, if it ever has been.
     ///
@@ -104,7 +134,25 @@ pub struct SlotSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupervisionOutcome {
     /// The supervisor asked for this stop; take no further action.
+    ///
+    /// Means exactly that, and nothing is allowed to grow into it: a stop that
+    /// the supervisor must *respond* to gets its own variant rather than being
+    /// smuggled in here for the engine to recognise.
     Ignore,
+
+    /// A sibling stopped for a group restart is now down.
+    ///
+    /// The supervisor asked for this stop, so it is not a failure — but unlike
+    /// [`Ignore`](Self::Ignore) it leaves work outstanding. The slot has to be
+    /// moved out of "being stopped" and into whichever resting state
+    /// `then_restart` names, or the group's restart is refused when it comes
+    /// due and the child never comes back.
+    GroupStopLanded {
+        /// Whether this child is one the group is bringing back.
+        ///
+        /// `false` means stop it and leave it down.
+        then_restart: bool,
+    },
 
     /// Let the child stay down.
     ///
@@ -173,10 +221,17 @@ pub fn plan_restart(
         .map(|slot| slot.index)
         .collect();
 
+    // `failed` is excluded rather than relying on its view saying `alive:
+    // false`. Its termination is the premise of this call, but the supervisor
+    // updates the slot *after* deciding, so the registry still reports it
+    // running at the moment the plan is made. Stopping it would send a stop to
+    // a dead mailbox and then wait for a termination notice that has already
+    // been delivered — which is a group restart that never completes, and the
+    // failed child never coming back.
     let stop = affected
         .iter()
         .rev()
-        .filter(|slot| slot.alive)
+        .filter(|slot| slot.alive && slot.index != failed)
         .map(|slot| slot.index)
         .collect();
 
@@ -196,10 +251,14 @@ pub fn plan_restart(
 ///
 /// The order of the checks is the correctness core of the whole subsystem:
 ///
-/// 1. An expected stop is ignored. This has to come first. Stopping a sibling
-///    during a group restart produces [`TerminationReason::Normal`], and a
-///    [`Permanent`] child restarts on a normal termination, so any other
-///    ordering makes a group restart loop forever.
+/// 1. An expected stop is never read as a failure. This has to come first.
+///    Stopping a sibling during a group restart produces
+///    [`TerminationReason::Normal`], and a [`Permanent`] child restarts on a
+///    normal termination, so any other ordering makes a group restart loop
+///    forever. Which *kind* of expected stop it was decides whether anything is
+///    left to do: only a group stop is, and it is the reason
+///    [`SupervisionOutcome::GroupStopLanded`] exists rather than the engine
+///    inspecting slot state behind this function's back.
 /// 2. A child with no blueprint is forgotten, before the limiter is touched.
 ///    This is what keeps existing programs behaving exactly as they did:
 ///    children registered through the legacy `supervise()` path have no
@@ -217,9 +276,16 @@ pub fn evaluate(
     slots: &[SlotView],
     now: Instant,
 ) -> SupervisionOutcome {
-    // 1. The supervisor asked for this stop; it is not a failure.
-    if slot.expected_stop {
-        return SupervisionOutcome::Ignore;
+    // 1. The supervisor asked for this stop; it is not a failure. A group stop
+    //    is the one kind that still needs answering.
+    match slot.expected {
+        Some(ExpectedTermination::GroupStop { then_restart }) => {
+            return SupervisionOutcome::GroupStopLanded { then_restart }
+        }
+        Some(ExpectedTermination::Shutdown | ExpectedTermination::Stale) => {
+            return SupervisionOutcome::Ignore
+        }
+        None => {}
     }
 
     // 2. No blueprint means the supervisor cannot bring this child back. Return
@@ -302,7 +368,7 @@ mod tests {
         SlotSnapshot {
             index: ChildIndex::new(index),
             restartable: true,
-            expected_stop: false,
+            expected: None,
             last_restart: None,
         }
     }
@@ -365,7 +431,44 @@ mod tests {
         let plan = plan_restart(&SupervisionDecision::RestartAll, ChildIndex::new(0), &slots);
 
         assert_eq!(plan.restart, indices(&[0, 1, 2, 3]));
-        assert_eq!(plan.stop, indices(&[3, 2, 1, 0]));
+        assert_eq!(
+            plan.stop,
+            indices(&[3, 2, 1]),
+            "slot 0 is the child that failed and is already down"
+        );
+    }
+
+    #[test]
+    fn the_failed_child_is_never_stopped_even_when_its_slot_still_reads_as_running() {
+        // The registry is consulted *before* the supervisor records the
+        // termination, so the child that just died still reports `alive: true`.
+        // Taking that at face value sends a stop to a dead mailbox and then
+        // waits for a termination that was delivered before the plan existed —
+        // a group restart that never completes, and the one child everybody
+        // cares about never coming back.
+        //
+        // The fixture deliberately leaves every slot alive, because that is the
+        // state the engine actually calls this in.
+        let slots = four_healthy_slots();
+
+        for failed in 0..4 {
+            let plan = plan_restart(
+                &SupervisionDecision::RestartAll,
+                ChildIndex::new(failed),
+                &slots,
+            );
+
+            assert!(
+                !plan.stop.contains(&ChildIndex::new(failed)),
+                "child {failed} terminated; stopping it would wait forever: {:?}",
+                plan.stop
+            );
+            assert!(
+                plan.restart.contains(&ChildIndex::new(failed)),
+                "and it is still the child that has to come back: {:?}",
+                plan.restart
+            );
+        }
     }
 
     #[test]
@@ -528,14 +631,13 @@ mod tests {
 
     // ---- evaluate --------------------------------------------------------
 
-    #[test]
-    fn an_expected_stop_is_ignored_even_though_the_policy_would_restart_it() {
-        // The anti-loop guard. Stopping a sibling for a group restart reports
-        // Normal, and Permanent restarts on Normal, so checking the policy
-        // first would restart the child we just deliberately stopped.
+    /// Evaluates a `Permanent` child's `Normal` termination — the combination
+    /// that *would* warrant a restart — so the only thing that can change the
+    /// answer is the expected-termination reason under test.
+    fn evaluate_expected(expected: Option<ExpectedTermination>) -> (SupervisionOutcome, usize) {
         let mut limiter = limiter(5, 100, 10_000);
         let slot = SlotSnapshot {
-            expected_stop: true,
+            expected,
             ..snapshot(0)
         };
 
@@ -548,12 +650,78 @@ mod tests {
             Instant::now(),
         );
 
+        (outcome, limiter.restarts_in_window())
+    }
+
+    #[test]
+    fn an_expected_stop_never_restarts_the_child_the_supervisor_just_stopped() {
+        // The anti-loop guard. Stopping a sibling for a group restart reports
+        // Normal, and Permanent restarts on Normal, so checking the policy
+        // first would restart the child we just deliberately stopped.
+        //
+        // Asserted across every reason a stop can be expected, because the
+        // guard is the check *ordering*, not any one of the three: whichever
+        // reason a future change forgets to put first is the one that loops.
+        for expected in [
+            ExpectedTermination::Shutdown,
+            ExpectedTermination::Stale,
+            ExpectedTermination::GroupStop { then_restart: true },
+            ExpectedTermination::GroupStop {
+                then_restart: false,
+            },
+        ] {
+            let (outcome, charged) = evaluate_expected(Some(expected));
+
+            assert!(
+                !matches!(outcome, SupervisionOutcome::Restart { .. }),
+                "{expected:?} must not be read as a fresh failure, got {outcome:?}"
+            );
+            assert_eq!(
+                charged, 0,
+                "{expected:?} must not consume a restart allowance"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shutdown_abandons_a_group_restart_rather_than_driving_it() {
+        // A supervisor on its way down must not answer a group stop by parking
+        // the child for a restart it will never perform. `Shutdown` outranking
+        // `GroupStop` in the registry's snapshot is what decides this, and this
+        // is the assertion that says the ranking matters.
+        let (outcome, _) = evaluate_expected(Some(ExpectedTermination::Shutdown));
+
         assert_eq!(outcome, SupervisionOutcome::Ignore);
-        assert_eq!(
-            limiter.restarts_in_window(),
-            0,
-            "an ignored stop must not consume a restart"
-        );
+    }
+
+    #[test]
+    fn a_stale_notice_is_ignored_rather_than_advancing_anything() {
+        let (outcome, _) = evaluate_expected(Some(ExpectedTermination::Stale));
+
+        assert_eq!(outcome, SupervisionOutcome::Ignore);
+    }
+
+    #[test]
+    fn a_group_stop_reports_that_it_landed_instead_of_being_ignored() {
+        // The crux of carrying a group restart out. `Ignore` means "take no
+        // further action", and a group stop needs action: the slot has to be
+        // moved on or the group's restart is refused when it comes due. Both
+        // values of `then_restart` are carried through untouched, because the
+        // engine has no other source for that decision.
+        for then_restart in [true, false] {
+            let (outcome, charged) =
+                evaluate_expected(Some(ExpectedTermination::GroupStop { then_restart }));
+
+            assert_eq!(
+                outcome,
+                SupervisionOutcome::GroupStopLanded { then_restart },
+                "a group stop must report which half of the group it is in"
+            );
+            assert_eq!(
+                charged, 0,
+                "the group was charged once when it was planned, not again per sibling"
+            );
+        }
     }
 
     #[test]
@@ -910,7 +1078,11 @@ mod tests {
         match outcome {
             SupervisionOutcome::Restart { plan, .. } => {
                 assert_eq!(plan.restart, indices(&[1, 2, 3]));
-                assert_eq!(plan.stop, indices(&[3, 2, 1]));
+                assert_eq!(
+                    plan.stop,
+                    indices(&[3, 2]),
+                    "child 1 is the one that terminated, so it is started but never stopped"
+                );
             }
             other => panic!("expected a restart, got {other:?}"),
         }
