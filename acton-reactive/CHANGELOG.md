@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A graceful stop drains the messages queued behind its signal again.** An
+  actor that receives `SystemSignal::Terminate` runs `before_stop`, closes its
+  inbox, and then works off the backlog already queued, dispatching each message
+  to its handler as normal, before stopping its loop.
+
+  **This restores a written contract rather than introducing a behaviour.** The
+  rustdoc on `SystemSignal::Terminate` has said all along that a terminating
+  actor should "1. Stop accepting new work. 2. Complete any in-progress tasks.
+  … 6. Stop its message processing loop." Since v7.0.0 the loop did 1 and 6 and
+  skipped 2. That text is unchanged by this release: it was never wrong, it was
+  the specification the code had quietly stopped honouring, and it is true again.
+
+  The drain shipped through v0.6.0 and was lost in `79aeb80c` (released in
+  **v7.0.0**, and broken in every release since, up to and including 8.2.0),
+  where a `break` was added to the stop-signal arm of the actor's message loop.
+  That change was incidental rather than deliberate: the same commit introduced
+  a deferred-init `termination_reason` binding, and without the `break` the loop
+  fell through to a second assignment of that immutable binding, i.e. E0384. The
+  `break` made the new bookkeeping compile and silently narrowed shutdown
+  semantics as a side effect. Nothing in the commit concerned shutdown, and the
+  CHANGELOG never recorded a change.
+
+  The visible symptom was `examples/basic`, which asserts its actor processed
+  both messages of a Ping/Pong exchange. It passed deterministically through
+  v0.6.0 and has failed intermittently ever since - 24 of 40 runs on this
+  machine - because the `PongMsg` its handler sends races the stop signal and
+  usually lands behind it. With the drain restored the same unmodified example
+  passes 40 of 40.
+
+  **The drain is bounded and cannot hang.** Closing the inbox first is what
+  bounds it: new sends are rejected, so the backlog can only shrink, and a
+  handler running during the drain cannot feed the loop more work. This is not a
+  "drain until quiescent" that two actors messaging each other could keep alive
+  indefinitely.
+
 ### Changed
+
+- **`ActorRuntime::shutdown_all` now documents what is and is not delivered on
+  the way down.** Within a single actor a chain does reach its end, because a
+  handler running before the stop signal is dequeued still has an open inbox, so
+  a message it sends to its own actor lands and is drained. Between actors there
+  is no such guarantee: each closes its inbox on its own schedule and all are
+  signalled at once, so the second hop of a broker broadcast, and a `before_stop`
+  hook broadcasting to peers that are stopping too, can still be lost.
+
+  Root actors are still signalled first and the broker stopped last. That order
+  is deliberate and is now documented as such: the broker is the routing fabric
+  for messages still in flight while actors wind down, so stopping it first
+  strands them.
 
 - **The framework now restarts supervised children.** A child registered with
   `ActorHandle::supervise_with` or `ManagedActor::supervise_deferred` that

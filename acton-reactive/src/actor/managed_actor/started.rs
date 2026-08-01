@@ -692,8 +692,11 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         let max_wait_duration = Duration::from_millis(CONFIG.timeouts.read_only_handler_flush);
         let mut last_flush_time = Instant::now();
 
-        // Track the termination reason - set when the loop exits
-        let termination_reason;
+        // Track the termination reason. An `Option` rather than a deferred-init
+        // binding because a graceful stop records its reason and then keeps
+        // looping to drain the inbox, so the value is set before the loop ends
+        // rather than at the moment it ends.
+        let mut termination_reason: Option<TerminationReason> = None;
 
         loop {
             // Children recorded by a handler are handed to start tasks here, at
@@ -712,8 +715,9 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                 () = &mut cancel => {
                     trace!("Forceful cancellation triggered for actor: {}", self.id());
                     self.flush_read_only_handlers(&mut read_only_futures).await;
-                    // Parent-initiated shutdown via cancellation token
-                    termination_reason = TerminationReason::ParentShutdown;
+                    // Parent-initiated shutdown via cancellation token. This is
+                    // the forceful path, so it abandons the backlog deliberately.
+                    termination_reason = Some(TerminationReason::ParentShutdown);
                     break;
                 }
 
@@ -724,8 +728,13 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
 
                 incoming_opt = self.inbox.recv() => {
                     let Some(incoming_envelope) = incoming_opt else {
-                        // Inbox closed without Terminate signal = unexpected closure
-                        termination_reason = TerminationReason::InboxClosed;
+                        // No more messages. Either the drain that a stop signal
+                        // started has finished, in which case the reason is
+                        // already recorded and must be kept, or the inbox closed
+                        // with no stop signal at all, which is unexpected.
+                        if termination_reason.is_none() {
+                            termination_reason = Some(TerminationReason::InboxClosed);
+                        }
                         break;
                     };
                     // Extract envelope and type_id, handling BrokerRequestEnvelope indirection
@@ -808,9 +817,20 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                         trace!("Stop signal ({:?}) received for actor: {}. Closing inbox.", stop_reason, self.id());
                         run_lifecycle_hook!(self, before_stop, "before_stop");
                         self.inbox.close();
-                        // Graceful shutdown - break to avoid overwriting
-                        termination_reason = stop_reason;
-                        break;
+                        termination_reason = Some(stop_reason);
+                        // Do NOT break. Closing the inbox rejects *new* sends,
+                        // which makes what is already buffered a finite backlog,
+                        // so draining it terminates: a handler can no longer feed
+                        // this loop, and any message it does send to a closed
+                        // inbox fails rather than extending the work. Keep
+                        // dispatching until `recv()` reports the backlog empty.
+                        //
+                        // This drain is the documented contract for
+                        // `SystemSignal::Terminate` and shipped through v0.6.0.
+                        // It was dropped in 79aeb80c (v7.0.0) as a side effect of
+                        // making a new deferred-init `termination_reason` binding
+                        // compile, not as a deliberate change, and the `basic`
+                        // example has failed intermittently ever since.
                     } else {
                         trace!("No handler found for message type {:?} for actor {}", type_id, self.id());
                     }
@@ -822,7 +842,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // errors) before reporting the reason.
         self.flush_read_only_handlers(&mut read_only_futures).await;
 
-        termination_reason
+        termination_reason.unwrap_or(TerminationReason::InboxClosed)
     }
 
     /// Final cleanup shared by every termination path: purge this actor's broker

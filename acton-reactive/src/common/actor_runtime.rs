@@ -579,6 +579,40 @@ impl ActorRuntime {
     /// all top-level actor tasks to complete.
     /// Finally, it stops the central message broker actor.
     ///
+    /// # What is and is not delivered
+    ///
+    /// The `Terminate` signal is an ordinary message and joins each actor's FIFO
+    /// inbox like any other. An actor handles everything queued ahead of the
+    /// signal as normal, and on reaching it closes its inbox and then drains
+    /// whatever is queued behind it, as `SystemSignal::Terminate` describes.
+    ///
+    /// So within a single actor, a chain does reach its end: a handler running
+    /// before the signal is dequeued still has an open inbox, so a message it
+    /// sends to its own actor lands and is drained. What is dropped is a send
+    /// issued *during* the drain, once the inbox is closed - which is exactly
+    /// what bounds the drain and stops it running forever.
+    ///
+    /// Between actors there is no such guarantee, because each one closes its
+    /// inbox on its own schedule and they are all signalled at once. A message
+    /// arriving at an actor that has already begun draining is lost. That
+    /// affects in particular:
+    ///
+    /// - the second hop of a broker broadcast, since
+    ///   [`broadcast`](crate::traits::Broadcaster::broadcast) completes when the
+    ///   broker has the message, not when subscribers have handled it,
+    /// - a `before_stop` hook that broadcasts to peers which are also being
+    ///   stopped, since their stop signals were enqueued at the same time.
+    ///
+    /// To wait for such work, establish that it finished before calling this
+    /// method - for example by having the last actor in the chain signal a
+    /// channel that the caller awaits. Stopping one actor with
+    /// [`ActorHandle::stop`](crate::common::ActorHandle::stop) while its audience
+    /// is still running is the way to have a `before_stop` broadcast observed.
+    ///
+    /// Note that ordering matters here: root actors are signalled first and the
+    /// broker is stopped last, precisely so that messages still being routed
+    /// while actors wind down continue to reach their subscribers.
+    ///
     /// # Returns
     ///
     /// An `anyhow::Result<()>` indicating whether the shutdown process completed successfully.
