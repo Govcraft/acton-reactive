@@ -48,11 +48,12 @@ pub trait Broadcaster: Clone + Debug + Default + Send + Sync + 'static {
 
     /// Synchronously sends a message to the broker for broadcasting.
     ///
-    /// **Warning:** This default implementation relies on [`OutboundEnvelope::reply`],
+    /// **Warning:** This default implementation relies on
+    /// [`OutboundEnvelope::reply`](crate::message::OutboundEnvelope::reply),
     /// which internally spawns a blocking task and creates a new Tokio runtime.
     /// This is generally **discouraged** and can lead to performance issues or deadlocks,
     /// especially if called from within an existing asynchronous context. Prefer using
-    /// the asynchronous [`Broker::broadcast`] method where possible.
+    /// the asynchronous [`Broadcaster::broadcast`](Self::broadcast) method where possible.
     ///
     /// This method requires the implementing type (`Self`) to also implement
     /// [`ActorHandleInterface`] to use its `create_envelope` method.
@@ -64,8 +65,9 @@ pub trait Broadcaster: Clone + Debug + Default + Send + Sync + 'static {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of initiating the synchronous send.
-    /// It relies on the behavior of [`OutboundEnvelope::reply`], which might not
-    /// propagate all underlying errors from the actual send operation.
+    /// It relies on the behavior of
+    /// [`OutboundEnvelope::reply`](crate::message::OutboundEnvelope::reply), which might
+    /// not propagate all underlying errors from the actual send operation.
     fn broadcast_sync(&self, message: impl ActonMessage) -> anyhow::Result<()>
     where
         Self: ActorHandleInterface + Sized, // Require ActorHandleInterface for default impl

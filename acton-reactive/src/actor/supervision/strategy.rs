@@ -70,7 +70,7 @@ use crate::message::ChildTerminated;
 ///
 /// When a supervised child actor terminates, the supervision strategy determines
 /// which children should be restarted (if any). This decision is made in
-/// conjunction with the child's [`RestartPolicy`].
+/// conjunction with the child's [`RestartPolicy`](crate::actor::RestartPolicy).
 ///
 /// The strategy consulted is the **supervisor's**, not the child's. That is
 /// worth stating outright, because

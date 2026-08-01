@@ -36,14 +36,14 @@ use dyn_clone::DynClone; // Required for cloning trait objects
 pub trait ActonMessage: DynClone + Any + Send + Sync + Debug {
     /// Returns a reference to the message as a dynamic [`Any`] trait object.
     ///
-    /// This allows for runtime type introspection and downcasting using methods like
-    /// [`Any::downcast_ref`](std::any::Any::downcast_ref).
+    /// This allows for runtime type introspection and downcasting using the
+    /// `downcast_ref` method that [`Any`](std::any::Any) provides on its trait objects.
     fn as_any(&self) -> &dyn Any;
 
     /// Returns a mutable reference to the message as a dynamic [`Any`] trait object.
     ///
-    /// This allows for mutable runtime type introspection and downcasting using methods like
-    /// [`Any::downcast_mut`](std::any::Any::downcast_mut).
+    /// This allows for mutable runtime type introspection and downcasting using the
+    /// `downcast_mut` method that [`Any`](std::any::Any) provides on its trait objects.
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 

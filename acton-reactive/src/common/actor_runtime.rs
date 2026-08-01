@@ -72,7 +72,9 @@ impl std::error::Error for IpcNameInUse {}
 
 /// Represents the initialized and active Acton actor system runtime.
 ///
-/// This struct is obtained after successfully launching the system via [`ActonApp::launch_async().await`].
+/// This struct is obtained by awaiting
+/// [`ActonApp::launch_async`](crate::common::ActonApp::launch_async), which starts
+/// the system and resolves to the runtime handle.
 /// It holds the internal state of the running system, including a reference to the
 /// central message broker and a registry of top-level actors.
 ///
@@ -573,7 +575,8 @@ impl ActorRuntime {
     ///
     /// This method attempts to stop all registered top-level actors (and consequently their
     /// descendant children through the `stop` propagation mechanism) by sending them a
-    /// [`SystemSignal::Terminate`]. It waits for all top-level actor tasks to complete.
+    /// [`SystemSignal::Terminate`](crate::message::SystemSignal::Terminate). It waits for
+    /// all top-level actor tasks to complete.
     /// Finally, it stops the central message broker actor.
     ///
     /// # Returns

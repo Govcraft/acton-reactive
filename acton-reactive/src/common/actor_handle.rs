@@ -51,7 +51,7 @@ use crate::traits::{ActorHandleInterface, Broadcaster, Subscriber};
 ///
 /// Key functionalities are exposed through implemented traits:
 /// *   [`ActorHandleInterface`]: Core methods for interaction (sending messages, stopping, etc.).
-/// *   [`Broker`]: Methods for broadcasting messages via the system broker.
+/// *   [`Broadcaster`]: Methods for broadcasting messages via the system broker.
 /// *   [`Subscriber`]: Method for accessing the system broker handle.
 ///
 /// Equality and hashing are based solely on the actor's unique identifier (`id`).

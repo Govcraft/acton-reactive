@@ -202,7 +202,8 @@ pub type AsyncLifecycleHandler<ManagedEntity> =
 
 /// A type alias representing a handle ([`ActorHandle`]) specifically for the system message broker.
 ///
-/// This alias provides semantic clarity when a handle refers to the central [`Broker`].
+/// This alias provides semantic clarity when a handle refers to the central
+/// [`Broker`](crate::common::Broker).
 pub type BrokerRef = ActorHandle;
 
 /// A type alias representing a handle ([`ActorHandle`]) specifically for an actor's parent (supervisor).

@@ -24,7 +24,8 @@ use derive_new::new; // Keep using derive_new for the constructor
 /// actor: its unique identifier (`sender`, an [`Ern`]) and the sender half (`address`)
 /// of the MPSC channel connected to its inbox.
 ///
-/// This struct is typically used within message envelopes ([`OutboundEnvelope`]) to specify
+/// This struct is typically used within message envelopes
+/// ([`OutboundEnvelope`](crate::message::OutboundEnvelope)) to specify
 /// the sender and recipient of a message.
 #[derive(new, Clone, Debug)]
 pub struct MessageAddress {

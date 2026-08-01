@@ -46,7 +46,7 @@ use crate::traits::ActorHandleInterface;
 ///
 /// Actors in this state can create message envelopes using methods like [`ManagedActor::new_envelope`]
 /// and [`ManagedActor::new_parent_envelope`]. Interaction typically occurs via the actor's
-/// [`ActorHandle`].
+/// [`ActorHandle`](crate::common::ActorHandle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add common derives
 pub struct Started;
 

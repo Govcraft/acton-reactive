@@ -36,7 +36,7 @@ pub trait Subscribable: Send + Sync + 'static {
     /// Asynchronously subscribes the actor associated with this handle to messages of type `M`.
     ///
     /// After subscribing, the actor will receive copies of messages of type `M` that are
-    /// broadcast via the [`Broker`](super::Broker) trait.
+    /// broadcast via the [`Broadcaster`](super::Broadcaster) trait.
     ///
     /// # Type Parameters
     ///
@@ -123,7 +123,9 @@ where
     // Corrected bounds based on usage within the methods.
     T: ActorHandleInterface + Subscriber + Send + Sync + 'static,
 {
-    /// Sends a [`SubscribeBroker`] message to the broker.
+    /// Sends the broker a crate-internal subscription request carrying this actor's
+    /// handle and the `TypeId` of `M`, which the broker records so that later
+    /// broadcasts of `M` are forwarded to this actor.
     #[instrument(skip(self), fields(message_type = std::any::type_name::<M>(), subscriber = %self.id()))]
     fn subscribe<M: ActonMessage + Send + Sync + 'static>(
         &self,

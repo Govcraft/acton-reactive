@@ -146,18 +146,24 @@ pub mod ipc {
 /// *   [`crate::message::SystemSignal`]: Lifecycle control signals, such as graceful termination.
 /// *   [`crate::traits::ActonMessage`]: Marker trait for all valid messages.
 /// *   [`crate::traits::ActorHandleInterface`]: Core trait defining actor interaction methods.
-/// *   [`crate::traits::Broker`]: Trait defining message broadcasting capabilities.
+/// *   [`crate::traits::Broadcaster`]: Trait defining message broadcasting capabilities.
 /// *   [`crate::traits::Subscribable`]: Trait for managing message subscriptions.
 /// *   [`crate::traits::Subscriber`]: Trait for accessing the message broker.
 ///
 /// ## IPC Types (requires `ipc` feature)
-/// *   [`crate::common::ipc::IpcTypeRegistry`]: Registry for IPC message type deserialization.
-/// *   [`crate::common::ipc::IpcEnvelope`]: Envelope format for IPC messages.
-/// *   [`crate::common::ipc::IpcResponse`]: Response envelope format for IPC.
-/// *   [`crate::common::ipc::IpcError`]: Error types for IPC operations.
-/// *   [`crate::common::ipc::IpcConfig`]: Configuration for IPC listener.
-/// *   [`crate::common::ipc::IpcListenerHandle`]: Handle for managing IPC listener lifecycle.
-/// *   [`crate::common::ipc::IpcListenerStats`]: Statistics for IPC listener.
+///
+/// These are re-exported only when the `ipc` feature is enabled; they are also
+/// reachable under the crate's `ipc` module.
+#[cfg_attr(
+    feature = "ipc",
+    doc = "*   [`crate::ipc::IpcTypeRegistry`]: Registry for IPC message type deserialization.
+*   [`crate::ipc::IpcEnvelope`]: Envelope format for IPC messages.
+*   [`crate::ipc::IpcResponse`]: Response envelope format for IPC.
+*   [`crate::ipc::IpcError`]: Error types for IPC operations.
+*   [`crate::ipc::IpcConfig`]: Configuration for IPC listener.
+*   [`crate::ipc::IpcListenerHandle`]: Handle for managing IPC listener lifecycle.
+*   [`crate::ipc::IpcListenerStats`]: Statistics for IPC listener."
+)]
 pub mod prelude {
     // Macros from acton-macro
     pub use acton_macro::*;

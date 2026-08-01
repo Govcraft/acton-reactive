@@ -87,7 +87,9 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// The framework handles the necessary type erasure and downcasting internally. The
     /// provided `message_processor` receives the actor (in the `Started` state) and a
-    /// [`MessageContext`] containing the concrete message and metadata.
+    /// message context: a wrapper holding the concrete message of type `M`, reachable
+    /// through its `message()` accessor, alongside the envelopes describing where the
+    /// message came from and where a reply should be sent.
     ///
     /// # Type Parameters
     ///
@@ -97,8 +99,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// # Arguments
     ///
     /// *   `message_processor`: An asynchronous closure that takes the actor (`&mut ManagedActor<Started, State>`)
-    ///     and the message context (`&mut MessageContext<M>`) and returns a `Future`
-    ///     (specifically, a [`FutureBox`]). This closure contains the logic for handling messages of type `M`.
+    ///     and the message context (`&mut MessageContext<M>`) and returns a pinned, boxed
+    ///     `Future` that is `Send + Sync + 'static` and resolves to `()`. Produce one with
+    ///     `Box::pin(async move { .. })`, or with [`Reply::ready`](crate::common::Reply::ready)
+    ///     when the handler has no asynchronous work left to do. This closure contains the
+    ///     logic for handling messages of type `M`.
     ///
     /// # Returns
     ///
@@ -354,8 +359,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// # Arguments
     ///
     /// *   `message_processor`: An asynchronous closure that takes the actor (`&ManagedActor<Started, State>`)
-    ///     and the message context (`&mut MessageContext<M>`) and returns a `Future`
-    ///     (specifically, a [`FutureBox`]). This closure contains the logic for handling messages of type `M`.
+    ///     and the message context (`&mut MessageContext<M>`) and returns a pinned, boxed
+    ///     `Future` that is `Send + Sync + 'static` and resolves to `()`. Produce one with
+    ///     `Box::pin(async move { .. })`, or with [`Reply::ready`](crate::common::Reply::ready)
+    ///     when the handler has no asynchronous work left to do. This closure contains the
+    ///     logic for handling messages of type `M`.
     ///
     /// # Returns
     ///
@@ -520,14 +528,20 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// *   `M`: The concrete message type this handler will process. Must implement
     ///     [`ActonMessage`], `Clone`, `Send`, `Sync`, and be `'static`.
-    /// *   `T`: The success type returned by the handler. Must implement [`ActonMessageReply`] and be `'static`.
+    /// *   `T`: The success type returned by the handler. Must satisfy the crate's reply
+    ///     bound, which a blanket implementation grants to every `Debug + Send + 'static`
+    ///     type — including `()` when the handler has nothing to return. The bound exists
+    ///     so the framework can carry the value as a trait object and downcast it back to
+    ///     `T` on the receiving side.
     /// *   `E`: The error type returned by the handler. Must implement [`std::error::Error`] and be `'static`.
     ///
     /// # Arguments
     ///
     /// *   `message_processor`: An asynchronous closure that takes the actor (`&ManagedActor<Started, State>`)
-    ///     and the message context (`&mut MessageContext<M>`) and returns a `Future`
-    ///     (specifically, a [`FutureBoxResult`]). This closure contains the logic for handling messages of type `M`.
+    ///     and the message context (`&mut MessageContext<M>`) and returns a pinned, boxed
+    ///     `Future` that is `Send + Sync + 'static` and resolves to `Result<T, E>`. Produce
+    ///     one with `Box::pin(async move { .. })`. This closure contains the logic for
+    ///     handling messages of type `M`.
     ///
     /// # Returns
     ///
@@ -943,7 +957,10 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     /// 2.  Executes the registered `before_start` lifecycle hook.
     /// 3.  Spawns the actor's main asynchronous task (`wake`) which handles message processing.
     /// 4.  Closes the actor's `TaskTracker` to signal that the main task has been spawned.
-    /// 5.  If [`expose_for_ipc()`](Self::expose_for_ipc) was called, registers the actor for IPC access.
+    #[cfg_attr(
+        feature = "ipc",
+        doc = "5.  If [`expose_for_ipc()`](Self::expose_for_ipc) was called, registers the actor for IPC access."
+    )]
     /// 6.  Returns the actor's [`ActorHandle`] for external interaction.
     ///
     /// After this method returns, the actor is running and ready to process messages sent to its handle.

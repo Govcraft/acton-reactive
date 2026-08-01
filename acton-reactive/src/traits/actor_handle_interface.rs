@@ -147,7 +147,8 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
 
     /// Initiates a graceful shutdown of the actor associated with this handle.
     ///
-    /// This method should send a termination signal (e.g., [`SystemSignal::Terminate`])
+    /// This method should send a termination signal (e.g.,
+    /// [`SystemSignal::Terminate`](crate::message::SystemSignal::Terminate))
     /// to the actor and wait for its main task and associated tasks (tracked by `tracker`)
     /// to complete.
     ///
@@ -210,8 +211,9 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`IpcError::TargetBusy`] if the actor's inbox is full, or
-    /// [`IpcError::IoError`] if the channel is closed.
+    /// Returns [`IpcError::TargetBusy`](crate::ipc::IpcError::TargetBusy) if the actor's
+    /// inbox is full, or [`IpcError::IoError`](crate::ipc::IpcError::IoError) if the
+    /// channel is closed.
     #[cfg(feature = "ipc")]
     fn try_send_boxed(
         &self,
@@ -220,7 +222,8 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
 
     /// Tries to send a boxed message with a custom reply-to address without blocking.
     ///
-    /// This method is the backpressure-aware variant of [`send_boxed_with_reply_to`].
+    /// This method is the backpressure-aware variant of
+    /// [`send_boxed_with_reply_to`](ActorHandleInterface::send_boxed_with_reply_to).
     /// It returns immediately with an error if the target actor's inbox is full.
     ///
     /// # Arguments
@@ -230,8 +233,9 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`IpcError::TargetBusy`] if the actor's inbox is full, or
-    /// [`IpcError::IoError`] if the channel is closed.
+    /// Returns [`IpcError::TargetBusy`](crate::ipc::IpcError::TargetBusy) if the actor's
+    /// inbox is full, or [`IpcError::IoError`](crate::ipc::IpcError::IoError) if the
+    /// channel is closed.
     #[cfg(feature = "ipc")]
     fn try_send_boxed_with_reply_to(
         &self,

@@ -57,7 +57,7 @@ use crate::traits::ActonMessage;
 /// Represents a message prepared for sending, including sender and optional recipient addresses.
 ///
 /// An `OutboundEnvelope` is typically created by an actor (using methods like
-/// [`ActorHandle::create_envelope`](crate::common::ActorHandle::create_envelope))
+/// [`ActorHandleInterface::create_envelope`](crate::traits::ActorHandleInterface::create_envelope))
 /// before sending a message. It holds the [`MessageAddress`] of the sender (`return_address`)
 /// and optionally the [`MessageAddress`] of the recipient (`recipient_address`).
 ///

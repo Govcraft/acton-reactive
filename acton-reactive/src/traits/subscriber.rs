@@ -21,7 +21,8 @@ use crate::common::BrokerRef;
 /// This trait provides a single method, [`get_broker`](Subscriber::get_broker), which allows
 /// retrieving an optional handle ([`BrokerRef`]) to the central message broker.
 /// This is essential for components that need to interact with the broker, primarily
-/// for subscribing or unsubscribing from message types via the [`Subscribable`] trait.
+/// for subscribing or unsubscribing from message types via the
+/// [`Subscribable`](crate::traits::Subscribable) trait.
 ///
 /// It is typically implemented by [`ActorHandle`](crate::common::ActorHandle).
 pub trait Subscriber {

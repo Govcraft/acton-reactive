@@ -45,9 +45,11 @@ use parking_lot::RwLock;
 /// (usually wrapped in a [`BrokerRequest`]), the broker identifies all actors subscribed
 /// to that message's type and forwards the message to them concurrently.
 ///
-/// Internally, the `Broker` runs as a specialized [`ManagedActor`] that handles
-/// [`SubscribeBroker`], `RemoveSubscription`, and `RemoveAllSubscriptions` messages
-/// to manage its subscription list and [`BrokerRequest`] messages to trigger broadcasts.
+/// Internally, the `Broker` runs as a specialized [`ManagedActor`]. Its subscription
+/// list is maintained by three crate-internal request messages — add a subscription,
+/// remove one subscription, and remove every subscription held by an actor — which the
+/// [`Subscribable`](crate::traits::Subscribable) methods and the actor shutdown path
+/// send on the caller's behalf. Broadcasts are triggered by [`BrokerRequest`] messages.
 /// Actors are removed from the subscription list explicitly via
 /// [`Subscribable::unsubscribe`](crate::traits::Subscribable::unsubscribe) (or its
 /// awaitable variant
