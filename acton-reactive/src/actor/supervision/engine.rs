@@ -711,15 +711,13 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// in `AwaitingBackoff` for a restart that will never be arranged leaves
     /// every caller waiting on a status that cannot change.
     ///
-    /// What the supervisor does *about* an escalation beyond giving up —
-    /// [`Escalation::NotifyParent`] versus [`Escalation::StopSupervisor`] — is
-    /// not decided here, because there is nothing to decide from:
-    /// [`Escalation`] has no `ActorConfig` setter, so no actor can express a
-    /// preference. Adding the knob and honouring it belong together.
+    /// What the supervisor does *about* an escalation beyond giving up is
+    /// [`Escalation`], set with
+    /// [`ActorConfig::with_escalation`](crate::actor::ActorConfig::with_escalation)
+    /// and read here. The bookkeeping below is the same either way; the policy
+    /// decides only what happens after it.
     ///
     /// [`Escalation`]: super::Escalation
-    /// [`Escalation::NotifyParent`]: super::Escalation::NotifyParent
-    /// [`Escalation::StopSupervisor`]: super::Escalation::StopSupervisor
     fn record_child_escalated(
         &mut self,
         index: ChildIndex,
@@ -727,11 +725,22 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         exceeded: RestartLimitExceeded,
     ) {
         warn!(
-            "Actor {} is giving up on child {}: {}",
+            "Actor {} is giving up on child {} ({}): {}",
             self.id(),
             child,
+            self.escalation,
             exceeded
         );
+
+        // Built from the exceeded limit rather than read back off the slot,
+        // because the slot is about to be marked terminal and this has to
+        // describe the moment the supervisor gave up.
+        let stats = crate::actor::RestartStats {
+            restarts_in_window: exceeded.attempts,
+            consecutive_restarts: exceeded.attempts,
+            window_secs: exceeded.window_secs,
+            max_restarts: exceeded.max_restarts,
+        };
         self.supervision.mark_terminal(
             index,
             SlotState::Escalated,
@@ -742,6 +751,97 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         );
         #[cfg(feature = "ipc")]
         self.forget_ipc_names(index, child);
+
+        self.apply_escalation(child, stats);
+    }
+
+    /// Carries out this supervisor's escalation policy.
+    ///
+    /// # Why there is no wildcard arm
+    ///
+    /// [`Escalation`](super::Escalation) is `#[non_exhaustive]`, which normally
+    /// argues for one. It does not here, and the compiler says so: the
+    /// attribute has no effect within the crate that defines the enum, so a
+    /// wildcard is unreachable code rather than future-proofing.
+    ///
+    /// That is the better outcome anyway. Adding a variant breaks this match at
+    /// compile time, which forces whoever adds it to decide what a supervisor
+    /// should *do* about it — at the one place that can answer. A wildcard here
+    /// would silently answer for them, and a new escalation policy that quietly
+    /// behaved as the old default would be a bug nothing reported.
+    ///
+    /// Downstream crates matching on `Escalation` still need their own
+    /// wildcard; the attribute is doing its job for them.
+    fn apply_escalation(&self, child: &acton_ern::Ern, stats: crate::actor::RestartStats) {
+        match self.escalation {
+            super::Escalation::NotifyParent => self.notify_parent_of_escalation(child, stats),
+            super::Escalation::StopSupervisor => self.stop_self_after_escalation(child),
+        }
+    }
+
+    /// Tells this actor's own parent that it could not keep a child running.
+    ///
+    /// Sent to the parent directly rather than broadcast: the parent is the
+    /// actor with a stake in this one's failures, and it is the actor that would
+    /// have been told had this supervisor stopped instead.
+    ///
+    /// A supervisor with no parent has nobody to tell, which is not a failure —
+    /// it is the top of a tree. The event is still logged by the caller.
+    ///
+    /// Delivery goes onto its own task because sending is `async` and this runs
+    /// on the message loop. Nothing waits on the answer.
+    fn notify_parent_of_escalation(&self, child: &acton_ern::Ern, stats: crate::actor::RestartStats) {
+        let Some(parent) = self.parent.clone() else {
+            trace!(
+                "Actor {} has no parent to tell that it gave up on child {}",
+                self.id(),
+                child
+            );
+            return;
+        };
+
+        let notification = super::SupervisionEscalated::new(
+            self.id.clone(),
+            child.clone(),
+            stats,
+            crate::actor::TerminationReason::Normal,
+        );
+
+        trace!(
+            "Actor {} is telling parent {} that it gave up on child {}",
+            self.id(),
+            parent.id(),
+            child
+        );
+
+        tokio::spawn(async move {
+            parent.send(notification).await;
+        });
+    }
+
+    /// Stops this supervisor, cascading to the children it has left.
+    ///
+    /// The Erlang/OTP behaviour: a supervisor that cannot keep its children
+    /// running terminates and lets its own supervisor deal with it. Its
+    /// remaining children go down with it through the ordinary cascading
+    /// shutdown, and its parent is told through the ordinary `ChildTerminated`
+    /// every stopping actor sends — so this does not also notify the parent
+    /// itself, which would report the same failure twice.
+    ///
+    /// Cancellation rather than a stop message, because the two differ in a way
+    /// that matters here: a `Terminate` in the inbox is read after everything
+    /// queued ahead of it, including restart requests for children this
+    /// supervisor has just decided it is no longer going to look after.
+    fn stop_self_after_escalation(&self, child: &acton_ern::Ern) {
+        warn!(
+            "Actor {} is stopping itself because it could not keep child {} running",
+            self.id(),
+            child
+        );
+
+        if let Some(token) = &self.cancellation_token {
+            token.cancel();
+        }
     }
 
     /// Drops the IPC names of a child that has reached a terminal state.

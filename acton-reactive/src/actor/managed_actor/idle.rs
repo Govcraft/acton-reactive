@@ -28,7 +28,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace};
 
 use crate::actor::supervision::SupervisionRegistry;
-use crate::actor::{ActorConfig, ManagedActor, RestartPolicy, Started, SupervisionStrategy};
+use crate::actor::{ActorConfig, Escalation, ManagedActor, RestartPolicy, Started, SupervisionStrategy};
 use crate::common::{
     ActorHandle, ActorRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
 };
@@ -909,6 +909,8 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
             managed_actor.restart_policy = config.restart_policy();
             // Apply supervision strategy
             managed_actor.supervision_strategy = config.supervision_strategy();
+            // Apply escalation policy
+            managed_actor.escalation = config.escalation();
             managed_actor.restart_limiter_config = config.restart_limiter_config().cloned();
         }
 
@@ -1073,6 +1075,7 @@ impl<State: Default + Send + Debug + 'static> From<ManagedActor<Idle, State>>
             cancellation_token: value.cancellation_token,
             restart_policy: value.restart_policy,
             supervision_strategy: value.supervision_strategy,
+            escalation: value.escalation,
             restart_limiter_config: value.restart_limiter_config,
             expose_for_ipc: value.expose_for_ipc,
             // Carried rather than reset: an actor may register children before
@@ -1115,6 +1118,7 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
             read_only_handlers: HashMap::new(),
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
+            escalation: Escalation::default(),
             restart_limiter_config: None,
             expose_for_ipc: false,
             supervision: SupervisionRegistry::default(),

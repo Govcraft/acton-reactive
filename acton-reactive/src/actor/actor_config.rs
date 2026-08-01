@@ -16,7 +16,7 @@
 
 use acton_ern::Ern;
 
-use crate::actor::{RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
+use crate::actor::{Escalation, RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
 use crate::common::{BrokerRef, ParentRef};
 use crate::traits::ActorHandleInterface;
 
@@ -68,6 +68,9 @@ pub struct ActorConfig {
     /// How this actor responds when one of the children it supervises
     /// terminates. Defaults to `SupervisionStrategy::OneForOne`.
     supervision_strategy: SupervisionStrategy,
+    /// What this actor does when a child exhausts its restart allowance.
+    /// Defaults to `Escalation::NotifyParent`.
+    escalation: Escalation,
     /// How many times a child may be restarted and how long to wait between
     /// attempts. `None` means inherit the supervisor's.
     restart_limiter_config: Option<RestartLimiterConfig>,
@@ -94,6 +97,7 @@ impl ActorConfig {
             inbox_capacity: None,
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
+            escalation: Escalation::default(),
             restart_limiter_config: None,
         }
     }
@@ -216,6 +220,7 @@ impl ActorConfig {
             inbox_capacity: None,
             restart_policy: RestartPolicy::default(),
             supervision_strategy: SupervisionStrategy::default(),
+            escalation: Escalation::default(),
             restart_limiter_config: None,
         })
     }
@@ -337,6 +342,66 @@ impl ActorConfig {
     #[inline]
     pub(crate) const fn supervision_strategy(&self) -> SupervisionStrategy {
         self.supervision_strategy
+    }
+
+    /// Sets what this actor does when a child exhausts its restart allowance.
+    ///
+    /// Restarting is only worth attempting a bounded number of times: a child
+    /// that fails immediately on every start will fail again however many times
+    /// it is recreated. When a child crosses `max_restarts` within the
+    /// limiter's window, its supervisor stops trying — it records the reason
+    /// and publishes [`SupervisionState::Escalated`], so anything waiting on
+    /// that child stops waiting. This decides what happens *next*.
+    ///
+    /// Like [`with_supervision_strategy`](Self::with_supervision_strategy),
+    /// this is the **supervisor's** setting, not the child's. Giving up on a
+    /// child is the supervising actor's decision and so is what follows from
+    /// it.
+    ///
+    /// # The two policies
+    ///
+    /// [`Escalation::NotifyParent`] is the default. The supervisor logs the
+    /// failure, sends a [`SupervisionEscalated`] to its own parent if it has
+    /// one, leaves the child stopped, and keeps running. It is the default
+    /// because in this framework a supervisor is usually also a working actor
+    /// with responsibilities beyond its children, and stopping it because one
+    /// child could not be kept alive would take down unrelated work.
+    ///
+    /// [`Escalation::StopSupervisor`] is the Erlang/OTP behaviour: the
+    /// supervisor stops itself, which cascades to its remaining children and
+    /// hands the problem to its own supervisor. Choose it when the children are
+    /// interdependent, so that one of them being permanently unavailable makes
+    /// the rest meaningless.
+    ///
+    /// # It applies to children the supervisor can rebuild
+    ///
+    /// A child adopted through the legacy `supervise()` path is never
+    /// restarted, so it never exhausts an allowance and never escalates. Only
+    /// children registered through
+    /// [`supervise_with`](crate::common::ActorHandle::supervise_with) or
+    /// [`supervise_deferred`](crate::actor::ManagedActor::supervise_deferred)
+    /// can reach this.
+    ///
+    /// [`SupervisionState::Escalated`]: crate::actor::SupervisionState::Escalated
+    /// [`SupervisionEscalated`]: crate::actor::SupervisionEscalated
+    ///
+    /// # Arguments
+    ///
+    /// * `escalation` - What to do once restarting has stopped working.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` for method chaining.
+    #[must_use]
+    pub const fn with_escalation(mut self, escalation: Escalation) -> Self {
+        self.escalation = escalation;
+        self
+    }
+
+    /// Returns the escalation policy for this actor.
+    #[inline]
+    pub(crate) const fn escalation(&self) -> Escalation {
+        self.escalation
     }
 
     /// Sets how many times an actor may be restarted, and how long to wait

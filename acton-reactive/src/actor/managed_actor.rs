@@ -25,7 +25,7 @@ use tokio_util::task::TaskTracker;
 pub use idle::Idle;
 
 use crate::actor::supervision::SupervisionRegistry;
-use crate::actor::{RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
+use crate::actor::{Escalation, RestartLimiterConfig, RestartPolicy, SupervisionStrategy};
 use crate::common::{
     ActorHandle, AsyncLifecycleHandler, BrokerRef, HaltSignal, ParentRef, ReactorMap,
 };
@@ -125,6 +125,12 @@ pub struct ManagedActor<ActorState, Model: Default + Send + Debug + 'static> {
     /// The supervisor's own, not the child's: what to do about a failure is the
     /// supervising actor's policy.
     pub(crate) supervision_strategy: SupervisionStrategy,
+    /// What this actor does when a child exhausts its restart allowance.
+    ///
+    /// The supervisor's own, on the same reasoning as `supervision_strategy`:
+    /// giving up on a child is the supervising actor's decision, and so is what
+    /// happens next.
+    pub(crate) escalation: Escalation,
     /// The restart allowance this actor hands to children that set none.
     ///
     /// Carried on the actor rather than read off `ActorConfig` at each decision

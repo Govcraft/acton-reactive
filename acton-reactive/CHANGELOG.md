@@ -77,9 +77,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A child that exhausts its restart allowance now reaches a terminal state.**
   Its supervisor gives up, publishes `SupervisionState::Escalated`, and records
-  the reason, so `wait_running()` returns instead of waiting forever. Escalation
-  *policy* — `Escalation::NotifyParent` versus `StopSupervisor` — is not yet
-  honoured; there is no configuration setter for it to read.
+  the reason, so `wait_running()` returns instead of waiting forever.
+
+### Added
+
+- **`ActorConfig::with_escalation`, which makes `Escalation` reachable.**
+  `Escalation` shipped in 8.2.0 public, documented, and exported from the
+  prelude, with nothing in the crate reading it and no way to set it. It now
+  decides what a supervisor does once restarting a child has stopped working:
+
+  - `Escalation::NotifyParent` (the default) logs the failure, sends a
+    `SupervisionEscalated` to the supervisor's own parent if it has one, leaves
+    the child stopped, and keeps the supervisor running. A supervisor at the top
+    of a tree has nobody to tell, which is not a failure.
+  - `Escalation::StopSupervisor` stops the supervisor itself, cascading to its
+    remaining children — the Erlang/OTP behaviour. Its parent learns through the
+    ordinary `ChildTerminated` every stopping actor sends, so the failure is not
+    reported twice.
+
+  Like `with_supervision_strategy`, this is the **supervisor's** setting rather
+  than the child's, and it only applies to children the supervisor holds a
+  blueprint for: a child adopted through the legacy `supervise()` path is never
+  restarted, so it never exhausts an allowance and never escalates.
+
+  Behaviour is unchanged for anyone who does not call it. The default is what
+  the engine already did, plus the notification that was missing.
 
 - **A restarted actor stays reachable over IPC.** `ipc_expose` stores a handle
   by value, so before this an actor exposed under a chosen name became
