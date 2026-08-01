@@ -95,14 +95,45 @@ Reply::pending(async move {
 broker.broadcast(PrintMessage("Aggregator is ready to sum data!".to_string())).await;
 })
 })
-.before_stop( | actor| {
+.mutate_on::<Finalize>( | actor, _envelope| {
 let broker = actor.broker().clone();
 let sum = actor.model.sum;
 Reply::pending(async move {
 broker.broadcast(PrintMessage(format ! ("Final sum: {sum}"))).await;
+broker.broadcast(StatusUpdate::Finished).await;
 })
 });
 ```
+
+Note that the final sum is reported in response to an explicit `Finalize` message,
+**not** from a `before_stop` hook. A hook that broadcasts during shutdown races the
+shutdown: the message still has to cross the broker to reach the `Printer`, and the
+`Printer` may already have closed its inbox by then. Reporting before shutdown starts
+removes the race instead of narrowing it.
+
+### Knowing when the pipeline has finished
+
+`broadcast` returns as soon as the message reaches the broker, which says nothing about
+whether any subscriber has run — so shutting down straight afterwards races the work, and
+a `sleep` only lengthens the fuse. The example instead closes the pipeline with a marker
+message and then asks the actor at the end of it:
+
+```rust
+broker_handle.broadcast(NewData(5)).await;
+broker_handle.broadcast(NewData(10)).await;
+broker_handle.broadcast(Finalize).await;
+
+// Returns only once the Printer has printed the final sum and both
+// collectors have reported in.
+let report: FinalReport = printer_handle.ask(AwaitReport).await?;
+
+runtime.shutdown_all().await?;
+```
+
+This is exact rather than probabilistic, because the broker delivers broadcasts in order
+and a `mutate_on` handler finishes its `Reply::pending` future before taking its next
+message. The `Printer` holds on to the reply envelope when the request arrives early, so
+the answer comes at the right moment no matter how the timing falls.
 
 ### Printer Actor
 
