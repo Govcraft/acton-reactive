@@ -1760,10 +1760,10 @@ async fn process_request_response(
             IpcResponse::success(correlation_id, Some(payload))
         }
         Ok(None) => {
-            // Channel closed without receiving a response
-            let err = IpcError::IoError(
-                "Response channel closed without receiving a response".to_string(),
-            );
+            // Channel closed without receiving a response: the handler returned without
+            // replying. The message is a shared constant because the client side reads it
+            // to tell this apart from a genuine I/O failure; see `NO_REPLY_MESSAGE`.
+            let err = IpcError::IoError(crate::common::ipc::NO_REPLY_MESSAGE.to_string());
             stats.errors.fetch_add(1, Ordering::Relaxed);
             IpcResponse::error(correlation_id, &err)
         }

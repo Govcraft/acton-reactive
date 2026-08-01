@@ -119,6 +119,27 @@ pub const CONNECTION_LIMIT_REACHED_CODE: &str = "CONNECTION_LIMIT_REACHED";
 /// with a real correlation id, which is always a generated `TypeID` (`req_01h9…`).
 pub const CONNECTION_REJECTED_CORRELATION_ID: &str = "__acton_connection_rejected__";
 
+/// The listener's message when a request was dispatched but the actor never replied.
+///
+/// The handler returned without using its reply envelope — entirely legal — so the
+/// listener's response proxy closed empty. The listener reports this with the `IO_ERROR`
+/// code, which is shared with genuine I/O failures, so the message is the only thing that
+/// separates "the handler said nothing" from "the socket broke". Those mean very different
+/// things to a caller: the first is definite (nothing is coming, nothing was half-done),
+/// the second leaves it unknown whether the request was processed at all.
+///
+/// It is a constant so the two sides cannot drift: the listener writes it and
+/// [`RemoteActorRef::ask`] reads it to report
+/// [`AskError::NoReply`](crate::common::AskError::NoReply) rather than
+/// [`AskError::TransportFailed`](crate::common::AskError::TransportFailed), matching what a
+/// local `ask` returns in exactly this situation.
+///
+/// The existing `IO_ERROR` code is deliberately left alone; a client already matching on it
+/// would break if this case were given a code of its own.
+///
+/// [`RemoteActorRef::ask`]: crate::common::ipc::RemoteActorRef::ask
+pub const NO_REPLY_MESSAGE: &str = "Response channel closed without receiving a response";
+
 impl fmt::Display for IpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

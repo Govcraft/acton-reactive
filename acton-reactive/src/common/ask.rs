@@ -156,6 +156,13 @@ pub enum AskError {
     /// The handler and the [`Request`] implementation disagree. This is reported rather
     /// than silently discarded, because the alternative is an `ask` that looks like a
     /// lost reply for a reason that is really a bug in the actor.
+    ///
+    /// A remote ask reports the same condition here, with `received` carrying the raw
+    /// reply payload. Three causes converge on it across a process boundary — the peer's
+    /// handler answered with the wrong type, the peer never registered the reply type and
+    /// so sent a diagnostic fallback payload instead, or the two processes disagree about
+    /// the type's shape. They are one condition from the caller's side: the answer is not
+    /// the answer this request declares.
     UnexpectedReply {
         /// The type the request declares as its reply.
         expected: &'static str,
@@ -163,8 +170,44 @@ pub enum AskError {
         ///
         /// A rendering rather than a type name: the concrete type behind a trait object
         /// cannot be named on stable Rust, and the value identifies the culprit at
-        /// least as well.
+        /// least as well. For a remote ask this is the raw payload, which in the
+        /// unregistered-reply-type case names the offending type outright.
         received: String,
+    },
+
+    /// A peer refused the request before dispatching it, and said why.
+    ///
+    /// Remote only. The request reached the other process and was turned away there: no
+    /// actor by that name, no such registered message type, the target's inbox was full,
+    /// the peer was rate-limiting, or the peer was shutting down. **Nothing ran**, so
+    /// nothing was left half-done and a retry is safe.
+    ///
+    /// Distinct from [`Undeliverable`](Self::Undeliverable), which is documented narrowly
+    /// as the local condition "the actor's inbox is closed" — untrue of a mistyped actor
+    /// name or an unregistered message type, and unable to carry the peer's own code.
+    PeerRejected {
+        /// The peer's error code, such as `ACTOR_NOT_FOUND` or `UNKNOWN_MESSAGE_TYPE`.
+        ///
+        /// `None` when the peer reported a failure without one.
+        code: Option<String>,
+        /// The peer's description of the refusal.
+        detail: String,
+    },
+
+    /// The connection failed, leaving it unknown whether the request was processed.
+    ///
+    /// Remote only. The socket closed, I/O failed, or a frame did not parse. Unlike every
+    /// other variant this one **cannot say whether the actor ran**: the request may have
+    /// been delivered and handled with only the reply lost, or it may never have arrived.
+    ///
+    /// That uncertainty is the reason this is its own variant rather than being folded
+    /// into [`Undeliverable`](Self::Undeliverable) or [`NoReply`](Self::NoReply), both of
+    /// which assert something definite about what happened. It is also the distinction
+    /// that changes what a caller may safely do next: retrying a non-idempotent request
+    /// after this may repeat it.
+    TransportFailed {
+        /// What the transport reported.
+        detail: String,
     },
 }
 
@@ -190,6 +233,22 @@ impl fmt::Display for AskError {
                 f,
                 "the request declares its reply type as `{expected}`, but the handler \
                  sent {received}"
+            ),
+            Self::PeerRejected {
+                code: Some(code),
+                detail,
+            } => write!(
+                f,
+                "the peer refused the request before dispatching it ({code}): {detail}"
+            ),
+            Self::PeerRejected { code: None, detail } => write!(
+                f,
+                "the peer refused the request before dispatching it: {detail}"
+            ),
+            Self::TransportFailed { detail } => write!(
+                f,
+                "the connection failed, so whether the request was processed is unknown: \
+                 {detail}"
             ),
         }
     }

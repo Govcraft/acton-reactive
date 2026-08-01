@@ -42,6 +42,8 @@ pub use acton_message::ActonMessage;
 pub use acton_message_reply::ActonMessageReply;
 pub use actor_handle_interface::ActorHandleInterface;
 pub use broker::Broadcaster;
+#[cfg(feature = "ipc")]
+pub use remote_request::RemoteRequest;
 pub use request::Request;
 pub use subscribable::Subscribable;
 pub use subscriber::Subscriber;
@@ -55,6 +57,11 @@ mod acton_message_reply;
 mod actor_handle_interface;
 /// Defines the [`Broadcaster`] trait for message broadcasting.
 mod broker;
+/// Defines the [`RemoteRequest`] trait, which lets a request cross a process boundary.
+///
+/// Gated with the transport it exists to serve: every type it names lives behind `ipc`.
+#[cfg(feature = "ipc")]
+mod remote_request;
 /// Defines the [`Request`] trait, which pairs a message with the reply it expects.
 mod request;
 /// Defines the [`Subscribable`] trait for managing subscriptions.

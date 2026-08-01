@@ -188,11 +188,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deadline turns such a mistake into a prompt error rather than a permanent hang.
 
   **Scope: one actor, in-process.** `ask` has no meaning over `broadcast`, which
-  has no single replier, and cannot yet reach an actor over IPC — its reply address
-  is an in-process channel. Typed request/reply for IPC is being added separately,
-  on top of the correlated transport `IpcClient::request` already provides.
+  has no single replier. It addresses only actors in this process; to ask one in
+  another process, see `IpcClient::actor` below.
 
   Purely additive — `send` is untouched, and existing code is unaffected.
+
+- **`IpcClient::actor`: `ask` across the IPC boundary.** The local `ask` routes its
+  reply through an in-process channel, so it could not reach another process.
+  `client.actor("counter")` names a remote actor and gives back a `RemoteActorRef`
+  whose `ask` is deliberately the *same call* as the local one:
+
+  ```rust
+  let count: Count = handle.ask(GetCount).await?;                  // local
+  let count: Count = client.actor("counter").ask(GetCount).await?; // remote
+  ```
+
+  This adds no transport. It is a typed façade over the correlated
+  `IpcClient::request_with_timeout` that already existed, plus the judgement about
+  what a response means.
+
+  **The bounds differ, and that is the point.** A remote request must be able to
+  travel, so it implements the new `RemoteRequest` trait — `Request` plus
+  `Serialize`, a `DeserializeOwned` reply, and a `MESSAGE_TYPE` constant naming the
+  type as the peer registered it. A message that cannot cross the boundary is a
+  **compile error** against a `RemoteActorRef` rather than a call that appears to
+  work. Local-only users pay nothing: `ask` on `ActorHandle` is untouched and still
+  takes a bare `Request`.
+
+  The wire name is written down rather than derived from `std::any::type_name`,
+  which changes when a type moves between modules and cannot describe a peer that
+  is a different binary, a different version, or not Rust at all.
+
+  **It cannot hang, by the same two layers as the local `ask`.** The client
+  registers its correlation id before writing, so a dropped connection wakes the
+  caller at once instead of waiting out the clock; a deadline backstops a peer that
+  accepted the request and went quiet. The deadline is stamped on the request as
+  well as applied locally, so the peer stops waiting on its actor at the same moment
+  rather than holding its response proxy for its own default.
+
+  `AskError` gains two variants (it is `#[non_exhaustive]`, so this is additive),
+  drawn on what a caller can act on:
+
+  - `PeerRejected { code, detail }` — the peer refused *before dispatch*: no such
+    actor, no such registered message type, busy, rate-limited, shutting down.
+    Nothing ran, so a retry is safe. Carries the peer's own code, which is what
+    tells a mistyped actor name from an unregistered type.
+  - `TransportFailed { detail }` — the connection failed, so whether the request was
+    processed is **unknown**. No existing variant could say that: `Undeliverable`
+    and `NoReply` both assert something definite.
+
+  Remote failures otherwise reuse the existing vocabulary rather than multiplying
+  it. A handler that returns without replying is `NoReply`, exactly as locally. A
+  deadline at either end is `TimedOut`. A reply that does not deserialize is
+  `UnexpectedReply`, carrying the raw payload — which covers a wrong-typed handler
+  reply, a reply type the peer never registered, and version skew between peers,
+  because all three mean the one actionable thing: the answer is not the answer this
+  request declares.
+
+  **Scope: one actor, named by the string it was `ipc_expose`d under.** `ask` has no
+  meaning over `broadcast` remotely for the same reason it has none locally — a
+  broadcast has no single replier.
+
+  Purely additive.
 
 - **`ActorConfig::with_escalation`, which makes `Escalation` reachable.**
   `Escalation` shipped in 8.2.0 public, documented, and exported from the

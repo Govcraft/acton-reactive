@@ -97,11 +97,14 @@ pub use types::{
     ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
     IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
     IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
-    CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID,
+    CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID, NO_REPLY_MESSAGE,
 };
 
 // IPC client - channel-based client for connecting to an acton-reactive server
 pub use client::{IpcClient, IpcClientConfig};
+
+// Typed request/reply against an actor in another process.
+pub use remote_ask::RemoteActorRef;
 
 // Re-export config types for users who want to customize defaults
 pub use config::{
@@ -132,6 +135,9 @@ pub mod protocol;
 
 /// Token bucket rate limiter for IPC connections.
 mod rate_limiter;
+
+/// Defines [`RemoteActorRef`], which brings `ask` across a process boundary.
+mod remote_ask;
 
 /// Defines the [`IpcTypeRegistry`] for message type registration.
 mod registry;

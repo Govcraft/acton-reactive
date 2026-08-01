@@ -182,10 +182,11 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
     /// * *Not the broker.* [`broadcast`](crate::traits::Broadcaster::broadcast) has no
     ///   single replier — zero or many subscribers may answer — so request/reply has no
     ///   meaning over it. `ask` addresses the actor this handle names, and nothing else.
-    /// * *Not across a process boundary yet.* The reply address is an in-process
-    ///   channel, so `ask` cannot presently reach an actor over IPC. Typed request/reply
-    ///   for IPC is being added separately, on top of the correlated transport
-    ///   `IpcClient::request` already provides; until it lands, use that directly.
+    /// * *Not across a process boundary.* This `ask` routes its reply through an
+    ///   in-process channel, so it addresses only actors in this process. To ask an actor
+    ///   in another one, name it with `IpcClient::actor` (the `ipc` feature) and `ask`
+    ///   that — the same call, with the added bounds a wire form requires, so a message
+    ///   that cannot travel is a compile error rather than a call that appears to work.
     ///
     /// # Errors
     ///

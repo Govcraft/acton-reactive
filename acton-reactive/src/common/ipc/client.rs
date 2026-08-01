@@ -84,6 +84,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, trace, warn};
 
+use super::remote_ask::RemoteActorRef;
 use super::protocol::{
     read_frame, write_frame, Format, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_ERROR,
     MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE, MSG_TYPE_STREAM,
@@ -450,6 +451,28 @@ impl IpcClient {
             })
             .await
             .map_err(|_| self.connection_error())
+    }
+
+    /// Names an actor in the peer process, so it can be
+    /// [`ask`](crate::common::ipc::RemoteActorRef::ask)ed.
+    ///
+    /// The typed counterpart to building an [`IpcEnvelope`] by hand and calling
+    /// [`request`](Self::request): where that deals in type-name strings and
+    /// `serde_json::Value`, this gives back the request's declared reply type, and gives
+    /// the same call as a local actor handle.
+    ///
+    /// ```rust,ignore
+    /// let client = IpcClient::connect("/run/app.sock").await?;
+    /// let count: Count = client.actor("counter").ask(GetCount).await?;
+    /// ```
+    ///
+    /// `name` is the string the actor was exposed under with
+    /// [`ActorRuntime::ipc_expose`](crate::common::ActorRuntime::ipc_expose) in the peer.
+    /// Nothing is sent here and the name is not checked; an unknown one surfaces as
+    /// [`AskError::PeerRejected`](crate::common::AskError::PeerRejected) when asked.
+    #[must_use]
+    pub const fn actor<'client>(&'client self, name: &'client str) -> RemoteActorRef<'client> {
+        RemoteActorRef::new(self, name)
     }
 
     /// Send a request and wait for a correlated response.

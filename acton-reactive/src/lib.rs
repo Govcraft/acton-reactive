@@ -200,6 +200,8 @@ pub mod prelude {
     #[cfg(feature = "ipc")]
     pub use crate::common::ipc::{
         IpcClient, IpcClientConfig, IpcConfig, IpcEnvelope, IpcError, IpcListenerHandle,
-        IpcListenerStats, IpcResponse, IpcTypeRegistry, ShutdownResult,
+        IpcListenerStats, IpcResponse, IpcTypeRegistry, RemoteActorRef, ShutdownResult,
     };
+    #[cfg(feature = "ipc")]
+    pub use crate::traits::RemoteRequest;
 }
