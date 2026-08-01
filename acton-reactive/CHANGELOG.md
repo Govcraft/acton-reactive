@@ -44,6 +44,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "drain until quiescent" that two actors messaging each other could keep alive
   indefinitely.
 
+- **The `broadcast` example no longer races its own shutdown.** It reported the
+  final sum from the `Aggregator`'s `before_stop` hook, so the message was
+  emitted after shutdown had begun and had to cross the broker a second time to
+  reach the `Printer` — which by then could already have closed its inbox. The
+  example has never printed the right total in any released version; measured
+  here it failed 40 of 40 runs.
+
+  It now closes the pipeline explicitly instead. `main` broadcasts the data and
+  then a `Finalize` marker, which the broker's FIFO inbox places behind that
+  data at every subscriber; each collector answers with a `Finished` marker, and
+  the `Aggregator` reports the total there rather than from `before_stop`. The
+  `Printer` counts the markers and answers an `ask`, holding the reply envelope
+  if the request arrives before the work is done — which is what makes the
+  result independent of arrival order rather than merely likely. Measured 0
+  failures in 100 runs.
+
+  **Shutdown ordering is unchanged.** Broker-first was tried and measured
+  strictly worse; the broker is live routing fabric during shutdown, not a queue
+  to flush.
+
+- **The most fragile documentation-example tests now wait on `ask` rather than a
+  fixed sleep.** `test_lightweight_handlers`, `test_deferred_reply` and
+  `test_child_lifecycle_hooks` gated their assertions on `tokio::time::sleep`,
+  so they certified a pattern that does not hold. Each now waits for the thing
+  it actually depends on, and asserts more than it did:
+
+  - `test_lightweight_handlers` uses two asks. Its handler self-sends
+    `ProcessComplete` from a pending future, so a single ask would sit *ahead*
+    of that message and observe the unfinished state — the same race behind a
+    nicer API. Asking `Process` first, with its reply sent after the self-send,
+    puts the second ask strictly behind it.
+  - `test_deferred_reply` no longer reads a task id out of an atomic after a
+    50 ms guess and feed it into the next message; the id comes back from the
+    ask, and a mismatched id is now caught explicitly instead of silently
+    missing the pending-reply map.
+  - `test_child_lifecycle_hooks` asks the child instead of sleeping. Because
+    `after_start` runs to completion before the actor takes its first message, a
+    reply proves the hook has already run.
+
+  The remaining sleeps in `tests/docs_examples/` are unchanged and still gate
+  their assertions on elapsed time.
+
 ### Changed
 
 - **`ActorRuntime::shutdown_all` now documents what is and is not delivered on

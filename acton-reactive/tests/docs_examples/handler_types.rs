@@ -431,6 +431,27 @@ async fn test_lightweight_handlers() -> anyhow::Result<()> {
     #[acton_message]
     struct ProcessComplete;
 
+    /// Sent back once the offloaded work has finished *and* `ProcessComplete` has been
+    /// queued. See the two-step wait below for why that ordering is the whole point.
+    #[acton_message]
+    struct Offloaded;
+
+    impl Request for Process {
+        type Response = Offloaded;
+    }
+
+    #[acton_message]
+    struct GetStatus;
+
+    #[acton_message]
+    struct Status {
+        completed: bool,
+    }
+
+    impl Request for GetStatus {
+        type Response = Status;
+    }
+
     let completed = Arc::new(AtomicBool::new(false));
     let completed_clone = completed.clone();
 
@@ -441,6 +462,7 @@ async fn test_lightweight_handlers() -> anyhow::Result<()> {
         .mutate_on::<Process>(|actor, ctx| {
             let data = ctx.message().data.clone();
             let self_handle = actor.handle().clone();
+            let reply = ctx.reply_envelope();
 
             // Good: offload heavy work to async
             Reply::pending(async move {
@@ -454,11 +476,23 @@ async fn test_lightweight_handlers() -> anyhow::Result<()> {
 
                 // Notify self when done
                 self_handle.send(ProcessComplete).await;
+
+                // Reply only *after* `ProcessComplete` is queued, so a caller that has
+                // received this reply knows the follow-up message is already in the
+                // inbox ahead of anything it sends next.
+                reply.send(Offloaded).await;
             })
         })
         .mutate_on::<ProcessComplete>(|actor, _ctx| {
             actor.model.completed = true;
             Reply::ready()
+        })
+        .mutate_on::<GetStatus>(|actor, ctx| {
+            let reply = ctx.reply_envelope();
+            let completed = actor.model.completed;
+            Reply::pending(async move {
+                reply.send(Status { completed }).await;
+            })
         })
         .after_stop(move |actor| {
             completed_clone.store(actor.model.completed, Ordering::SeqCst);
@@ -466,13 +500,28 @@ async fn test_lightweight_handlers() -> anyhow::Result<()> {
         });
 
     let handle = actor.start().await;
-    handle
-        .send(Process {
+
+    // Two asks, not one. `Process` hands its heavy work to a pending future and only
+    // then self-sends `ProcessComplete`, so `ProcessComplete` is queued *after* the
+    // handler was entered. A single `ask(GetStatus)` sent straight after `send(Process)`
+    // would sit ahead of `ProcessComplete` in the inbox and observe `completed == false`
+    // — the original race, merely wearing a nicer API.
+    //
+    // Asking `Process` itself fixes the ordering: its reply is sent from inside the same
+    // pending future, after the self-send. Once it returns, `ProcessComplete` is already
+    // queued, so the FIFO inbox puts the second ask strictly behind it.
+    let _: Offloaded = handle
+        .ask(Process {
             data: "test data".to_string(),
         })
-        .await;
+        .await?;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let status: Status = handle.ask(GetStatus).await?;
+    assert!(
+        status.completed,
+        "the self-sent ProcessComplete must have been handled before this ask"
+    );
+
     runtime.shutdown_all().await?;
 
     assert!(completed.load(Ordering::SeqCst));

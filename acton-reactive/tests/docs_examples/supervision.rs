@@ -227,6 +227,17 @@ async fn test_child_lifecycle_hooks() -> anyhow::Result<()> {
     #[acton_actor]
     struct Child;
 
+    /// Asks the child to answer, which it can only do once it is running.
+    #[acton_message]
+    struct Ping;
+
+    #[acton_message]
+    struct Pong;
+
+    impl Request for Ping {
+        type Response = Pong;
+    }
+
     let child_started = Arc::new(AtomicBool::new(false));
     let child_started_clone = child_started.clone();
     let child_stopped = Arc::new(AtomicBool::new(false));
@@ -244,14 +255,23 @@ async fn test_child_lifecycle_hooks() -> anyhow::Result<()> {
             child_started_clone.store(true, Ordering::SeqCst);
             Reply::ready()
         })
+        .mutate_on::<Ping>(|_actor, ctx| {
+            let reply = ctx.reply_envelope();
+            Reply::pending(async move {
+                reply.send(Pong).await;
+            })
+        })
         .after_stop(move |_actor| {
             child_stopped_clone.store(true, Ordering::SeqCst);
             Reply::ready()
         });
 
-    let _child_handle = parent_handle.supervise(child).await?;
+    let child_handle = parent_handle.supervise(child).await?;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // `after_start` runs to completion before the actor takes its first message, so a
+    // reply here proves the hook has already run. That is an exact statement about the
+    // child's progress, where the previous sleep was only a guess about elapsed time.
+    let _: Pong = child_handle.ask(Ping).await?;
 
     assert!(child_started.load(Ordering::SeqCst));
 

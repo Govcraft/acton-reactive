@@ -344,10 +344,35 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
         processor_handle: Option<ActorHandle>,
         accepted_task: Option<u32>,
         task_result: Option<String>,
+        /// A caller waiting to hear that the task was accepted.
+        awaiting_acceptance: Option<OutboundEnvelope>,
     }
 
     #[acton_message]
     struct SubmitTask;
+
+    impl Request for SubmitTask {
+        type Response = TaskAccepted;
+    }
+
+    /// Asks the client what result it has recorded.
+    #[acton_message]
+    struct GetResult;
+
+    #[acton_message]
+    struct ResultReport {
+        result: Option<String>,
+    }
+
+    impl Request for GetResult {
+        type Response = ResultReport;
+    }
+
+    /// Acknowledges a [`CompleteTask`], reporting whether a pending task matched.
+    #[acton_message]
+    struct Completed {
+        delivered: bool,
+    }
 
     #[acton_message]
     struct LongRunningTask;
@@ -361,6 +386,10 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
     struct CompleteTask {
         task_id: u32,
         result: String,
+    }
+
+    impl Request for CompleteTask {
+        type Response = Completed;
     }
 
     #[acton_message]
@@ -396,15 +425,24 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
         })
         .mutate_on::<CompleteTask>(|actor, ctx| {
             let task_id = ctx.message().task_id;
+            // The acknowledgement goes back to whoever sent `CompleteTask`; the stored
+            // envelope goes back to the client that originally submitted the task.
+            let ack = ctx.reply_envelope();
 
             if let Some(reply) = actor.model.pending_replies.remove(&task_id) {
                 let result = ctx.message().result.clone();
                 return Reply::pending(async move {
                     reply.send(TaskResult { result }).await;
+                    // Acknowledged only after the result is queued for the client, so a
+                    // caller holding this acknowledgement knows the client will see the
+                    // result before anything the caller sends next.
+                    ack.send(Completed { delivered: true }).await;
                 });
             }
 
-            Reply::ready()
+            Reply::pending(async move {
+                ack.send(Completed { delivered: false }).await;
+            })
         });
 
     let processor_handle = processor.start().await;
@@ -418,14 +456,34 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
             let target = actor.model.processor_handle.clone().unwrap();
             let request_envelope = ctx.new_envelope(&target.reply_address());
 
+            // Hold the caller's reply envelope. The acceptance the caller wants does not
+            // exist yet — it arrives later, as a `TaskAccepted` from the processor — so
+            // the answer is deferred until that lands rather than guessed at now.
+            actor.model.awaiting_acceptance = Some(ctx.reply_envelope());
+
             Reply::pending(async move {
                 request_envelope.send(LongRunningTask).await;
             })
         })
         .mutate_on::<TaskAccepted>(move |actor, ctx| {
-            actor.model.accepted_task = Some(ctx.message().task_id);
-            task_accepted_clone.store(ctx.message().task_id, Ordering::SeqCst);
+            let task_id = ctx.message().task_id;
+            actor.model.accepted_task = Some(task_id);
+            task_accepted_clone.store(task_id, Ordering::SeqCst);
+
+            if let Some(reply) = actor.model.awaiting_acceptance.take() {
+                return Reply::pending(async move {
+                    reply.send(TaskAccepted { task_id }).await;
+                });
+            }
+
             Reply::ready()
+        })
+        .mutate_on::<GetResult>(|actor, ctx| {
+            let reply = ctx.reply_envelope();
+            let result = actor.model.task_result.clone();
+            Reply::pending(async move {
+                reply.send(ResultReport { result }).await;
+            })
         })
         .mutate_on::<TaskResult>(move |actor, ctx| {
             actor.model.task_result = Some(ctx.message().result.clone());
@@ -438,24 +496,36 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
 
     let client_handle = client.start().await;
 
-    // Trigger task submission via client
-    client_handle.send(SubmitTask).await;
+    // Trigger task submission via client. The client answers only once the processor's
+    // `TaskAccepted` has actually reached it, so the id below is the real one rather
+    // than whatever the atomic happened to hold.
+    let accepted: TaskAccepted = client_handle.ask(SubmitTask).await?;
+    let task_id = accepted.task_id;
+    assert!(task_id > 0, "the processor must have assigned a task id");
+    assert_eq!(
+        task_id,
+        task_accepted.load(Ordering::SeqCst),
+        "the client must have recorded the same id it reported"
+    );
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Task should be accepted
-    let task_id = task_accepted.load(Ordering::SeqCst);
-    assert!(task_id > 0);
-
-    // Complete the task
-    processor_handle
-        .send(CompleteTask {
+    // Complete the task. The acknowledgement is sent after the result is queued for the
+    // client, so this also establishes that the client's `TaskResult` is already in its
+    // inbox — ahead of the `GetResult` below.
+    let completed: Completed = processor_handle
+        .ask(CompleteTask {
             task_id,
             result: "Done!".to_string(),
         })
-        .await;
+        .await?;
+    assert!(
+        completed.delivered,
+        "the task id must have matched a pending reply"
+    );
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // FIFO puts this behind the `TaskResult` the processor just queued.
+    let report: ResultReport = client_handle.ask(GetResult).await?;
+    assert_eq!(report.result.as_deref(), Some("Done!"));
+
     runtime.shutdown_all().await?;
 
     assert_eq!(*result_received.lock().unwrap(), "Done!");
