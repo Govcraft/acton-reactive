@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-//! Tests for examples from docs/actors-and-state/page.md
+//! Tests for examples from docs/core-concepts/what-are-actors/page.md
 //!
 //! This module verifies that the code examples from the "Actors & State"
 //! documentation page compile and run correctly.
@@ -28,7 +28,7 @@ use acton_test::prelude::*;
 
 /// Tests defining actor state with complex fields.
 ///
-/// From: docs/actors-and-state/page.md - "Defining Actor State"
+/// From: docs/core-concepts/what-are-actors/page.md - "Defining Actor State"
 #[acton_test]
 async fn test_complex_actor_state() -> anyhow::Result<()> {
     #[acton_actor]
@@ -86,7 +86,7 @@ async fn test_complex_actor_state() -> anyhow::Result<()> {
 
 /// Tests using `no_default` for custom initialization.
 ///
-/// From: docs/actors-and-state/page.md - "Custom Default for Complex State"
+/// From: docs/core-concepts/what-are-actors/page.md - "Custom Default for Complex State"
 #[acton_test]
 async fn test_custom_default_actor() -> anyhow::Result<()> {
     // Note: We can't test Stdout directly, so we use a simpler example
@@ -142,7 +142,7 @@ async fn test_custom_default_actor() -> anyhow::Result<()> {
 
 /// Tests accessing state in handlers.
 ///
-/// From: docs/actors-and-state/page.md - "Accessing State in Handlers"
+/// From: docs/core-concepts/what-are-actors/page.md - "Accessing State in Handlers"
 #[acton_test]
 async fn test_accessing_state_in_handlers() -> anyhow::Result<()> {
     #[acton_actor]
@@ -194,7 +194,7 @@ async fn test_accessing_state_in_handlers() -> anyhow::Result<()> {
 
 /// Tests mutable vs read-only access.
 ///
-/// From: docs/actors-and-state/page.md - "Mutable vs Read-Only Access"
+/// From: docs/core-concepts/what-are-actors/page.md - "Mutable vs Read-Only Access"
 #[acton_test]
 async fn test_mutable_vs_readonly_access() -> anyhow::Result<()> {
     #[acton_actor]
@@ -255,7 +255,7 @@ async fn test_mutable_vs_readonly_access() -> anyhow::Result<()> {
 
 /// Tests creating multiple actors of the same type.
 ///
-/// From: docs/actors-and-state/page.md - "Multiple Actors"
+/// From: docs/core-concepts/what-are-actors/page.md - "Multiple Actors"
 #[acton_test]
 async fn test_multiple_actors() -> anyhow::Result<()> {
     #[acton_actor]
@@ -309,7 +309,7 @@ async fn test_multiple_actors() -> anyhow::Result<()> {
 
 /// Tests named actors for easier debugging.
 ///
-/// From: docs/actors-and-state/page.md - "Use Meaningful Names"
+/// From: docs/core-concepts/what-are-actors/page.md - "Use Meaningful Names"
 #[acton_test]
 async fn test_named_actors() -> anyhow::Result<()> {
     #[acton_actor]
@@ -345,7 +345,7 @@ async fn test_named_actors() -> anyhow::Result<()> {
 
 /// Tests focused actor responsibility.
 ///
-/// From: docs/actors-and-state/page.md - "Keep State Focused"
+/// From: docs/core-concepts/what-are-actors/page.md - "Keep State Focused"
 #[acton_test]
 async fn test_focused_actor_state() -> anyhow::Result<()> {
     // Good: focused responsibility

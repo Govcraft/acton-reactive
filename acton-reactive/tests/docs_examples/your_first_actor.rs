@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-//! Tests for examples from docs/your-first-actor/page.md
+//! Tests for examples from docs/quick-start/your-first-actor/page.md
 //!
 //! This module verifies that the code examples from the "Your First Actor" main
 //! documentation page compile and run correctly.
@@ -27,7 +27,7 @@ use acton_test::prelude::*;
 
 /// The complete counter example from the main your-first-actor page.
 ///
-/// From: docs/your-first-actor/page.md - "The Complete Example"
+/// From: docs/quick-start/your-first-actor/page.md - "The Complete Example"
 #[acton_test]
 async fn test_counter_state_example() -> anyhow::Result<()> {
     // This is our actor's "desk" - its private data
@@ -80,7 +80,7 @@ async fn test_counter_state_example() -> anyhow::Result<()> {
 
 /// Tests adding a query handler with `act_on`.
 ///
-/// From: docs/your-first-actor/page.md - "Adding a Query Handler"
+/// From: docs/quick-start/your-first-actor/page.md - "Adding a Query Handler"
 #[acton_test]
 async fn test_query_handler_example() -> anyhow::Result<()> {
     #[acton_actor]

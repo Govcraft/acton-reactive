@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-//! Tests for examples from docs/messages-and-handlers/page.md
+//! Tests for examples from docs/core-concepts/messages-and-handlers/page.md
 //!
 //! This module verifies that the code examples from the "Messages & Handlers"
 //! documentation page compile and run correctly.
@@ -28,7 +28,7 @@ use acton_test::prelude::*;
 
 /// Tests defining various message types.
 ///
-/// From: docs/messages-and-handlers/page.md - "Defining Messages"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Defining Messages"
 #[acton_test]
 async fn test_message_types() -> anyhow::Result<()> {
     // Simple message with no data
@@ -135,7 +135,7 @@ async fn test_message_types() -> anyhow::Result<()> {
 
 /// Tests handler anatomy - actor and ctx parameters.
 ///
-/// From: docs/messages-and-handlers/page.md - "Handler Anatomy"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Handler Anatomy"
 #[acton_test]
 async fn test_handler_anatomy() -> anyhow::Result<()> {
     #[acton_actor]
@@ -188,7 +188,7 @@ async fn test_handler_anatomy() -> anyhow::Result<()> {
 
 /// Tests the actor parameter - accessing state, handle, id, and broker.
 ///
-/// From: docs/messages-and-handlers/page.md - "The `actor` Parameter"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "The `actor` Parameter"
 #[acton_test]
 async fn test_actor_parameter() -> anyhow::Result<()> {
     #[acton_actor]
@@ -248,7 +248,7 @@ async fn test_actor_parameter() -> anyhow::Result<()> {
 
 /// Tests Reply types - `ready()` and `pending()`.
 ///
-/// From: docs/messages-and-handlers/page.md - "Reply Types"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Reply Types"
 #[acton_test]
 async fn test_reply_types() -> anyhow::Result<()> {
     #[acton_actor]
@@ -320,7 +320,7 @@ async fn test_reply_types() -> anyhow::Result<()> {
 
 /// Tests self-messaging pattern.
 ///
-/// From: docs/messages-and-handlers/page.md - "Self-Messaging"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Self-Messaging"
 #[acton_test]
 async fn test_self_messaging() -> anyhow::Result<()> {
     #[acton_actor]
@@ -373,7 +373,7 @@ async fn test_self_messaging() -> anyhow::Result<()> {
 
 /// Tests request-reply pattern.
 ///
-/// From: docs/messages-and-handlers/page.md - "Request-Reply"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Request-Reply"
 #[acton_test]
 async fn test_request_reply_pattern() -> anyhow::Result<()> {
     #[acton_actor]
@@ -418,7 +418,7 @@ async fn test_request_reply_pattern() -> anyhow::Result<()> {
 
 /// Tests command pattern with enum message.
 ///
-/// From: docs/messages-and-handlers/page.md - "Command Pattern"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Command Pattern"
 #[acton_test]
 async fn test_command_pattern() -> anyhow::Result<()> {
     #[acton_actor]
@@ -475,7 +475,7 @@ async fn test_command_pattern() -> anyhow::Result<()> {
 
 /// Tests forwarding messages pattern.
 ///
-/// From: docs/messages-and-handlers/page.md - "Forwarding Messages"
+/// From: docs/core-concepts/messages-and-handlers/page.md - "Forwarding Messages"
 #[acton_test]
 async fn test_forwarding_messages() -> anyhow::Result<()> {
     #[acton_actor]

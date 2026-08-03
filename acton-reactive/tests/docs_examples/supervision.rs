@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-//! Tests for examples from docs/supervision/page.md
+//! Tests for examples from docs/core-concepts/supervision-basics/page.md
 //!
 //! This module verifies that the code examples from the "Supervision & Children"
 //! documentation page compile and run correctly.
@@ -27,7 +27,7 @@ use acton_test::prelude::*;
 
 /// Tests creating child actors via parent's handle.
 ///
-/// From: docs/supervision/page.md - "Creating Child Actors"
+/// From: docs/core-concepts/supervision-basics/page.md - "Creating Child Actors"
 #[acton_test]
 async fn test_creating_child_actors() -> anyhow::Result<()> {
     #[acton_actor]
@@ -80,7 +80,7 @@ async fn test_creating_child_actors() -> anyhow::Result<()> {
 
 /// Tests ERN (Entity Resource Names) hierarchy.
 ///
-/// From: docs/supervision/page.md - "ERN (Entity Resource Names)"
+/// From: docs/core-concepts/supervision-basics/page.md - "ERN (Entity Resource Names)"
 #[acton_test]
 async fn test_ern_hierarchy() -> anyhow::Result<()> {
     #[acton_actor]
@@ -113,7 +113,7 @@ async fn test_ern_hierarchy() -> anyhow::Result<()> {
 
 /// Tests cascading shutdown.
 ///
-/// From: docs/supervision/page.md - "Cascading Shutdown"
+/// From: docs/core-concepts/supervision-basics/page.md - "Cascading Shutdown"
 #[acton_test]
 async fn test_cascading_shutdown() -> anyhow::Result<()> {
     #[acton_actor]
@@ -155,7 +155,7 @@ async fn test_cascading_shutdown() -> anyhow::Result<()> {
 
 /// Tests worker pool pattern.
 ///
-/// From: docs/supervision/page.md - "Worker Pool Pattern"
+/// From: docs/core-concepts/supervision-basics/page.md - "Worker Pool Pattern"
 #[acton_test]
 async fn test_worker_pool_pattern() -> anyhow::Result<()> {
     #[acton_actor]
@@ -213,7 +213,7 @@ async fn test_worker_pool_pattern() -> anyhow::Result<()> {
 
 /// Tests child lifecycle hooks.
 ///
-/// From: docs/supervision/page.md - "Child Lifecycle Hooks"
+/// From: docs/core-concepts/supervision-basics/page.md - "Child Lifecycle Hooks"
 #[acton_test]
 async fn test_child_lifecycle_hooks() -> anyhow::Result<()> {
     #[acton_actor]
@@ -281,7 +281,7 @@ async fn test_child_lifecycle_hooks() -> anyhow::Result<()> {
 
 /// Tests finding a child by ID.
 ///
-/// From: docs/supervision/page.md - "Finding Children"
+/// From: docs/core-concepts/supervision-basics/page.md - "Finding Children"
 #[acton_test]
 async fn test_find_child() -> anyhow::Result<()> {
     #[acton_actor]

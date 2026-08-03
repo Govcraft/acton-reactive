@@ -14,7 +14,7 @@
  * limitations under that License.
  */
 
-//! Tests for examples from docs/replies-and-context/page.md
+//! Tests for examples from docs/building-apps/request-response/page.md
 //!
 //! This module verifies that the code examples from the "Replies & Context"
 //! documentation page compile and run correctly.
@@ -29,7 +29,7 @@ use acton_test::prelude::*;
 
 /// Tests accessing message data through context.
 ///
-/// From: docs/replies-and-context/page.md - "Accessing the Message"
+/// From: docs/building-apps/request-response/page.md - "Accessing the Message"
 #[acton_test]
 async fn test_accessing_message() -> anyhow::Result<()> {
     #[acton_actor]
@@ -79,7 +79,7 @@ async fn test_accessing_message() -> anyhow::Result<()> {
 
 /// Tests reply envelope for request-response.
 ///
-/// From: docs/replies-and-context/page.md - "Reply Envelope"
+/// From: docs/building-apps/request-response/page.md - "Reply Envelope"
 ///
 /// The reply envelope is the handler's side of a reply. `ask` is the caller's side:
 /// it stamps a private reply address on the request, so `ctx.reply_envelope()` sends
@@ -128,7 +128,7 @@ async fn test_reply_envelope() -> anyhow::Result<()> {
 
 /// Tests fire-and-forget pattern (no reply).
 ///
-/// From: docs/replies-and-context/page.md - "No Reply (Fire-and-Forget)"
+/// From: docs/building-apps/request-response/page.md - "No Reply (Fire-and-Forget)"
 #[acton_test]
 async fn test_no_reply_pattern() -> anyhow::Result<()> {
     #[acton_actor]
@@ -183,7 +183,7 @@ async fn test_no_reply_pattern() -> anyhow::Result<()> {
 
 /// Tests multiple replies (streaming) pattern.
 ///
-/// From: docs/replies-and-context/page.md - "Multiple Replies (Streaming)"
+/// From: docs/building-apps/request-response/page.md - "Multiple Replies (Streaming)"
 ///
 /// A stream is the one shape `ask` cannot express on its own, because `ask` waits for
 /// exactly one reply and a stream sends many. The receiving actor therefore stays, and
@@ -322,7 +322,7 @@ async fn test_streaming_replies() -> anyhow::Result<()> {
 
 /// Tests deferred reply pattern.
 ///
-/// From: docs/replies-and-context/page.md - "Deferred Reply"
+/// From: docs/building-apps/request-response/page.md - "Deferred Reply"
 ///
 /// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
 /// maintain the proper reply chain. This test uses the trigger pattern.
@@ -530,7 +530,7 @@ async fn test_deferred_reply() -> anyhow::Result<()> {
 
 /// Tests bounding a request with a deadline.
 ///
-/// From: docs/replies-and-context/page.md - "Request-Reply with Timeout"
+/// From: docs/building-apps/request-response/page.md - "Request-Reply with Timeout"
 ///
 /// Every `ask` is already bounded by [`DEFAULT_ASK_TIMEOUT`]; `ask_with_timeout` sets a
 /// different bound. The deadline is a backstop rather than the usual way a request
@@ -611,7 +611,7 @@ async fn test_request_reply_with_timeout() -> anyhow::Result<()> {
 
 /// Tests acknowledgment pattern.
 ///
-/// From: docs/replies-and-context/page.md - "Acknowledgment Pattern"
+/// From: docs/building-apps/request-response/page.md - "Acknowledgment Pattern"
 ///
 /// An acknowledgment is a reply that carries no data: the point is that it arrived.
 /// `ask` is exactly that - it resolves once the handler has answered, so receiving the
@@ -667,7 +667,7 @@ async fn test_acknowledgment_pattern() -> anyhow::Result<()> {
 
 /// Tests convenience reply method.
 ///
-/// From: docs/replies-and-context/page.md - "Convenience Reply"
+/// From: docs/building-apps/request-response/page.md - "Convenience Reply"
 #[acton_test]
 async fn test_convenience_reply() -> anyhow::Result<()> {
     #[acton_actor]
