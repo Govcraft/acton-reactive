@@ -51,22 +51,53 @@ pub fn acton_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let panic_info = Arc::new(PanicInfo::default());
                 let panic_info_clone = Arc::clone(&panic_info);
 
-                let orig_hook = panic::take_hook();
-                panic::set_hook(Box::new(move |panic_info| {
-                    panic_info_clone.occurred.store(true, Ordering::SeqCst);
-                    *panic_info_clone.message.lock() = panic_info.payload().downcast_ref::<&str>().map(|s| s.to_string());
-                    *panic_info_clone.location.lock() = panic_info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+                // The panic hook is process-global, but `cargo test` runs every test
+                // in one process on many threads. Without a filter, a panic raised by
+                // one test is recorded by every other test that happens to be running,
+                // and each then fails reporting a stranger's message. (`cargo nextest`
+                // gives each test its own process, which hides this entirely.)
+                //
+                // So tag this test's threads and only record panics raised on them:
+                // the harness thread running `#[test]`, and the runtime workers below.
+                let thread_tag = format!("acton-test-{}", stringify!(#name));
+                let own_thread = std::thread::current().name().map(str::to_string);
 
-                let message = panic_info_clone.message.lock().clone();
-                let cleaned_message = message
-                    .unwrap_or_else(|| "No error message".to_string())
-                    .trim()
-                    .replace('\n', " ");
-                    error!("Panic: {}",cleaned_message);
-                    orig_hook(panic_info);
+                let tag_for_hook = thread_tag.clone();
+                let orig_hook = panic::take_hook();
+                panic::set_hook(Box::new(move |info| {
+                    let current = std::thread::current();
+                    let current_name = current.name().unwrap_or_default();
+                    let is_ours = current_name.starts_with(tag_for_hook.as_str())
+                        || own_thread.as_deref() == Some(current_name);
+
+                    if is_ours {
+                        // Panic payloads are `&str` for `panic!("literal")` and `String`
+                        // for a formatted message; missing the second reported every
+                        // formatted panic as "No error message".
+                        let message = info
+                            .payload()
+                            .downcast_ref::<&str>()
+                            .map(|s| (*s).to_string())
+                            .or_else(|| info.payload().downcast_ref::<String>().cloned());
+
+                        panic_info_clone.occurred.store(true, Ordering::SeqCst);
+                        *panic_info_clone.message.lock() = message.clone();
+                        *panic_info_clone.location.lock() = info
+                            .location()
+                            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+
+                        let cleaned_message = message
+                            .unwrap_or_else(|| "No error message".to_string())
+                            .trim()
+                            .replace('\n', " ");
+                        error!("Panic: {}", cleaned_message);
+                    }
+
+                    orig_hook(info);
                 }));
 
                 let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .thread_name(thread_tag.as_str())
                     .enable_all()
                     .build()
                     .unwrap();
