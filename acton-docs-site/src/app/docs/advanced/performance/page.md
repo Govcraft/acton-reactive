@@ -66,7 +66,7 @@ For a production workload with well-tested handlers, you can turn it off:
 
 ```toml
 [dependencies]
-acton-reactive = { version = "8", default-features = false }
+acton-reactive = { version = "9", default-features = false }
 ```
 
 {% callout type="warning" title="Know what you're trading" %}
@@ -84,7 +84,7 @@ Each actor's inbox is a bounded MPSC channel. When it fills, senders wait — th
 Override it per actor:
 
 ```rust
-let config = ActorConfig::new(Ern::with_root("ingest")?, None, None)?
+let config = ActorConfig::new(Ern::with_root("ingest")?, None)
     .with_inbox_capacity(1024);
 
 let mut actor = runtime.new_actor_with_config::<Ingest>(config);
@@ -192,6 +192,22 @@ Both queries are now sitting in their target inboxes and are processed independe
 {% callout type="note" title="These awaits are enqueues, not round-trips" %}
 `send().await` completes as soon as the message is in the recipient's inbox; it does not wait for the handler to run. Awaiting the two sends in sequence still gets both actors working concurrently. If a target's inbox is full, `send` applies backpressure and waits — use `try_send` if you'd rather fail fast.
 {% /callout %}
+
+**From outside an actor**, `ask` does wait for the answer, so serialising the calls really does serialise the work. Drive them concurrently instead:
+
+```rust
+// Sequential: the second request is not even sent until the first answers.
+let a = actor1_handle.ask(Query1).await?;
+let b = actor2_handle.ask(Query2).await?;
+
+// Concurrent: both actors work at once.
+let (a, b) = tokio::try_join!(
+    actor1_handle.ask(Query1),
+    actor2_handle.ask(Query2),
+)?;
+```
+
+This is the main performance trap `ask` introduces, and the reason `send` remains the default for work you do not need an answer to.
 
 ---
 

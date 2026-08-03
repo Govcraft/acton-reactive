@@ -331,7 +331,16 @@ fn custom_load() {
 
 ## IPC Configuration
 
-When the `ipc` feature is enabled, the IPC listener reads its own configuration from a **separate file**: `$XDG_CONFIG_HOME/acton/ipc.toml` (typically `~/.config/acton/ipc.toml`). If no file is found, defaults are used.
+When the `ipc` feature is enabled, the IPC listener reads its own configuration from a **separate file**. `IpcConfig::load()` searches two locations in order:
+
+1. `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml` — per-application
+2. `$XDG_CONFIG_HOME/acton/ipc.toml` — shared by every acton IPC server on the machine
+
+The first one found wins, and which was used is logged at startup and reported by `ConfigSource`. If neither exists, defaults are used.
+
+{% callout type="note" title="Changed in 9.0.0" %}
+Only the shared path used to be read, while the documentation promised the per-application one, so a file placed where the docs said produced default settings with no warning. The shared location still loads, so no action is required. Move a file to the per-application path only if you want that application's settings to stop being shared.
+{% /callout %}
 
 ### ipc.toml Structure
 
@@ -344,7 +353,7 @@ mode = 0o660             # Socket file permissions (Unix)
 # app_name = "my_app"    # Defaults to the binary name
 
 [limits]
-max_connections = 100
+max_connections = 1024
 max_message_size = 1048576   # 1 MiB
 push_buffer_size = 100       # Buffered push notifications per connection
 
@@ -371,7 +380,7 @@ Each section maps to a nested field of `IpcConfig` (`socket`, `limits`, `rate_li
 |--------|---------|-------------|
 | `socket.path` | `$XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock` (falls back to `/tmp/acton/<app_name>/ipc.sock`) | Unix socket file path |
 | `socket.mode` | `0o660` | Socket file permissions |
-| `limits.max_connections` | `100` | Maximum simultaneous connections |
+| `limits.max_connections` | `1024` | Maximum simultaneous connections |
 | `limits.max_message_size` | `1048576` (1 MiB) | Maximum message size in bytes |
 | `limits.push_buffer_size` | `100` | Push notifications buffered per connection; overflow is dropped |
 | `rate_limit.enabled` | `true` | Per-connection token-bucket rate limiting |

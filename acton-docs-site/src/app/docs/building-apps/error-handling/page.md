@@ -151,7 +151,9 @@ Set a child's restart policy via `ActorConfig::with_restart_policy` when creatin
 | `Temporary` | Should never be restarted |
 | `Transient` | Should be restarted only on abnormal termination (panic or error) |
 
-`SupervisionStrategy::decide()` combines the policy and termination reason into a `SupervisionDecision` (`RestartChild`, `RestartAll`, `RestartFrom`, `NoRestart`, `Escalate`), and the `RestartLimiter` helper can bound restart frequency in your handler. Restarting is your handler's job — the framework only delivers the notification. See [Custom Supervision](/docs/advanced/custom-supervision) for putting these together.
+**The framework carries this out for you** when the child was registered with `supervise_with` or `supervise_deferred`: it consults the policy and the supervisor's `SupervisionStrategy`, rebuilds the child from its blueprint after a backoff, bounds retries with a restart limiter, and applies the supervisor's `Escalation` when the allowance runs out.
+
+Your `ChildTerminated` handler still runs, and is the right place for logging, metrics and application-level bookkeeping. **It should no longer recreate the child**, or the child will come back twice. See [Custom Supervision](/docs/advanced/custom-supervision).
 
 ---
 
@@ -269,7 +271,7 @@ builder.mutate_on::<RiskyOperation>(|actor, envelope| {
 - Use `try_mutate_on` / `try_act_on` with `on_error` for typed failures
 - Send explicit success/failure response messages
 - Rely on actor isolation for fault tolerance (backed by the default-on `catch-handler-panics` feature)
-- Handle `ChildTerminated` in parents and set restart policies for supervised children
+- Register children with a blueprint so the framework can restart them; use `ChildTerminated` for observation, not recreation
 - Log errors for debugging
 - Consider patterns like circuit breakers for external services
 

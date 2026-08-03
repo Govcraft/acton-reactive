@@ -1,6 +1,6 @@
 ---
 title: Sending Messages
-description: Learn how actors communicate — fire-and-forget with send, request-response with reply envelopes.
+description: Learn how actors communicate, from fire-and-forget send to request-response with ask.
 ---
 
 Actors communicate exclusively through messages. No shared memory, no direct function calls — just messages. This constraint is what makes concurrent programming simpler with actors.
@@ -23,31 +23,45 @@ handle.send(Increment).await;
 
 ---
 
-## Request-Response with Reply Envelopes
+## Request-Response with ask
 
-Sometimes you need data back from an actor. Acton Reactive uses the **reply envelope pattern** — the sender provides a return address, and the receiver sends a response back to it.
+Sometimes you need data back from an actor. `ask` sends a request and waits for the reply:
 
-This pattern requires two actors: one that sends a request and one that responds.
+```rust
+let count = counter_handle.ask(GetCount).await?;
+println!("Received count: {}", count.0);
+```
+
+That is the whole call. There is no second actor, no return address to wire up, and nothing to wait on afterwards.
+
+### Making a message askable
+
+A message becomes askable by implementing `Request`, which names the reply through an associated type:
+
+```rust
+#[acton_message]
+struct GetCount;
+
+#[acton_message]
+struct CountResponse(i32);
+
+impl Request for GetCount {
+    type Response = CountResponse;
+}
+```
+
+Because the reply type is pinned to the request type, the call needs no turbofish, and asking for the wrong reply type is a compile error.
 
 ### A Complete Example
 
 ```rust
 use acton_reactive::prelude::*;
 
-// The service actor that responds to queries
 #[acton_actor]
 struct Counter {
     count: i32,
 }
 
-// The client actor that requests data
-#[acton_actor]
-#[derive(Default)]
-struct Client {
-    counter: Option<ActorHandle>,
-}
-
-// Messages
 #[acton_message]
 struct Increment;
 
@@ -57,14 +71,14 @@ struct GetCount;
 #[acton_message]
 struct CountResponse(i32);
 
-#[acton_message]
-struct RequestCount;
+impl Request for GetCount {
+    type Response = CountResponse;
+}
 
 #[acton_main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create the counter service
     let mut counter = runtime.new_actor::<Counter>();
 
     counter
@@ -83,39 +97,15 @@ async fn main() {
 
     let counter_handle = counter.start().await;
 
-    // Create the client that will request data
-    let mut client = runtime.new_actor::<Client>();
-    client.model.counter = Some(counter_handle.clone());
-
-    client
-        .mutate_on::<RequestCount>(|actor, envelope| {
-            let counter = actor.model.counter.clone().unwrap();
-            let request_envelope = envelope.new_envelope(&counter.reply_address());
-
-            Reply::pending(async move {
-                request_envelope.send(GetCount).await;
-            })
-        })
-        .act_on::<CountResponse>(|_actor, envelope| {
-            let count = envelope.message().0;
-            println!("Received count: {}", count);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
-    // Increment the counter a few times
     counter_handle.send(Increment).await;
     counter_handle.send(Increment).await;
     counter_handle.send(Increment).await;
 
-    // Ask for the count via the client
-    client_handle.send(RequestCount).await;
+    let count = counter_handle.ask(GetCount).await?;
+    println!("Received count: {}", count.0);
 
-    // Give time for async messages to process
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    runtime.shutdown_all().await.ok();
+    runtime.shutdown_all().await?;
+    Ok(())
 }
 ```
 
@@ -125,9 +115,15 @@ Output:
 Received count: 3
 ```
 
-### Understanding the Pattern
+Note that the three `Increment` messages are not waited on, and do not need to be. **Inboxes are FIFO, so a completed `ask` also proves every message sent to that actor beforehand has been processed.**
 
-The key insight is that every message arrives in an **envelope** that knows where it came from:
+{% callout type="note" title="This is how you avoid sleeping" %}
+If you find yourself reaching for `tokio::time::sleep` to let messages "finish processing", `ask` the actor instead. A sleep is a guess about scheduling; a reply is a fact.
+{% /callout %}
+
+### Understanding the Reply Envelope
+
+`ask` changes nothing on the handler side. Every message arrives in an **envelope** that knows where it came from, and the handler answers through it:
 
 ```rust
 .act_on::<GetCount>(|actor, envelope| {
@@ -143,6 +139,12 @@ The key insight is that every message arrives in an **envelope** that knows wher
 1. **`envelope.reply_envelope()`** — Creates a new envelope addressed back to whoever sent this message
 2. **`Reply::pending(async move { ... })`** — Returns a future that sends the response asynchronously
 3. **`reply_envelope.send(CountResponse(count)).await`** — Sends the response back to the sender
+
+The actor cannot tell an `ask` from a `send`. A handler that returns without replying is legal; the caller gets `AskError::NoReply` rather than waiting forever.
+
+### When the reply envelope is still the right tool
+
+`ask` resolves on the **first** reply, and asking from inside a `mutate_on` handler deadlocks, because a mutable handler is awaited on the actor's own message loop. For those cases, an actor sends the request with `send` and handles the answer as an ordinary message. See [Request-Response](/docs/building-apps/request-response).
 
 ### Accessing Message Data
 
@@ -195,7 +197,9 @@ Use when you need to do async work:
 })
 ```
 
-The future runs to completion before the next `mutate_on` message is processed.
+**How the future is driven depends on the handler.** A `mutate_on` handler's future is awaited **inline**, so the actor takes no further messages until it completes. An `act_on` handler's future is drained **concurrently**, so the actor can move on to the next message while it is still running.
+
+That difference matters when you are reasoning about ordering: a reply from an `act_on` handler does not prove the handler's async work has finished, only that the reply was sent.
 
 ---
 
@@ -206,15 +210,22 @@ The future runs to completion before the next `mutate_on` message is processed.
 - You want maximum throughput
 - The operation is one-way
 
-**Use reply envelopes when:**
-- You need data back from another actor
-- You're building request-response services
-- Actors need to coordinate their work
+**Use `ask` when:**
+- You need data back from an actor
+- You need to know a message has been processed
+- You're calling from `main`, a task, or a test
+
+**Use reply envelopes directly when:**
+- One request produces several replies
+- The responder is answering a peer actor rather than a caller
+- You are inside a `mutate_on` handler, where asking would deadlock
 
 {% callout title="A Mental Model" %}
-Think of `send` like dropping a letter in a mailbox — you walk away immediately.
+Think of `send` like dropping a letter in a mailbox: you walk away immediately.
 
-Think of reply envelopes like including a self-addressed stamped envelope with your letter — you're asking for a response to be sent back to you.
+Think of `ask` like a phone call: you wait on the line for the answer.
+
+Think of the reply envelope as the self-addressed stamped envelope inside the letter. It is what the receiver writes back to, and `ask` simply supplies one whose return address is a private channel it is waiting on.
 {% /callout %}
 
 ---
@@ -222,6 +233,8 @@ Think of reply envelopes like including a self-addressed stamped envelope with y
 ## What You've Learned
 
 - **`send`** queues a message and returns immediately
+- **`ask`** sends a request and waits for the reply, which also proves everything sent beforehand was processed
+- **`Request`** names a message's reply type, which is what makes it askable
 - **`envelope.message()`** accesses the message data in a handler
 - **`envelope.reply_envelope()`** creates an envelope addressed back to the sender
 - **`Reply::ready()`** signals synchronous completion

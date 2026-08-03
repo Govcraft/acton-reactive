@@ -139,7 +139,7 @@ If you want a panicking handler to bring the actor down instead — or you've me
 
 ```toml
 [dependencies]
-acton-reactive = { version = "8", default-features = false }
+acton-reactive = { version = "9", default-features = false }
 ```
 
 For *expected* failures, don't rely on panics at all. Use `try_mutate_on` / `try_act_on` with a real error type and register an `on_error` handler:
@@ -403,11 +403,12 @@ async fn test() {
     let handle = actor.start().await;
     handle.send(Increment).await;
 
-    // Wait for async processing
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for the actor, not for the clock. The reply cannot arrive until
+    // the increment ahead of it in the inbox has been handled.
+    handle.ask(GetCount).await?;
 
     assert_eq!(count.load(Ordering::SeqCst), 1);
-    runtime.shutdown_all().await.ok();
+    runtime.shutdown_all().await?;
 }
 ```
 

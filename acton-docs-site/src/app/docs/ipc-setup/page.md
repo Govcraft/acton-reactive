@@ -144,7 +144,7 @@ mode = 0o660             # Socket file permissions (Unix)
 # app_name = "my_app"    # Defaults to the binary name
 
 [limits]
-max_connections = 100
+max_connections = 1024
 max_message_size = 1048576   # 1 MiB
 push_buffer_size = 100       # Buffered push notifications per connection
 
@@ -193,7 +193,7 @@ let listener = runtime.start_ipc_listener_with_config(config).await?;
 | `socket.path` | `Option<PathBuf>` | `$XDG_RUNTIME_DIR/acton/<app_name>/ipc.sock` (falls back to `/tmp/acton/<app_name>/ipc.sock`) | Unix socket path |
 | `socket.mode` | `u32` | `0o660` | Socket file permissions |
 | `socket.app_name` | `Option<String>` | binary name | Shards the socket path per app |
-| `limits.max_connections` | `usize` | `100` | Max concurrent connections |
+| `limits.max_connections` | `usize` | `1024` | Max concurrent connections |
 | `limits.max_message_size` | `usize` | `1048576` (1 MiB) | Max message size in bytes |
 | `limits.push_buffer_size` | `usize` | `100` | Push notifications buffered per connection; overflow is dropped |
 | `rate_limit.enabled` | `bool` | **`true`** | Per-connection token-bucket rate limiting |
@@ -268,6 +268,18 @@ println!("Registered {} types: {:?}", registry.len(), types);
 
 The simplest way to expose actors. Uses the actor's ERN name automatically:
 
+An actor is exposed under **its own name**, and a supervised child under its parent's name then its own:
+
+| Actor | IPC name |
+|---|---|
+| `new_actor_with_name("prices")` | `prices` |
+| child `"alpha"` of `prices` | `prices/alpha` |
+| child `"beta"` of `prices` | `prices/beta` |
+
+{% callout type="warning" title="Changed in 9.0.0" %}
+The name used to contain a `UUIDv7` regenerated on every process start, so it differed on every run and no client, config file or script could name it. Worse, every child of one parent registered under the *same* name and each silently replaced the last, along with the parent. **No working program can have depended on the old values.**
+{% /callout %}
+
 ```rust
 // Expose using the actor's name
 let mut calculator = runtime.new_actor_with_name::<Calculator>("calculator".to_string());
@@ -288,8 +300,14 @@ Use `ipc_expose` when you need a different IPC name than the actor's ERN:
 
 ```rust
 let handle = runtime.new_actor::<Calculator>().start().await;
-runtime.ipc_expose("calc-v2", handle);  // Custom IPC name
+runtime.ipc_expose("calc-v2", handle)?;  // Custom IPC name
 ```
+
+{% callout type="warning" title="Changed in 9.0.0" %}
+`ipc_expose` returns `Result<(), IpcNameInUse>` and **no longer replaces an existing registration**. Overwriting silently redirected traffic away from an actor that was already serving, and that actor had no way to learn it had been displaced. Release a name with `ipc_hide` if you intend to reuse it.
+
+`expose_for_ipc()` remains infallible and still returns `&mut Self`. A conflict there is logged at `error!` with both actors named; the actor starts, but is not reachable under that name. **Call `ipc_expose` and match on the result if you need to handle a conflict in code.**
+{% /callout %}
 
 ### Hiding Actors
 

@@ -60,8 +60,8 @@ use crate::traits::acton_message::ActonMessage;
 /// ```ignore
 /// actor.act_on::<GetCount>(|actor, ctx| {
 ///     let reply = ctx.reply_envelope();
-///     let count = actor.model.count;
-///     Reply::pending(async move { reply.send(Count(count)).await })
+///     let value = actor.model.count;
+///     Reply::pending(async move { reply.send(Count { value }).await })
 /// });
 /// ```
 ///

@@ -83,6 +83,40 @@ actor.mutate_on::<PriceChanged>(|actor, ctx| {
 
 ---
 
+## Knowing a Broadcast Arrived
+
+`broadcast` returns as soon as **the broker** has the message, not when subscribers do. This is deliberate: a broadcast has zero or many recipients, so there is nothing single to wait for.
+
+Unlike a direct message, a broadcast also cannot answer for itself. The broker hands subscribers the payload alone, with no reply address, so there is nothing for a subscriber to reply *to*. **The broker is the only participant that can speak for a broadcast**, and `FlushBroadcasts` is how you ask it to:
+
+```rust
+broker.broadcast(PriceUpdate { symbol: "ACME".into(), price: 123.45 }).await;
+
+// Answers BroadcastsFlushed. Because the broker's inbox is FIFO and its
+// broadcast handler awaits fan-out, this reply cannot arrive until every
+// earlier broadcast is sitting in every subscriber's inbox.
+broker.ask(FlushBroadcasts).await?;
+```
+
+**That is delivery, not completion.** To know a *particular* subscriber has finished handling the broadcast, `ask` that subscriber afterwards. The broadcast is already ahead of your request in its inbox, so the reply proves it was handled:
+
+```rust
+broker.ask(FlushBroadcasts).await?;
+let seen = subscriber_handle.ask(GetSeen).await?;
+```
+
+{% callout type="note" title="shutdown_all flushes for you" %}
+`ActorRuntime::shutdown_all` asks the broker to flush before it signals anything, so broadcasting and then shutting down is no longer a race. You need an explicit `FlushBroadcasts` when you want to assert something *before* shutting down, or when the broadcast has not been issued yet at the moment shutdown begins.
+
+A `before_stop` hook that broadcasts to peers which are also stopping is the main case that still cannot be waited for: there is nothing to flush yet when shutdown starts.
+{% /callout %}
+
+{% callout type="warning" title="Why broadcast doesn't just flush every time" %}
+Flushing on every `broadcast` was considered and rejected. Inboxes are bounded, so an actor that broadcasts from inside a mutable handler would block inline awaiting the broker's acknowledgement, while the broker blocked pushing into a full inbox, possibly that same actor's. That is a deadlock, and broadcasting from a handler is a common pattern.
+{% /callout %}
+
+---
+
 ## Example: Price Feed
 
 ```rust
@@ -397,20 +431,20 @@ struct OrderShipped { order_id: String, tracking: String }
 struct Event { event_type: String, data: Value }
 ```
 
-### Don't Rely on Ordering
+### Know exactly what ordering you get
 
-Broadcasts are delivered asynchronously. Don't assume order:
+Per subscriber, broadcasts arrive in the order they were broadcast. The broker's inbox is FIFO and its broadcast handler awaits fan-out before dequeuing the next message, so this holds:
 
 ```rust
-// Don't do this
 broker.broadcast(Step1).await;
 broker.broadcast(Step2).await;
 broker.broadcast(Step3).await;
-// Actors might receive in different orders!
-
-// Instead, use explicit sequencing in messages
-broker.broadcast(Step { number: 1 }).await;
+// Every subscriber's inbox holds Step1, Step2, Step3, in that order.
 ```
+
+What you do **not** get is any relationship *between* subscribers. Each works its inbox at its own pace, so subscriber A can be on `Step3` while subscriber B is still on `Step1`. If one subscriber's work must precede another's, that is a dependency between two actors, and the broker is the wrong tool for expressing it: have the second actor wait on the first.
+
+You also do not get delivery on return from `broadcast`, which is what the next section is about.
 
 ### Keep Broadcasts Lightweight
 

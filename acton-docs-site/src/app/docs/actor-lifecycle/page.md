@@ -387,8 +387,10 @@ async fn test_actor_processes_all_messages() {
     handle.send(Increment).await;
     handle.send(Increment).await;
 
-    // Give time to process
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // A reply proves all three increments were handled: inboxes are FIFO,
+    // so this request sits behind them.
+    let count = handle.ask(GetCount).await.unwrap();
+    assert_eq!(count.0, 3);
 
     runtime.shutdown_all().await.unwrap();
     // after_stop assertion runs during shutdown

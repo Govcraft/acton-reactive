@@ -47,19 +47,60 @@ actor.mutate_on::<RequestMessage>(|actor, ctx| {
 
 ---
 
+### How do I wait for that reply?
+
+Use `ask`, after declaring which reply the request expects:
+
+```rust
+impl Request for RequestMessage {
+    type Response = ResponseMessage;
+}
+
+let response = handle.ask(RequestMessage).await?;
+```
+
+The handler is unchanged: it still answers through the reply envelope, and an actor cannot tell an `ask` from a `send`. Because inboxes are FIFO, a completed `ask` also proves everything sent to that actor beforehand has been processed, which is what makes it the right replacement for a sleep.
+
+**Do not `ask` from inside a `mutate_on` handler** — mutable handlers are awaited inline on the message loop, so waiting for a reply stops the actor from producing it.
+
+---
+
+### How do I wait for a broadcast to be delivered?
+
+`broadcast` completes when the broker has the message, not when subscribers do, and a broadcast carries no reply address for a subscriber to answer. Ask the broker:
+
+```rust
+broker.ask(FlushBroadcasts).await?;
+```
+
+That is delivery. For completion at a particular subscriber, `ask` that subscriber afterwards. `shutdown_all` flushes the broker for you before signalling anything.
+
+---
+
 ### How do I create child actors?
 
-Use the `supervise` method on a started actor:
+Register the child with a **blueprint**, which is what lets the framework restart it:
 
 ```rust
 let parent_handle = parent.start().await;
 
-// Create child
-let child = runtime.new_actor::<ChildState>();
-let child_handle = parent_handle.supervise(child).await?;
+let config = ActorConfig::for_supervised_child("worker", parent_handle.clone(), None)?;
+
+let child = parent_handle
+    .supervise_with::<ChildState>(&runtime, config, |actor| {
+        actor.mutate_on::<Task>(handle_task);
+    })
+    .await?;
+
+// SupervisedChild, not ActorHandle: current() names the live incarnation
+child.current()?.send(Task).await;
 
 // When parent stops, child stops automatically
 ```
+
+From inside a handler, use `supervise_deferred`, which queues the start instead of awaiting it.
+
+The older `supervise(child)` still works and still gives cascading shutdown, but the supervisor holds no blueprint, so **that child is never restarted**.
 
 ---
 

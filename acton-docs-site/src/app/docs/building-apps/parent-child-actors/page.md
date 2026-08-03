@@ -9,7 +9,7 @@ This page covers practical patterns for working with parent-child actors. For fo
 
 ## Quick Recap: The Supervision Pattern
 
-Parent-child relationships are created using `supervise()`:
+A supervised child is registered with `supervise_with`, which takes a config naming the child and its parent, plus a **blueprint** describing how to build it:
 
 ```rust
 let mut runtime = ActonApp::launch_async().await;
@@ -18,22 +18,30 @@ let mut runtime = ActonApp::launch_async().await;
 let parent = runtime.new_actor::<Supervisor>();
 let parent_handle = parent.start().await;
 
-// Create and configure the child
-let mut child = runtime.new_actor::<Worker>();
-child.mutate_on::<Task>(|actor, ctx| {
-    actor.model.task_count += 1;
-    Reply::ready()
-});
+let config = ActorConfig::for_supervised_child("worker", parent_handle.clone(), None)?;
 
-// Parent supervises child (starts it and registers the relationship)
-let child_handle = parent_handle.supervise(child).await?;
+let child = parent_handle
+    .supervise_with::<Worker>(&runtime, config, |actor| {
+        // The blueprint. Replayed on every start, including every restart.
+        actor.mutate_on::<Task>(|actor, ctx| {
+            actor.model.task_count += 1;
+            Reply::ready()
+        });
+    })
+    .await?;
 ```
 
 Key points:
-- Create children with `runtime.new_actor()`
-- Configure handlers before supervision
-- `supervise()` starts the child and returns its handle
-- When the parent stops, all children stop automatically
+- `for_supervised_child` gives the child a hierarchical identifier (`parent/worker`) and lets it notify its parent when it terminates
+- The blueprint is what the framework replays to **restart** the child
+- `supervise_with` returns a `SupervisedChild`, which always names the incarnation currently running
+- When the parent stops, all children stop automatically, reporting `TerminationReason::ParentShutdown`
+
+{% callout type="note" title="Inside a handler, use supervise_deferred" %}
+`supervise_with` awaits the child's start, so calling it from a `mutate_on` handler would stall the supervisor's message loop. `supervise_deferred` records the child and queues its start for the loop's next turn, returning the `SupervisedChild` synchronously.
+{% /callout %}
+
+The older `supervise(child)` still exists and still works. It adopts an already-built actor for cascading shutdown, but the supervisor holds no blueprint for it, so **a child registered that way is never restarted.**
 
 ---
 
@@ -46,7 +54,7 @@ use acton_reactive::prelude::*;
 
 #[acton_actor]
 struct Supervisor {
-    workers: Vec<ActorHandle>,
+    workers: Vec<SupervisedChild>,
 }
 
 #[acton_actor]
@@ -57,6 +65,16 @@ struct Worker {
 #[acton_message]
 struct Task { id: u32 }
 
+#[acton_message]
+struct GetTaskCount;
+
+#[acton_message]
+struct TaskCount(u32);
+
+impl Request for GetTaskCount {
+    type Response = TaskCount;
+}
+
 #[acton_main]
 async fn main() -> anyhow::Result<()> {
     let mut runtime = ActonApp::launch_async().await;
@@ -66,39 +84,56 @@ async fn main() -> anyhow::Result<()> {
     let supervisor_handle = supervisor.start().await;
 
     // Create worker pool
-    let mut worker_handles = Vec::new();
+    let mut workers = Vec::new();
     for i in 0..3 {
-        let config = ActorConfig::new(
-            Ern::with_root(format!("worker-{i}")).unwrap(),
+        let config = ActorConfig::for_supervised_child(
+            format!("worker-{i}"),
+            supervisor_handle.clone(),
             None,
-            None
-        )?;
+        )?
+        .with_restart_policy(RestartPolicy::Permanent);
 
-        let mut worker = runtime.new_actor_with_config::<Worker>(config);
-        worker.mutate_on::<Task>(|actor, ctx| {
-            let task = ctx.message();
-            actor.model.task_count += 1;
-            println!("Worker processing task {}", task.id);
-            Reply::ready()
-        });
-
-        let handle = supervisor_handle.supervise(worker).await?;
-        worker_handles.push(handle);
+        workers.push(
+            supervisor_handle
+                .supervise_with::<Worker>(&runtime, config, |actor| {
+                    actor
+                        .mutate_on::<Task>(|actor, ctx| {
+                            let task = ctx.message();
+                            actor.model.task_count += 1;
+                            println!("Worker processing task {}", task.id);
+                            Reply::ready()
+                        })
+                        .act_on::<GetTaskCount>(|actor, ctx| {
+                            let count = actor.model.task_count;
+                            let reply = ctx.reply_envelope();
+                            Reply::pending(async move {
+                                reply.send(TaskCount(count)).await;
+                            })
+                        });
+                })
+                .await?,
+        );
     }
 
-    // Distribute work round-robin
-    for i in 0..9 {
-        let worker = &worker_handles[i % 3];
-        worker.send(Task { id: i as u32 }).await;
+    // Distribute work round-robin. `current()` names the incarnation running
+    // right now, which is the point of holding a SupervisedChild.
+    for i in 0..9u32 {
+        workers[i as usize % 3].current()?.send(Task { id: i }).await;
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // No sleep: a reply proves that worker has worked through its queue,
+    // because inboxes are FIFO.
+    for worker in &workers {
+        let count = worker.current()?.ask(GetTaskCount).await?;
+        println!("Worker handled {} tasks", count.0);
+    }
+
     runtime.shutdown_all().await?;
     Ok(())
 }
 ```
 
-Each worker processes its assigned tasks. The supervisor has three children that stop automatically when the supervisor stops.
+Each worker processes its assigned tasks, and each is restarted from its blueprint if it dies. The supervisor has three children that stop automatically when the supervisor stops.
 
 ---
 
@@ -106,24 +141,36 @@ Each worker processes its assigned tasks. The supervisor has three children that
 
 ### Parent to Child
 
-After supervising a child, use the returned handle to send messages:
+Store the `SupervisedChild`, and resolve it to a handle at the point of use:
 
 ```rust
-// Store handles for later use
-let mut workers: Vec<ActorHandle> = Vec::new();
+// Store the supervised references, not the handles.
+let mut workers: Vec<SupervisedChild> = Vec::new();
 
 for i in 0..3 {
-    let mut worker = runtime.new_actor::<Worker>();
-    // ... configure handlers ...
-    let handle = supervisor_handle.supervise(worker).await?;
-    workers.push(handle);
+    let config = ActorConfig::for_supervised_child(
+        format!("worker-{i}"),
+        supervisor_handle.clone(),
+        None,
+    )?;
+    workers.push(
+        supervisor_handle
+            .supervise_with::<Worker>(&runtime, config, blueprint.clone())
+            .await?,
+    );
 }
 
 // Send work to children
 for worker in &workers {
-    worker.send(Task { id: 1 }).await;
+    worker.current()?.send(Task { id: 1 }).await;
 }
 ```
+
+{% callout type="warning" title="Don't store an ActorHandle for a supervised child" %}
+An `ActorHandle` names **one incarnation**. When the child restarts, that handle goes stale and sends land in a mailbox nobody is reading, with no error. `SupervisedChild::current()` always resolves to the incarnation running now.
+
+If the child might still be starting or backing off, `wait_running().await` blocks until it is up.
+{% /callout %}
 
 ### Child to Parent
 
@@ -206,25 +253,33 @@ for entry in supervisor_handle.children().iter() {
 Children have their own lifecycle hooks that work exactly like root actors:
 
 ```rust
-let mut child = runtime.new_actor::<ChildState>();
-
-child
-    .after_start(|actor| {
-        println!("Child {} started", actor.id());
-        Reply::ready()
+let child = parent_handle
+    .supervise_with::<ChildState>(&runtime, config, |actor| {
+        actor
+            .after_start(|actor| {
+                println!("Child {} started", actor.id());
+                Reply::ready()
+            })
+            .after_stop(|actor| {
+                println!("Child {} stopped", actor.id());
+                Reply::ready()
+            });
     })
-    .after_stop(|actor| {
-        println!("Child {} stopped", actor.id());
-        Reply::ready()
-    });
-
-let child_handle = parent_handle.supervise(child).await?;
+    .await?;
 ```
+
+Hooks go in the blueprint, so they run on every incarnation rather than only the first.
 
 This is useful for:
 - Initializing child-specific resources
 - Logging child lifecycle events
 - Test assertions about child behavior
+
+{% callout type="note" title="after_start does not hold the actor back" %}
+A hook returning `Reply::pending` has its future run **alongside** the message loop, so the actor can take messages before initialization finishes. "Started" does not imply "initialized".
+
+If callers must not see the actor until it is ready, have the handler hold `ctx.reply_envelope()` in the model and answer once initialization completes. See [Actor Lifecycle](/docs/actor-lifecycle).
+{% /callout %}
 
 ---
 
@@ -275,15 +330,13 @@ supervisor/
 ### Use Meaningful Names
 
 ```rust
-let config = ActorConfig::new(
-    Ern::with_root("order-processor").unwrap(),
-    None,
-    None
-)?;
+let config = ActorConfig::new(Ern::with_root("order-processor")?, None);
 let processor = runtime.new_actor_with_config::<Processor>(config);
 ```
 
-This creates clear ERN paths like `order-processor/validator`.
+A child of that actor is named beneath it, giving clear ERN paths like `order-processor/validator`. That path is also the name the child is reachable under over IPC.
+
+A supervision chain is limited to `MAX_SUPERVISION_DEPTH` (10) levels, which is another reason to keep hierarchies shallow.
 
 ### Store Handles When Needed
 
@@ -292,11 +345,11 @@ If you need to communicate with children later, store their handles:
 ```rust
 #[acton_actor]
 struct Supervisor {
-    workers: Vec<ActorHandle>,
+    workers: Vec<SupervisedChild>,
 }
 ```
 
-If you only need parent-to-child communication at creation time, you can discard the handles.
+If you only need parent-to-child communication at creation time, you can discard them.
 
 ---
 

@@ -165,6 +165,63 @@ while let Some(frame) = stream_rx.recv().await {
 
 ---
 
+## Typed Requests with ask
+
+`IpcClient::request` speaks in `IpcEnvelope`s and `serde_json::Value`. When you know the types, `IpcClient::actor` names a remote actor and gives back a `RemoteActorRef` whose `ask` is deliberately the **same call** as the local one:
+
+```rust
+let count: Count = handle.ask(GetCount).await?;                  // local
+let count: Count = client.actor("counter").ask(GetCount).await?; // remote
+```
+
+This adds no transport. It is a typed façade over the correlated request machinery that already existed, plus the judgement about what a response means.
+
+### The RemoteRequest bound
+
+A remote request has to be able to travel, so it implements `RemoteRequest` rather than `Request`:
+
+```rust
+#[acton_message(ipc)]
+struct GetCount;
+
+#[acton_message(ipc)]
+struct Count(u64);
+
+impl Request for GetCount {
+    type Response = Count;
+}
+
+impl RemoteRequest for GetCount {
+    // Must equal the string the peer registered this type under.
+    const MESSAGE_TYPE: &'static str = "GetCount";
+}
+```
+
+`RemoteRequest` is `Request` plus `Serialize`, a `DeserializeOwned` reply, and a `MESSAGE_TYPE` constant. **A message that cannot cross the boundary is a compile error** against a `RemoteActorRef`, rather than a call that appears to work. Local-only users pay nothing: `ask` on `ActorHandle` still takes a bare `Request`.
+
+The wire name is written down rather than derived from `std::any::type_name`, which changes when a type moves between modules and cannot describe a peer that is a different binary, a different version, or not Rust at all.
+
+### Errors
+
+Remote failures reuse `AskError`, with two variants that only a boundary can produce:
+
+| Variant | Meaning |
+|---|---|
+| `PeerRejected { code, detail }` | Refused **before dispatch**: no such actor, no such registered type, busy, rate-limited, shutting down. Nothing ran, so a **retry is safe**. Carries the peer's own code, which is what tells a mistyped actor name from an unregistered type |
+| `TransportFailed { detail }` | The connection failed, so whether the request was processed is **unknown** |
+
+The rest carry their local meanings. A handler that returns without replying is `NoReply`. A deadline at either end is `TimedOut`. A reply that does not deserialize is `UnexpectedReply`, which covers a wrong-typed handler reply, an unregistered reply type, and version skew between peers, because all three mean the same actionable thing: the answer is not the answer this request declares.
+
+**It cannot hang.** The client registers its correlation id before writing, so a dropped connection wakes the caller at once instead of waiting out the clock, and the deadline is stamped on the request as well as applied locally, so the peer stops waiting on its actor at the same moment.
+
+{% callout type="warning" title="Scope: one actor" %}
+`ask` has no meaning over `broadcast`, remotely or locally, because a broadcast has no single replier. Use subscriptions for that.
+
+The deadlock warning applies unchanged: **do not `ask` from inside a `mutate_on` handler.** Crossing a process boundary does not change it, it only makes the other party harder to see.
+{% /callout %}
+
+---
+
 ## Client Libraries
 
 Acton includes example client libraries for Python, Node.js, and Deno. Each speaks the same wire protocol as `IpcClient`.
@@ -214,6 +271,20 @@ See the `examples/ipc_client_libraries/` directory for complete implementations,
 - Set appropriate permissions on the socket file
 - Validate all incoming messages
 - Consider authentication for sensitive operations
+
+### Peer identity
+
+`PeerCredentials` carries the kernel-reported identity of the process behind a connection, read through `SubscriptionManager::peer_credentials()` and `peer_pid()`.
+
+**Prefer `uid()` and `gid()` for access-control decisions.** PIDs are recycled, so a check that reads a PID and then acts on it can be defeated by the original process exiting between the two steps. The user and group ids are fixed for the life of the connection. Treat `pid()` as a diagnostic: it is what lets a log line name the process that connected.
+
+### Connection limits
+
+A server at its connection limit now writes a typed error before closing, and the client reports `IpcError::ConnectionLimitReached { limit }`. Previously the socket was accepted and dropped without a word, so the refusal surfaced as `Broken pipe (os error 32)` on the first write, which points at nothing.
+
+The effective limit is logged at listener startup beside the socket path, so the ceiling is discoverable before it is reached. `IpcListenerStats::max_connections()` and `connections_available()` let an embedder check headroom, and `IpcClient::rejection_reason()` reports why a connection was refused, or `None` for one accepted normally.
+
+`IpcError` is now `#[non_exhaustive]`, so a `match` listing every variant needs a wildcard arm. Nothing changes on the wire: a refusal travels as an ordinary error response carrying an `error_code` string, so a client built against 8.x still parses the frame. `CONNECTION_LIMIT_REACHED_CODE` and `CONNECTION_REJECTED_CORRELATION_ID` are the wire constants a non-Rust client needs to recognise one.
 
 ---
 

@@ -139,7 +139,7 @@ builder.mutate_on::<LogEvent>(|actor, envelope| {
 
 ### Sending a Response
 
-Use the reply envelope pattern to send data back:
+A handler answers through the **reply envelope**, which is addressed back to whoever sent the message:
 
 ```rust
 builder.act_on::<GetCount>(|actor, envelope| {
@@ -152,7 +152,12 @@ builder.act_on::<GetCount>(|actor, envelope| {
 });
 ```
 
-The receiving actor must have a handler for `CountResponse`.
+Who receives that reply depends on how the request was sent, and the handler cannot tell the difference:
+
+- **From `ask`**, the reply resolves the caller's `await`. Declare the pairing once with `impl Request for GetCount { type Response = CountResponse; }`, then write `handle.ask(GetCount).await?`.
+- **From another actor's `send`**, the reply arrives as an ordinary message, so that actor needs a `CountResponse` handler of its own.
+
+See [Request-Response](/docs/building-apps/request-response) for choosing between them.
 
 ---
 

@@ -7,6 +7,181 @@ Two kinds of migration live here: [upgrading between Acton versions](#upgrading-
 
 ## Upgrading Acton Reactive
 
+### 8.x → 9.0
+
+A major release. Most of it is additive, but there are compile errors to fix and **two silent behaviour changes** that no compiler will point at. Start with those.
+
+#### Silent behaviour changes: read these first
+
+**1. `unsupervise` now stops the child it releases.**
+
+It previously retired the supervisor's record and left the actor running, contradicting its own documentation. The signature is unchanged, so nothing will fail to compile.
+
+```rust
+// Was: retires the record, child keeps running
+// Now: retires the record AND stops the child
+parent_handle.unsupervise(&child_ern).await?;
+
+// If you relied on the child surviving, this is the replacement.
+// It hands back the still-running child's handle.
+let child = parent_handle.release(&child_ern).await?;
+```
+
+`unsupervise` also drops the child's IPC names, whichever way that child was registered. A name that resolves to a mailbox nobody is reading is the precise failure the IPC registry exists to prevent, so the names go with the actor.
+
+**2. Cascading shutdown now reaches every supervised child.**
+
+A child supervised through a **handle clone obtained after the parent started** used to be invisible to the parent's own task and simply outlived it. `ActorHandle` stores its children in a map that is deep-copied on clone. Such a child is now stopped with its parent.
+
+If a child genuinely should outlive its supervisor, start it as a root actor instead of supervising it.
+
+There is a narrower consequence worth checking. Children stopped by a cascading shutdown terminate with `TerminationReason::ParentShutdown`, and `RestartPolicy::Permanent` warrants a restart on a normal termination. The framework suppresses its own restart decisions during shutdown; **a hand-rolled `ChildTerminated` handler does not**. If you restart children from your own handler, check the reason:
+
+```rust
+supervisor.mutate_on::<ChildTerminated>(|actor, ctx| {
+    if matches!(ctx.message().reason, TerminationReason::ParentShutdown) {
+        return Reply::ready();   // we are on the way down
+    }
+    // ...
+});
+```
+
+**3. A graceful stop drains its backlog again.**
+
+An actor receiving `Terminate` now runs `before_stop`, closes its inbox, and works off the messages already queued behind the signal before stopping. This restores documented behaviour that was silently lost in 7.0.0. It means **more of your messages get handled during shutdown than in 8.x**, which is almost always what you wanted, but it is a change in observable behaviour. The drain is bounded: the inbox is closed first, so the backlog can only shrink.
+
+#### Compile errors, and how to fix each
+
+**`ActorConfig::new` no longer takes a parent, and no longer returns a `Result`.**
+
+```rust
+// Was
+ActorConfig::new(id, None, broker)?                              // root
+ActorConfig::new(Ern::with_root(name)?, Some(parent), broker)?   // child
+
+// Now
+ActorConfig::new(id, broker)                                     // root, infallible
+ActorConfig::for_supervised_child(name, parent, broker)?         // child
+```
+
+Migration is mechanical: for a root, drop the `None` and the `?`; for a child, pass the plain **name** where the `Ern` used to be built, and keep the `?`.
+
+The parent branch is deleted rather than patched, because that is where a real defect lived: children named `alpha` and `beta` came out with **identical** identifiers, and differed in practice only because each call happened to draw a fresh random suffix. See "identifiers" below.
+
+**`ActorRuntime::ipc_expose` returns `Result<(), IpcNameInUse>`.**
+
+Handle or `expect()` the result. It no longer silently replaces an existing registration, because overwriting redirected traffic away from an actor that was already serving, with no way for it to learn it had been displaced.
+
+```rust
+runtime.ipc_expose("prices", handle)?;
+```
+
+Release a name with `ipc_hide` if you intend to reuse it. `ipc_rebind` still overwrites, deliberately: that is the supervision engine repointing a name it already owns at a restarted incarnation.
+
+`expose_for_ipc()` remains infallible and still returns `&mut Self`; a conflict is logged at `error!` with both actors named, and the actor starts but is not reachable under that name.
+
+**`IpcError` is now `#[non_exhaustive]`.**
+
+A `match` listing every variant stops compiling. Add a wildcard arm. This is a one-time cost: later variants are additive and will not break it again. The same applies to `SystemSignal`, and to the new `AskError`.
+
+**`SubscriptionManager::register_connection` takes a third argument**, `peer: Option<PeerCredentials>`. Pass `None` if you do not need the identity of the connecting process.
+
+#### Identifiers and IPC names changed
+
+**`expose_for_ipc()` now registers the name you chose.** The old name embedded a `UUIDv7` regenerated on every process start, so it differed on every run and no client, config file or script could ever have named it. **No working program can have depended on the old value.**
+
+| Actor | Was | Now |
+|---|---|---|
+| `new_actor_with_name("prices")` | `prices_01kyww2gfb…` | `prices` |
+| child `"alpha"` of `prices` | `prices_01kyww2gfb…` | `prices/alpha` |
+| child `"beta"` of `prices` | `prices_01kyww2gfb…` | `prices/beta` |
+
+The middle column is not a typo. Every child of one parent registered under the same name and each silently replaced the last, along with the parent itself.
+
+**`create_child` now keeps the name you gave it.** Its `Ern` is `<parent-ern>/<name>`, and the same parent and name always produce the same identifier. Previously the child's name contributed nothing at all.
+
+**A supervision chain is limited to `MAX_SUPERVISION_DEPTH` (10) levels.** Exceeding it now names the child that was refused instead of surfacing a generic identifier error.
+
+#### The framework now restarts supervised children
+
+This is the headline feature, and it **cannot affect any existing program**. A supervisor can only rebuild a child it holds a blueprint for, and blueprints reach the registry only through `supervise_with` and `supervise_deferred`, neither of which has appeared in a released version. Children adopted through `supervise()` have no blueprint and are left down exactly as before.
+
+**That firewall stops applying the moment you migrate a child.** When you do, **delete your hand-rolled restart for that child**, or it will come back twice: once from your handler and once from the framework.
+
+```rust
+// Before: adopt an already-built actor. Never restarted.
+let child_handle = parent_handle.supervise(child).await?;
+
+// After: register a blueprint. Restarted from it on failure.
+let config = ActorConfig::for_supervised_child("worker", parent_handle.clone(), None)?
+    .with_restart_policy(RestartPolicy::Permanent);
+
+let child = parent_handle
+    .supervise_with::<Worker>(&runtime, config, |actor| {
+        actor.mutate_on::<Task>(handle_task);
+    })
+    .await?;
+```
+
+Note what `supervise_with` returns: a **`SupervisedChild`**, not an `ActorHandle`. A handle names one incarnation and goes stale across a restart, silently. Store the `SupervisedChild` and call `current()` at the point of use.
+
+Inside a handler, use `supervise_deferred`, which records the child and queues its start rather than awaiting it on the supervisor's message loop.
+
+**`with_supervision_strategy` and `with_restart_limiter` are no longer deprecated**, because they are now read. Their deprecation notices used to advise hand-rolling a `ChildTerminated` handler, which would now cause exactly the double-restart described above.
+
+`OneForAll` and `RestForOne` are carried out rather than planned and ignored. `ActorConfig::with_escalation` makes `Escalation` reachable; it decides what a supervisor does once a child exhausts its restart allowance. See [Supervision Basics](/docs/core-concepts/supervision-basics).
+
+#### New: ask
+
+`send` returns `()`, so a caller had no way to learn a message had been processed. Awaiting a result meant hand-rolling a channel per call site, or sleeping and hoping.
+
+```rust
+// Before: a client actor, a hand-addressed envelope, a response handler, a sleep
+let query = client_handle.create_envelope(Some(counter_handle.reply_address()));
+query.send(GetCount).await;
+tokio::time::sleep(Duration::from_millis(100)).await;
+
+// After
+let count = counter_handle.ask(GetCount).await?;
+```
+
+Make a message askable by implementing `Request`:
+
+```rust
+impl Request for GetCount {
+    type Response = Count;
+}
+```
+
+Handlers are unchanged: they answer through the reply envelope exactly as before, and an actor cannot tell an `ask` from a `send`. This is purely additive, so nothing forces you to migrate, but it is the fix for most sleeps in test and startup code: **a completed `ask` proves every message sent to that actor beforehand was processed.**
+
+**Do not `ask` from inside a `mutate_on` handler.** Mutable handlers are awaited inline on the message loop, so waiting for a reply stops the actor from processing the message that would produce it. The 30-second default deadline turns that mistake into a prompt `AskError::TimedOut` rather than a hang.
+
+`IpcClient::actor` gives the same call across a process boundary, with the added bounds a wire form requires:
+
+```rust
+let count: Count = handle.ask(GetCount).await?;                  // local
+let count: Count = client.actor("counter").ask(GetCount).await?; // remote
+```
+
+#### New: FlushBroadcasts
+
+`broadcast` completes when the broker has the message, not when subscribers do, and a broadcast cannot answer for itself. `broker.ask(FlushBroadcasts).await` answers once every earlier broadcast is sitting in every subscriber's inbox.
+
+**`shutdown_all` now does this for you** before signalling anything, so broadcasting and then shutting down is no longer a race. You need an explicit flush only when asserting before shutdown, or when the broadcast has not been issued yet.
+
+#### Defaults and configuration
+
+- **`max_connections` now defaults to 1024**, up from 100. If you were relying on the old default as a resource ceiling, set `limits.max_connections` explicitly.
+- **`IpcConfig::load()` prefers `$XDG_CONFIG_HOME/acton/<app_name>/ipc.toml`**, falling back to the shared `$XDG_CONFIG_HOME/acton/ipc.toml`. The shared path still loads, so no action is required.
+- **A refused connection now says why.** A server at its connection limit writes a typed error before closing, and the client reports `IpcError::ConnectionLimitReached { limit }` instead of `Broken pipe` on the first write. Nothing changes on the wire.
+
+#### Also new
+
+`BrokerRef`, `ParentRef` and `SystemSignal` are exported from the prelude. All three were already `pub` but lived in private modules, so they were unnameable from outside the crate even though public signatures referred to them.
+
+`SupervisedChild`, `SupervisionStatus`, `SupervisionState`, `SupervisionError`, `Escalation`, `PeerCredentials`, `IpcNameInUse`, `ConfigSource`, and the `ChildSupervised` / `ChildRestarted` / `SupervisionEscalated` broker events are all new. See the [changelog](https://github.com/Govcraft/acton-reactive/blob/main/acton-reactive/CHANGELOG.md) for the full list.
+
 ### 8.0 → 8.1
 
 An additive release — existing code keeps working.

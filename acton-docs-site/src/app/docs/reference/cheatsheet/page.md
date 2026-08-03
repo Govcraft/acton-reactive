@@ -45,10 +45,15 @@ async fn main() {
 handle.send(DoSomething).await;
 ```
 
-### Request-Response (Reply Envelope)
+### Request-Response (ask)
 
 ```rust
-// Server actor
+// Declare the reply type once
+impl Request for GetValue {
+    type Response = ValueResponse;
+}
+
+// Server actor — unchanged; it answers through the reply envelope
 builder.act_on::<GetValue>(|actor, envelope| {
     let value = actor.model.value;
     let reply = envelope.reply_envelope();
@@ -57,7 +62,21 @@ builder.act_on::<GetValue>(|actor, envelope| {
     })
 });
 
-// Client actor receives response
+// Caller waits for the answer
+let value = handle.ask(GetValue).await?;
+
+// With an explicit deadline instead of DEFAULT_ASK_TIMEOUT (30s)
+let value = handle.ask_with_timeout(GetValue, Duration::from_millis(250)).await?;
+```
+
+A completed `ask` also proves everything sent to that actor beforehand was processed, because inboxes are FIFO. **Never `ask` from inside a `mutate_on` handler** — it deadlocks.
+
+### Request-Response (Reply Envelope, actor to actor)
+
+For an exchange inside a handler, where asking would deadlock, or when one request produces several replies:
+
+```rust
+// Requester sends, and handles the answer as an ordinary message
 client.mutate_on::<ValueResponse>(|actor, envelope| {
     let value = envelope.message().0;
     println!("Got: {}", value);
@@ -84,6 +103,20 @@ let handle = builder.start().await;
 // use unsubscribe_async::<Event>().await to await delivery to the broker
 handle.unsubscribe::<Event>();
 ```
+
+### Wait for a Broadcast to Land
+
+```rust
+broker.broadcast(Event { data: "hello".into() }).await;
+
+// Delivery: every earlier broadcast is now in every subscriber's inbox
+broker.ask(FlushBroadcasts).await?;
+
+// Completion for one subscriber: the broadcast is ahead of this in its inbox
+let seen = subscriber_handle.ask(GetSeen).await?;
+```
+
+`shutdown_all` flushes the broker for you, so broadcasting and then shutting down is not a race.
 
 ---
 
@@ -207,26 +240,31 @@ builder.try_act_on::<GetBalance, Balance, BankError>(|actor, _ctx| {
 
 ### Create and Supervise Child
 
-Build the child from the runtime, give it a **parent reference**, then hand it to `supervise()`:
+Name the child and its parent, then register it with a **blueprint** the framework replays on every restart:
 
 ```rust
 // Start the parent
 let parent = runtime.new_actor::<ParentState>();
 let parent_handle = parent.start().await;
 
-// Build the child with the parent in its config — this is what enables
-// ChildTerminated notifications back to the parent.
-let config = ActorConfig::new(
-    Ern::with_root("worker")?,
-    Some(parent_handle.clone()),
-    None,
-)?;
-let mut child = runtime.new_actor_with_config::<WorkerState>(config);
-child.mutate_on::<Task>(handle_task);
+let config = ActorConfig::for_supervised_child("worker", parent_handle.clone(), None)?
+    .with_restart_policy(RestartPolicy::Permanent);
 
-// supervise() starts the child and registers it under the parent
-let child_handle = parent_handle.supervise(child).await?;
+let child = parent_handle
+    .supervise_with::<WorkerState>(&runtime, config, |actor| {
+        actor.mutate_on::<Task>(handle_task);
+    })
+    .await?;
+
+// SupervisedChild, not ActorHandle: current() names the live incarnation.
+child.current()?.send(Task).await;
 ```
+
+From inside a handler use `supervise_deferred(config, blueprint)`, which queues the start instead of awaiting it.
+
+{% callout type="warning" title="Don't store an ActorHandle for a supervised child" %}
+A handle names one incarnation and goes stale when the child restarts, silently. Hold the `SupervisedChild` and call `current()` at the point of use.
+{% /callout %}
 
 {% callout type="note" title="create_child() is Idle-only" %}
 `create_child()` exists only on a builder (`ManagedActor<Idle, _>`), not on a running actor — so you can't call it from inside a handler, and it returns an actor with the *same* state type as its parent. To spawn a differently-typed worker, use `runtime.new_actor_with_config()` as above.
@@ -363,10 +401,10 @@ async fn test_actor() {
     let handle = counter.start().await;
     handle.send(Increment).await;
 
-    // Use probe actor or atomic counter to verify
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    // Wait on a reply, never on a sleep.
+    assert_eq!(handle.ask(GetCount).await?.0, 1);
 
-    runtime.shutdown_all().await.ok();
+    runtime.shutdown_all().await?;
 }
 ```
 
@@ -458,10 +496,17 @@ use acton_reactive::ipc::protocol::{write_envelope, read_response};
 | `ActonApp::launch()` **from an async context** (panics) | `ActonApp::launch_async().await`. `launch()` is fine from `fn main()`. |
 | `ctx.message` | `ctx.message()` — it's an accessor, not a field |
 | `actor.children()` | `actor.handle().children()` |
-| `actor.create_child(..)` inside a handler | `create_child` is `Idle`-only; build from the runtime and `supervise()` |
+| `actor.create_child(..)` inside a handler | `create_child` is `Idle`-only; use `supervise_deferred(config, blueprint)` from a handler |
 | `#[acton_actor]` + `#[derive(Default)]` + manual `impl Default` | `#[acton_actor(no_default)]` + manual `impl Default` |
 | `runtime.new_actor::<T>().mutate_on::<M>(h).start()` | Configure via `&mut` first, *then* `builder.start().await` |
-| `handle.ask(msg)` | Use reply envelope pattern |
+| `handle.ask(msg)` inside a `mutate_on` handler | Deadlocks. Send instead, or ask from a task, a test, or `main` |
+| `ActorConfig::new(id, Some(parent), broker)?` | `ActorConfig::for_supervised_child(name, parent, broker)?` |
+| `ActorConfig::new(id, None, broker)?` | `ActorConfig::new(id, broker)` — infallible, no parent argument |
+| Storing an `ActorHandle` for a supervised child | Store the `SupervisedChild`; call `current()` at the point of use |
+| Restarting a child from your own `ChildTerminated` handler | The framework restarts children with blueprints. Yours would restart it twice |
+| `unsupervise` to stop supervising but keep the child running | `unsupervise` **stops** the child; use `release` to keep it running |
+| `runtime.ipc_expose(name, handle);` | It returns `Result<(), IpcNameInUse>` — handle it |
+| `tokio::time::sleep` to wait for a message | `handle.ask(..)`, or `broker.ask(FlushBroadcasts)` for a broadcast |
 | `Reply::with(value)` | Use `Reply::pending` + reply envelope |
 | Forgetting `.await` on `start()` | `builder.start().await` |
 | Mutating in `act_on` | Use `mutate_on` for state changes |

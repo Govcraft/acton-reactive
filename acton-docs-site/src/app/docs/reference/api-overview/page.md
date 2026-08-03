@@ -35,7 +35,7 @@ What `launch_async()` returns. This is where actor creation, the broker, shutdow
 | `actor_count()` | Number of top-level actors |
 | `shutdown_all().await` | Graceful shutdown of the whole system |
 | `ipc_registry()` | Access IPC type registry |
-| `ipc_expose(name, handle)` | Expose actor for IPC |
+| `ipc_expose(name, handle)` | Expose actor for IPC. Returns `Result<(), IpcNameInUse>`; it no longer replaces an existing registration |
 | `ipc_hide(name)` | Remove IPC exposure |
 | `ipc_lookup(name)` | Find an IPC-exposed actor |
 | `start_ipc_listener().await` | Start IPC listener (default config) |
@@ -88,6 +88,8 @@ handle.stop().await.ok();
 | Method | Description |
 |--------|-------------|
 | `send(msg).await` | Fire-and-forget message |
+| `ask(request).await` | Send a request and wait for the reply |
+| `ask_with_timeout(request, dur).await` | `ask` with an explicit deadline |
 | `broadcast(msg).await` | Publish to the broker for all subscribers |
 | `stop().await` | Stop the actor |
 | `subscribe::<M>().await` | Subscribe to broadcast messages |
@@ -95,11 +97,67 @@ handle.stop().await.ok();
 | `unsubscribe_async::<M>().await` | Unsubscribe, awaiting delivery of the request to the broker |
 | `reply_address()` | Get this actor's address, for use as a return address |
 | `create_envelope(recipient)` | Create an envelope **from** this actor **to** `recipient` |
-| `supervise(child).await` | Start a child and register it under this actor |
-| `children()` | The map of supervised children |
-| `find_child(&ern)` | Look up a direct child by ERN |
+| `supervise_with::<S>(&runtime, config, blueprint).await` | Register a child with a blueprint; returns `SupervisedChild`. **The framework restarts it** |
+| `supervise(child).await` | Adopt an already-built actor for cascading shutdown. No blueprint, so **never restarted** |
+| `unsupervise(&ern).await` | Retire the record and **stop** the child, dropping its IPC names |
+| `release(&ern).await` | Retire the record and hand the child back **still running** |
+| `children()` | The local view of children supervised through *this handle clone*; handles go stale across a restart |
+| `find_child(&ern)` | Look up a direct child by ERN, with the same caveat |
 | `id()` | Get actor's identifier (`Ern`) |
 | `name()` | Get actor's root name |
+
+### ask and Request
+
+`ask` sends a request and waits for the reply. A message becomes askable by implementing `Request`, which names the reply through an associated type:
+
+```rust
+impl Request for GetCount {
+    type Response = Count;
+}
+
+let count = handle.ask(GetCount).await?;
+```
+
+Because inboxes are FIFO, a completed `ask` also proves every message sent to that actor beforehand has been processed. Handlers are unchanged: they answer through the reply envelope, and an actor cannot tell an `ask` from a `send`.
+
+`ask` always finishes, backed by a 30-second `DEFAULT_ASK_TIMEOUT`. Outcomes come back as `AskError`, which is `#[non_exhaustive]`:
+
+| Variant | Meaning |
+|---|---|
+| `NoReply` | Delivered, but no answer is coming |
+| `TimedOut { after }` | The reply address is still live; the deadline expired |
+| `Undeliverable` | The inbox was already closed |
+| `Cancelled` | Delivery was abandoned during shutdown |
+| `UnexpectedReply` | The handler answered with a type the request does not declare |
+| `PeerRejected { code, detail }` | *(IPC)* The peer refused before dispatch; a retry is safe |
+| `TransportFailed { detail }` | *(IPC)* The connection failed; whether it was processed is unknown |
+
+**Do not `ask` from inside a `mutate_on` handler.** Mutable handlers are awaited inline on the message loop, so waiting for a reply stops the actor from processing the message that would produce it.
+
+### SupervisedChild
+
+A reference to a supervised child that survives its restarts. `ActorHandle` names one incarnation and goes stale; `SupervisedChild` reads a status channel its supervisor publishes to.
+
+| Method | Description |
+|--------|-------------|
+| `current()` | Handle for the incarnation running right now |
+| `wait_running().await` | Block until an incarnation is up; errors once escalated |
+| `wait_generation(gen).await` | Block until a specific incarnation is up |
+| `status()` | The published `SupervisionStatus`: state, generation, last reason |
+
+`SupervisionState` is `Starting`, `Running`, `RestartPending`, `Restarting`, `Down` (will not come back), or `Escalated` (allowance exhausted).
+
+### FlushBroadcasts
+
+A barrier for broadcasts. `broadcast` completes when the broker has the message, not when subscribers do, and a broadcast carries no reply address for a subscriber to answer.
+
+```rust
+broker.ask(FlushBroadcasts).await?;   // answers BroadcastsFlushed
+```
+
+The reply cannot arrive until every earlier broadcast is sitting in every subscriber's inbox. That is **delivery, not completion**: to know a particular subscriber has handled it, `ask` that subscriber afterwards.
+
+`ActorRuntime::shutdown_all` flushes the broker before signalling anything, so broadcasting and then shutting down is not a race.
 
 ### Reply
 
@@ -194,13 +252,15 @@ use acton_reactive::prelude::*;
 | Category | Items |
 |----------|-------|
 | Macros | `acton_actor`, `acton_message`, `acton_main` |
-| System | `ActonApp`, `ActorRuntime`, `ActorConfig`, `Broker` |
+| System | `ActonApp`, `ActorRuntime`, `ActorConfig`, `Broker`, `BrokerRef`, `ParentRef` |
 | Actors | `ManagedActor`, `Idle`, `Started`, `ActorHandle` |
 | Handlers | `Reply` |
-| Messages | `BrokerRequest`, `BrokerRequestEnvelope`, `MessageAddress`, `OutboundEnvelope`, `ChildTerminated` |
-| Supervision | `RestartPolicy`, `TerminationReason`, `SupervisionStrategy`, `SupervisionDecision`, `RestartLimiter`, `RestartLimiterConfig`, `RestartLimitExceeded`, `RestartStats` |
-| Traits | `ActonMessage`, `ActorHandleInterface`, `Broadcaster`, `Subscribable`, `Subscriber` |
+| Request/reply | `AskError`, `DEFAULT_ASK_TIMEOUT` |
+| Messages | `BrokerRequest`, `BrokerRequestEnvelope`, `MessageAddress`, `OutboundEnvelope`, `ChildTerminated`, `SystemSignal`, `FlushBroadcasts`, `BroadcastsFlushed` |
+| Supervision | `SupervisedChild`, `SupervisionStatus`, `SupervisionState`, `SupervisionError`, `Escalation`, `RestartPolicy`, `TerminationReason`, `SupervisionStrategy`, `SupervisionDecision`, `RestartLimiter`, `RestartLimiterConfig`, `RestartLimitExceeded`, `RestartStats`, `RestartGeneration`, `ChildIndex`, `BackoffDelay`, `MAX_SUPERVISION_DEPTH` |
+| Supervision events | `ChildSupervised`, `ChildRestarted`, `SupervisionEscalated` |
+| Traits | `ActonMessage`, `ActorHandleInterface`, `Broadcaster`, `Request`, `Subscribable`, `Subscriber` |
 | Re-exports | everything from `acton_ern`, plus `async_trait` and `tokio` |
-| IPC (`ipc` feature) | `IpcClient`, `IpcClientConfig`, `IpcConfig`, `IpcEnvelope`, `IpcError`, `IpcResponse`, `IpcListenerHandle`, `IpcListenerStats`, `IpcTypeRegistry`, `ShutdownResult` |
+| IPC (`ipc` feature) | `IpcClient`, `IpcClientConfig`, `IpcConfig`, `IpcEnvelope`, `IpcError`, `IpcResponse`, `IpcListenerHandle`, `IpcListenerStats`, `IpcTypeRegistry`, `RemoteActorRef`, `ShutdownResult`, and the `RemoteRequest` trait |
 
 Note that `MessageContext` is deliberately **not** in the prelude; handlers receive it as an inferred closure parameter.
