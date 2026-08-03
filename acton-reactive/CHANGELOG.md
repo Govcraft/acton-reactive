@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example, an async database connect, and an async-work demonstration.
   Measured 0 failures in 20 runs of the full suite, against 26 racy tests before.
 
+- **`examples/lifecycles` slept three seconds to outlast a two-second handler.**
+  Its `GetItems` handler is a mutable one, so the actor awaits it before taking
+  another message and `Terminate` queues behind it regardless. The sleep bought
+  nothing and cost three seconds per run.
+
 
 - **A graceful stop drains the messages queued behind its signal again.** An
   actor that receives `SystemSignal::Terminate` runs `before_stop`, closes its

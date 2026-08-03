@@ -98,8 +98,10 @@ async fn main() {
     // Send GetItems, which will print after a delay.
     tracker_handle.send(GetItems).await;
 
-    // Allow time for GetItems async handler to complete before shutdown.
-    sleep(Duration::from_secs(3)).await;
+    // No wait is needed here. `GetItems` is a `mutate_on` handler, so the actor awaits
+    // its future before taking another message - and `shutdown_all` sends `Terminate`
+    // as an ordinary message, which therefore queues behind the work above rather than
+    // interrupting it. Sleeping "long enough" would only be a guess at the same thing.
 
     // 6. Shut down the runtime. Lifecycle: before_stop -> after_stop.
     runtime
