@@ -150,6 +150,13 @@ keeps exclusive ownership of the state it makes decisions on. Do not
 over-correct into polling with `ask` in a loop; that is a worse design than the
 channel it was avoiding.
 
+Be honest about why this works, because the reason is not "locks are bad".
+A `watch` channel is an `Arc<RwLock<T>>` internally. What you gain is that the
+lock is held by one writer for one uncontended store, and readers get a
+consistent snapshot instead of reading two fields that were written at
+different times and calling the pair a state. The discipline is what helps;
+the absence of a lock is a consequence, not the point.
+
 (It is `Option<watch::Sender<_>>` in practice, because `#[acton_actor]` derives
 `Default` and senders have none. Wire it in after construction.)
 

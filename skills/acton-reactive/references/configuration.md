@@ -37,6 +37,27 @@ malformed logs an error and *also* falls back to defaults, so a typo does not
 crash the program, it silently un-tunes it. If a setting seems to be ignored,
 check the startup logs for a parse error before assuming the key is wrong.
 
+## Different settings per environment
+
+There is no "environment" concept and no `--config` flag. The loader only ever
+looks for `acton/config.toml` under the XDG config directories, so the way to
+give staging and production different values is to **point `XDG_CONFIG_HOME` at
+a different directory per deployment**:
+
+```ini
+# /etc/systemd/system/ingest.service.d/override.conf
+[Service]
+Environment=XDG_CONFIG_HOME=/etc/ingest-service/prod
+```
+
+with the file at `/etc/ingest-service/prod/acton/config.toml`. Staging points
+at its own directory with its own copy. This keeps one binary and one code
+path, which is the thing ops actually asked for.
+
+Note that `XDG_CONFIG_HOME` is process-wide, so it also relocates any *other*
+XDG-aware config your program reads. That is usually what you want, but it is
+worth knowing before you set it.
+
 ## Precedence
 
 ```
