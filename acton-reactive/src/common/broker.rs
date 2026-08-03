@@ -27,8 +27,8 @@ use tracing::{instrument, trace};
 use crate::actor::{ActorConfig, Idle, ManagedActor};
 use crate::common::{ActorHandle, ActorRuntime, BrokerRef};
 use crate::message::{
-    BrokerRequest, BrokerRequestEnvelope, RemoveAllSubscriptions, RemoveSubscription,
-    SubscribeBroker,
+    BroadcastsFlushed, BrokerRequest, BrokerRequestEnvelope, FlushBroadcasts,
+    RemoveAllSubscriptions, RemoveSubscription, SubscribeBroker,
 };
 use crate::traits::ActorHandleInterface;
 
@@ -207,6 +207,18 @@ impl Broker {
                 Box::pin(async move {
                     Self::remove_all_subscriptions(&subscribers_map, &subscriber_id);
                     trace!(subscriber = %subscriber_id, "All subscriptions removed");
+                })
+            })
+            .mutate_on::<FlushBroadcasts>(|_actor, event| {
+                // The barrier. This handler does no work of its own; reaching it is the
+                // whole point. Because this is a mutable handler on a FIFO inbox, every
+                // `BrokerRequest` queued ahead of it has already been fanned out to every
+                // subscriber's inbox by the time we get here, so the reply carries that
+                // guarantee to the caller.
+                trace!("Broker received FlushBroadcasts");
+                let reply = event.reply_envelope();
+                Box::pin(async move {
+                    reply.send(BroadcastsFlushed).await;
                 })
             });
 

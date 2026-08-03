@@ -25,6 +25,7 @@ use tracing::{error, trace};
 use crate::actor::{ActorConfig, Idle, ManagedActor};
 use crate::common::acton_inner::ActonInner;
 use crate::common::{ActorHandle, BrokerRef};
+use crate::message::FlushBroadcasts;
 use crate::traits::ActorHandleInterface;
 
 /// An IPC name was already claimed by another actor.
@@ -592,26 +593,37 @@ impl ActorRuntime {
     /// issued *during* the drain, once the inbox is closed - which is exactly
     /// what bounds the drain and stops it running forever.
     ///
-    /// Between actors there is no such guarantee, because each one closes its
-    /// inbox on its own schedule and they are all signalled at once. A message
-    /// arriving at an actor that has already begun draining is lost. That
-    /// affects in particular:
+    /// Between actors there is no such guarantee in general, because each one
+    /// closes its inbox on its own schedule and they are all signalled at once.
+    /// A message arriving at an actor that has already begun draining is lost.
     ///
-    /// - the second hop of a broker broadcast, since
-    ///   [`broadcast`](crate::traits::Broadcaster::broadcast) completes when the
-    ///   broker has the message, not when subscribers have handled it,
-    /// - a `before_stop` hook that broadcasts to peers which are also being
-    ///   stopped, since their stop signals were enqueued at the same time.
+    /// # Broadcasts are flushed first
     ///
-    /// To wait for such work, establish that it finished before calling this
-    /// method - for example by having the last actor in the chain signal a
-    /// channel that the caller awaits. Stopping one actor with
-    /// [`ActorHandle::stop`](crate::common::ActorHandle::stop) while its audience
-    /// is still running is the way to have a `before_stop` broadcast observed.
+    /// Broadcasting is the one cross-actor case this method handles for you.
+    /// [`broadcast`](crate::traits::Broadcaster::broadcast) completes when the
+    /// broker has the message, not when subscribers do, so broadcasting and then
+    /// shutting down would otherwise be a race. Before signalling anything, this
+    /// method asks the broker to
+    /// [`FlushBroadcasts`](crate::message::FlushBroadcasts); the reply cannot
+    /// arrive until every earlier broadcast is sitting in every subscriber's
+    /// inbox, so `Terminate` queues behind that work rather than ahead of it.
     ///
-    /// Note that ordering matters here: root actors are signalled first and the
-    /// broker is stopped last, precisely so that messages still being routed
-    /// while actors wind down continue to reach their subscribers.
+    /// The broker is flushed here, not stopped - it is stopped last, so that it
+    /// stays available to route whatever actors still emit as they wind down.
+    ///
+    /// # What still needs a barrier
+    ///
+    /// Work that has not been *started* by the time this is called cannot be
+    /// waited for, since there is nothing yet to flush. In particular a
+    /// `before_stop` hook that broadcasts to peers which are also stopping runs
+    /// after shutdown has begun, so its audience may already be draining.
+    ///
+    /// For those cases, establish that the work finished before calling this
+    /// method: [`ask`](crate::traits::ActorHandleInterface::ask) the actor at the
+    /// end of the chain, which resolves only once it has answered. Stopping one
+    /// actor with [`ActorHandle::stop`](crate::common::ActorHandle::stop) while
+    /// its audience is still running is the way to have a `before_stop` broadcast
+    /// observed.
     ///
     /// # Returns
     ///
@@ -620,6 +632,26 @@ impl ActorRuntime {
     pub async fn shutdown_all(&mut self) -> anyhow::Result<()> {
         use std::time::Duration;
         use tokio::time::timeout as tokio_timeout;
+
+        // Phase 0: Drain the broker before anything is told to stop.
+        //
+        // `broadcast` completes when the broker has the message, not when subscribers
+        // do, so a broadcast issued just before this call would otherwise race the
+        // `Terminate` signals below and be dropped by subscribers that closed first.
+        // Asking the broker to flush closes that gap: the broker's FIFO inbox means the
+        // reply cannot arrive until every earlier broadcast has been handed to every
+        // subscriber, so `Terminate` now queues *behind* that work rather than ahead of
+        // it, and each actor drains its backlog before stopping.
+        //
+        // This flushes the broker; it does not stop it. The broker stays live to route
+        // whatever the winding-down actors still emit, which is why it is stopped last.
+        //
+        // A failure here is not fatal to shutdown: it means the broker is already gone
+        // or unreachable, in which case there is nothing left to flush.
+        trace!("Flushing the broker before signalling any actor.");
+        if let Err(e) = self.0.broker.ask(FlushBroadcasts).await {
+            trace!("Broker flush did not complete ({e}); continuing with shutdown.");
+        }
 
         // Phase 1: Concurrently signal all root actors to terminate gracefully.
         trace!("Sending Terminate signal to all root actors.");

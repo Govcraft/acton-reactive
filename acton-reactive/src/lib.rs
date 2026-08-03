@@ -189,8 +189,8 @@ pub mod prelude {
         DEFAULT_ASK_TIMEOUT,
     };
     pub use crate::message::{
-        BrokerRequest, BrokerRequestEnvelope, ChildTerminated, MessageAddress, OutboundEnvelope,
-        SystemSignal,
+        BroadcastsFlushed, BrokerRequest, BrokerRequestEnvelope, ChildTerminated, FlushBroadcasts,
+        MessageAddress, OutboundEnvelope, SystemSignal,
     };
     pub use crate::traits::{
         ActonMessage, ActorHandleInterface, Broadcaster, Request, Subscribable, Subscriber,

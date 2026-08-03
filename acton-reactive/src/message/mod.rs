@@ -40,6 +40,7 @@
 // --- Public Re-exports ---
 pub use broker_request::BrokerRequest;
 pub use broker_request_envelope::BrokerRequestEnvelope;
+pub use flush_broadcasts::{BroadcastsFlushed, FlushBroadcasts};
 pub use message_address::MessageAddress;
 pub use outbound_envelope::OutboundEnvelope;
 pub use signal::{ChildTerminated, SystemSignal};
@@ -64,6 +65,8 @@ mod broker_request;
 mod broker_request_envelope;
 /// Defines the internal `Envelope` used for channel communication.
 mod envelope;
+/// Defines [`FlushBroadcasts`] and its reply [`BroadcastsFlushed`].
+mod flush_broadcasts;
 /// Defines [`MessageAddress`].
 mod message_address;
 /// Defines [`MessageContext`] passed to message handlers.

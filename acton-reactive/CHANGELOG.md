@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+
 - **A graceful stop drains the messages queued behind its signal again.** An
   actor that receives `SystemSignal::Terminate` runs `before_stop`, closes its
   inbox, and then works off the backlog already queued, dispatching each message
@@ -87,6 +88,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their assertions on elapsed time.
 
 ### Changed
+
+- **`ActorRuntime::shutdown_all` now flushes the broker before it signals
+  anything.** Broadcasting and then shutting down used to be a race: `Terminate`
+  went out to every actor while the broadcast was still in the broker's inbox,
+  so subscribers that closed first never saw it. Shutdown now asks the broker to
+  [`FlushBroadcasts`] first, which puts `Terminate` behind that work rather than
+  ahead of it.
+
+  This flushes the broker; it does not stop it. The broker is still stopped
+  last, so it stays available to route what actors emit as they wind down.
+  Stopping it first was measured strictly worse.
+
+  Work that has not been *started* by the time you call `shutdown_all` still
+  cannot be waited for - there is nothing yet to flush. A `before_stop` hook
+  that broadcasts to peers which are also stopping is the main such case.
+
 
 - **`ActorRuntime::shutdown_all` now documents what is and is not delivered on
   the way down.** Within a single actor a chain does reach its end, because a
@@ -172,6 +189,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reason, so `wait_running()` returns instead of waiting forever.
 
 ### Added
+
+- **`FlushBroadcasts`, a barrier for broadcasts.** `broadcast` completes when
+  the broker has the message, not when subscribers do, so there was previously
+  no way to establish that a broadcast had been delivered. Unlike a direct
+  message a broadcast cannot answer for itself: the broker hands subscribers the
+  payload alone, with no reply address, so there is nothing for a subscriber to
+  reply to. The broker is the only participant that can speak for a broadcast.
+
+  `broker.ask(FlushBroadcasts).await` answers `BroadcastsFlushed`, and because
+  the broker's inbox is FIFO and its broadcast handler is a mutable one that
+  awaits fan-out before dequeuing the next message, the reply cannot arrive
+  until every earlier broadcast is sitting in every subscriber's inbox.
+
+  That is delivery, not completion. To know a *particular* subscriber has
+  finished handling it, `ask` that subscriber afterwards - the broadcast is
+  already ahead of your request in its inbox.
+
+  **Flushing on every `broadcast` was considered and rejected.** Inboxes are
+  bounded, so an actor that broadcasts from inside a mutable handler would block
+  inline awaiting the broker's acknowledgement while the broker blocked pushing
+  into a full inbox, possibly that same actor's. That is a deadlock, and
+  broadcasting from a handler is a pattern this project's own examples use.
+
 
 - **`BrokerRef`, `ParentRef`, and `SystemSignal` are now exported from the
   prelude.** All three were already `pub`, but lived in private modules, so they
