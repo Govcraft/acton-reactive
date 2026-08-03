@@ -5,214 +5,9 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [9.0.0] - 2026-08-03
 
-### Fixed
-
-- **Twenty-six documentation-example tests were never deterministic.** They
-  synchronised with `tokio::time::sleep` and so certified patterns that do not
-  hold; measured over ten runs of the suite, individual tests failed anywhere
-  from one to ten times out of ten, and two failed every single time. Because
-  each mirrors a published documentation snippet, the sleeps were not merely
-  test noise - they were the pattern being taught.
-
-  All the synchronising sleeps are gone. Request/reply examples use `ask`, whose
-  reply is proof the handler ran; because inboxes are FIFO, one `ask` is also
-  the barrier for everything sent to that actor beforehand. Broadcast examples
-  rely on the `shutdown_all` flush above, or use `FlushBroadcasts` explicitly
-  where the broadcast has not been issued yet. The genuinely order-independent
-  cases - a stream of replies, an actor still performing async initialization -
-  hold the reply envelope and answer when the work is done, so the result does
-  not depend on whether the question arrived first.
-
-  Four sleeps remain, all inside handlers, modelling slow work rather than
-  guessing at timing: a deliberately slow service in the `ask_with_timeout`
-  example, an async database connect, and an async-work demonstration.
-  Measured 0 failures in 20 runs of the full suite, against 26 racy tests before.
-
-- **`examples/lifecycles` slept three seconds to outlast a two-second handler.**
-  Its `GetItems` handler is a mutable one, so the actor awaits it before taking
-  another message and `Terminate` queues behind it regardless. The sleep bought
-  nothing and cost three seconds per run.
-
-
-- **A graceful stop drains the messages queued behind its signal again.** An
-  actor that receives `SystemSignal::Terminate` runs `before_stop`, closes its
-  inbox, and then works off the backlog already queued, dispatching each message
-  to its handler as normal, before stopping its loop.
-
-  **This restores a written contract rather than introducing a behaviour.** The
-  rustdoc on `SystemSignal::Terminate` has said all along that a terminating
-  actor should "1. Stop accepting new work. 2. Complete any in-progress tasks.
-  … 6. Stop its message processing loop." Since v7.0.0 the loop did 1 and 6 and
-  skipped 2. That text is unchanged by this release: it was never wrong, it was
-  the specification the code had quietly stopped honouring, and it is true again.
-
-  The drain shipped through v0.6.0 and was lost in `79aeb80c` (released in
-  **v7.0.0**, and broken in every release since, up to and including 8.2.0),
-  where a `break` was added to the stop-signal arm of the actor's message loop.
-  That change was incidental rather than deliberate: the same commit introduced
-  a deferred-init `termination_reason` binding, and without the `break` the loop
-  fell through to a second assignment of that immutable binding, i.e. E0384. The
-  `break` made the new bookkeeping compile and silently narrowed shutdown
-  semantics as a side effect. Nothing in the commit concerned shutdown, and the
-  CHANGELOG never recorded a change.
-
-  The visible symptom was `examples/basic`, which asserts its actor processed
-  both messages of a Ping/Pong exchange. It passed deterministically through
-  v0.6.0 and has failed intermittently ever since - 24 of 40 runs on this
-  machine - because the `PongMsg` its handler sends races the stop signal and
-  usually lands behind it. With the drain restored the same unmodified example
-  passes 40 of 40.
-
-  **The drain is bounded and cannot hang.** Closing the inbox first is what
-  bounds it: new sends are rejected, so the backlog can only shrink, and a
-  handler running during the drain cannot feed the loop more work. This is not a
-  "drain until quiescent" that two actors messaging each other could keep alive
-  indefinitely.
-
-- **The `broadcast` example no longer races its own shutdown.** It reported the
-  final sum from the `Aggregator`'s `before_stop` hook, so the message was
-  emitted after shutdown had begun and had to cross the broker a second time to
-  reach the `Printer` — which by then could already have closed its inbox. The
-  example has never printed the right total in any released version; measured
-  here it failed 40 of 40 runs.
-
-  It now closes the pipeline explicitly instead. `main` broadcasts the data and
-  then a `Finalize` marker, which the broker's FIFO inbox places behind that
-  data at every subscriber; each collector answers with a `Finished` marker, and
-  the `Aggregator` reports the total there rather than from `before_stop`. The
-  `Printer` counts the markers and answers an `ask`, holding the reply envelope
-  if the request arrives before the work is done — which is what makes the
-  result independent of arrival order rather than merely likely. Measured 0
-  failures in 100 runs.
-
-  **Shutdown ordering is unchanged.** Broker-first was tried and measured
-  strictly worse; the broker is live routing fabric during shutdown, not a queue
-  to flush.
-
-- **The most fragile documentation-example tests now wait on `ask` rather than a
-  fixed sleep.** `test_lightweight_handlers`, `test_deferred_reply` and
-  `test_child_lifecycle_hooks` gated their assertions on `tokio::time::sleep`,
-  so they certified a pattern that does not hold. Each now waits for the thing
-  it actually depends on, and asserts more than it did:
-
-  - `test_lightweight_handlers` uses two asks. Its handler self-sends
-    `ProcessComplete` from a pending future, so a single ask would sit *ahead*
-    of that message and observe the unfinished state — the same race behind a
-    nicer API. Asking `Process` first, with its reply sent after the self-send,
-    puts the second ask strictly behind it.
-  - `test_deferred_reply` no longer reads a task id out of an atomic after a
-    50 ms guess and feed it into the next message; the id comes back from the
-    ask, and a mismatched id is now caught explicitly instead of silently
-    missing the pending-reply map.
-  - `test_child_lifecycle_hooks` asks the child instead of sleeping. Because
-    `after_start` runs to completion before the actor takes its first message, a
-    reply proves the hook has already run.
-
-  The remaining sleeps in `tests/docs_examples/` are unchanged and still gate
-  their assertions on elapsed time.
-
-### Changed
-
-- **`ActorRuntime::shutdown_all` now flushes the broker before it signals
-  anything.** Broadcasting and then shutting down used to be a race: `Terminate`
-  went out to every actor while the broadcast was still in the broker's inbox,
-  so subscribers that closed first never saw it. Shutdown now asks the broker to
-  [`FlushBroadcasts`] first, which puts `Terminate` behind that work rather than
-  ahead of it.
-
-  This flushes the broker; it does not stop it. The broker is still stopped
-  last, so it stays available to route what actors emit as they wind down.
-  Stopping it first was measured strictly worse.
-
-  Work that has not been *started* by the time you call `shutdown_all` still
-  cannot be waited for - there is nothing yet to flush. A `before_stop` hook
-  that broadcasts to peers which are also stopping is the main such case.
-
-
-- **`ActorRuntime::shutdown_all` now documents what is and is not delivered on
-  the way down.** Within a single actor a chain does reach its end, because a
-  handler running before the stop signal is dequeued still has an open inbox, so
-  a message it sends to its own actor lands and is drained. Between actors there
-  is no such guarantee: each closes its inbox on its own schedule and all are
-  signalled at once, so the second hop of a broker broadcast, and a `before_stop`
-  hook broadcasting to peers that are stopping too, can still be lost.
-
-  Root actors are still signalled first and the broker stopped last. That order
-  is deliberate and is now documented as such: the broker is the routing fabric
-  for messages still in flight while actors wind down, so stopping it first
-  strands them.
-
-- **The framework now restarts supervised children.** A child registered with
-  `ActorHandle::supervise_with` or `ManagedActor::supervise_deferred` that
-  terminates in a way its `RestartPolicy` warrants a restart from is rebuilt
-  from its blueprint, after an exponential backoff, keeping its identifier.
-  All three supervision strategies are carried out; see the group-restart entry
-  below for `OneForAll` and `RestForOne`.
-
-  **This cannot restart a child in any existing program.** A supervisor can only
-  rebuild a child it holds a blueprint for, and blueprints reach the registry
-  only through `supervise_with` and `supervise_deferred`, neither of which has
-  appeared in a released version. Children adopted through `supervise()` have no
-  blueprint, so the decision layer leaves them down — before their restart
-  allowance is even consulted — exactly as today. **No program written against a
-  released version can have a child restarted twice**, including one that
-  hand-rolls restarts from its own `ChildTerminated` handler.
-
-  That guarantee covers **restarts, and the IPC name sweeps that follow a child
-  reaching a terminal state or being cascaded down with its supervisor**. It
-  does *not* extend to `ActorHandle::unsupervise`, which drops the IPC names of
-  any child it stops — see its own entry below.
-
-  That firewall stops applying the moment you migrate a child to
-  `supervise_with` or `supervise_deferred`. **When you do, delete your
-  hand-rolled restart for that child**, or it will come back twice: once from
-  your handler and once from the framework.
-
-  A `ChildTerminated` handler you already have keeps running either way. The
-  framework's bookkeeping is additive and does not suppress your handler; it
-  only runs first, so a handler that inspects its supervisor sees a settled
-  registry rather than a half-updated one.
-
-- **`SupervisionStrategy::OneForAll` and `RestForOne` are now carried out.**
-  Previously they were planned correctly and then ignored: the supervisor
-  restarted only the child that failed and logged that the rest of the plan was
-  not performed.
-
-  A group restart stops the siblings the strategy names in **reverse start
-  order**, each one fully down before the one before it is asked, and the whole
-  group is down before any of it comes back. The rebuilds are then *requested*
-  in start order — but not awaited in that order, because each start runs on its
-  own task so that a child's `before_start` cannot stop the supervisor taking
-  messages. A child that cannot come up until a sibling is ready should wait for
-  it rather than assume start order has done that for it.
-
-  **One backoff is charged for the whole group**, against the child that failed.
-  A sibling stopped and rebuilt by a group restart it did not cause spends none
-  of its own restart allowance.
-
-  A sibling the supervisor holds no blueprint for is still **stopped** and
-  simply never comes back. That is deliberate: the point of `OneForAll` is that
-  the children are interdependent, so leaving one running against a freshly
-  restarted set would expose exactly the inconsistent state the strategy exists
-  to prevent. In practice this only reaches children adopted through the legacy
-  `supervise()` path.
-
-  A supervisor that begins shutting down mid-group-restart abandons the group
-  rather than driving it, and settles every child left part-way through so that
-  nothing waits on an incarnation that will never be built.
-
-- **Fixed: a group plan listed the child that failed among the children to
-  stop.** The registry is consulted before the supervisor records the
-  termination, so the child that just died still read as running. Harmless while
-  group plans were never performed; now it would have sent a stop to a dead
-  mailbox and waited for a termination notice that had already been delivered,
-  leaving the group incomplete and the failed child down for good.
-
-- **A child that exhausts its restart allowance now reaches a terminal state.**
-  Its supervisor gives up, publishes `SupervisionState::Escalated`, and records
-  the reason, so `wait_running()` returns instead of waiting forever.
+This is the first changelog for `acton-reactive`; it covers the 9.0.0 release.
 
 ### Added
 
@@ -619,22 +414,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone would only move which error you get.
   `a_child_at_the_depth_limit_is_refused_by_name` fails if the two drift apart.
 
-### Undeprecated
-
-- `ActorConfig::with_supervision_strategy` and `ActorConfig::with_restart_limiter`
-  no longer carry deprecation notices. They were deprecated because the
-  framework never read them and their notices told you to hand-roll a
-  `ChildTerminated` handler instead. Both are now read. Leaving the notices in
-  place would have had the compiler actively advising users into the
-  double-restart described above.
-
-  `with_restart_limiter` is meaningful on a child as well as on a supervisor:
-  **a child's own setting wins, and a child that sets none inherits its
-  supervisor's.** Each child is held to a limiter of its own, so one child
-  failing repeatedly cannot consume a sibling's allowance.
-
-### Added
-
 - `ActorHandle::release`, the counterpart to the corrected
   `unsupervise`: it retires the supervisor's record and hands the child back
   **still running**. This is "stop supervising this, but keep it serving" —
@@ -684,6 +463,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IpcNameInUse`, returned by `ActorRuntime::ipc_expose` when a name is already
   claimed. Carries the contested name and the `Ern` of the actor holding it.
 
+### Changed
+
+- **`ActorRuntime::shutdown_all` now flushes the broker before it signals
+  anything.** Broadcasting and then shutting down used to be a race: `Terminate`
+  went out to every actor while the broadcast was still in the broker's inbox,
+  so subscribers that closed first never saw it. Shutdown now asks the broker to
+  [`FlushBroadcasts`] first, which puts `Terminate` behind that work rather than
+  ahead of it.
+
+  This flushes the broker; it does not stop it. The broker is still stopped
+  last, so it stays available to route what actors emit as they wind down.
+  Stopping it first was measured strictly worse.
+
+  Work that has not been *started* by the time you call `shutdown_all` still
+  cannot be waited for - there is nothing yet to flush. A `before_stop` hook
+  that broadcasts to peers which are also stopping is the main such case, and it
+  is the one thing that still needs a barrier of your own.
+
+  The method's rustdoc now states the rest of the contract as well. Within a
+  single actor a chain does reach its end, because a handler running before the
+  stop signal is dequeued still has an open inbox, so a message it sends to its
+  own actor lands and is drained. Root actors are still signalled first and the
+  broker stopped last; that order is deliberate and is now documented as such,
+  because the broker is the routing fabric for messages still in flight while
+  actors wind down, so stopping it first strands them.
+
+- **The framework now restarts supervised children.** A child registered with
+  `ActorHandle::supervise_with` or `ManagedActor::supervise_deferred` that
+  terminates in a way its `RestartPolicy` warrants a restart from is rebuilt
+  from its blueprint, after an exponential backoff, keeping its identifier.
+  All three supervision strategies are carried out; see the group-restart entry
+  below for `OneForAll` and `RestForOne`.
+
+  **This cannot restart a child in any existing program.** A supervisor can only
+  rebuild a child it holds a blueprint for, and blueprints reach the registry
+  only through `supervise_with` and `supervise_deferred`, neither of which has
+  appeared in a released version. Children adopted through `supervise()` have no
+  blueprint, so the decision layer leaves them down — before their restart
+  allowance is even consulted — exactly as today. **No program written against a
+  released version can have a child restarted twice**, including one that
+  hand-rolls restarts from its own `ChildTerminated` handler.
+
+  That guarantee covers **restarts, and the IPC name sweeps that follow a child
+  reaching a terminal state or being cascaded down with its supervisor**. It
+  does *not* extend to `ActorHandle::unsupervise`, which drops the IPC names of
+  any child it stops — see its own entry below.
+
+  That firewall stops applying the moment you migrate a child to
+  `supervise_with` or `supervise_deferred`. **When you do, delete your
+  hand-rolled restart for that child**, or it will come back twice: once from
+  your handler and once from the framework.
+
+  A `ChildTerminated` handler you already have keeps running either way. The
+  framework's bookkeeping is additive and does not suppress your handler; it
+  only runs first, so a handler that inspects its supervisor sees a settled
+  registry rather than a half-updated one.
+
+- **`SupervisionStrategy::OneForAll` and `RestForOne` are now carried out.**
+  Previously they were planned correctly and then ignored: the supervisor
+  restarted only the child that failed and logged that the rest of the plan was
+  not performed.
+
+  A group restart stops the siblings the strategy names in **reverse start
+  order**, each one fully down before the one before it is asked, and the whole
+  group is down before any of it comes back. The rebuilds are then *requested*
+  in start order — but not awaited in that order, because each start runs on its
+  own task so that a child's `before_start` cannot stop the supervisor taking
+  messages. A child that cannot come up until a sibling is ready should wait for
+  it rather than assume start order has done that for it.
+
+  **One backoff is charged for the whole group**, against the child that failed.
+  A sibling stopped and rebuilt by a group restart it did not cause spends none
+  of its own restart allowance.
+
+  A sibling the supervisor holds no blueprint for is still **stopped** and
+  simply never comes back. That is deliberate: the point of `OneForAll` is that
+  the children are interdependent, so leaving one running against a freshly
+  restarted set would expose exactly the inconsistent state the strategy exists
+  to prevent. In practice this only reaches children adopted through the legacy
+  `supervise()` path.
+
+  A supervisor that begins shutting down mid-group-restart abandons the group
+  rather than driving it, and settles every child left part-way through so that
+  nothing waits on an incarnation that will never be built.
+
+- **Fixed: a group plan listed the child that failed among the children to
+  stop.** The registry is consulted before the supervisor records the
+  termination, so the child that just died still read as running. Harmless while
+  group plans were never performed; now it would have sent a stop to a dead
+  mailbox and waited for a termination notice that had already been delivered,
+  leaving the group incomplete and the failed child down for good.
+
+- **A child that exhausts its restart allowance now reaches a terminal state.**
+  Its supervisor gives up, publishes `SupervisionState::Escalated`, and records
+  the reason, so `wait_running()` returns instead of waiting forever.
+
+### Undeprecated
+
+- `ActorConfig::with_supervision_strategy` and `ActorConfig::with_restart_limiter`
+  no longer carry deprecation notices. They were deprecated because the
+  framework never read them and their notices told you to hand-roll a
+  `ChildTerminated` handler instead. Both are now read. Leaving the notices in
+  place would have had the compiler actively advising users into the
+  double-restart described above.
+
+  `with_restart_limiter` is meaningful on a child as well as on a supervisor:
+  **a child's own setting wins, and a child that sets none inherits its
+  supervisor's.** Each child is held to a limiter of its own, so one child
+  failing repeatedly cannot consume a sibling's allowance.
+
 ### Clarified
 
 - `ActorHandle::children()` and `find_child()` are documented as what they have
@@ -694,8 +583,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-These are all example-side fixes. None of them touch the library, and all three
-bugs predate this release: they reproduce unchanged on 8.2.0.
+- **A graceful stop drains the messages queued behind its signal again.** An
+  actor that receives `SystemSignal::Terminate` runs `before_stop`, closes its
+  inbox, and then works off the backlog already queued, dispatching each message
+  to its handler as normal, before stopping its loop.
+
+  **This restores a written contract rather than introducing a behaviour.** The
+  rustdoc on `SystemSignal::Terminate` has said all along that a terminating
+  actor should "1. Stop accepting new work. 2. Complete any in-progress tasks.
+  … 6. Stop its message processing loop." Since v7.0.0 the loop did 1 and 6 and
+  skipped 2. That text is unchanged by this release: it was never wrong, it was
+  the specification the code had quietly stopped honouring, and it is true again.
+
+  The drain shipped through v0.6.0 and was lost in `79aeb80c` (released in
+  **v7.0.0**, and broken in every release since, up to and including 8.2.0),
+  where a `break` was added to the stop-signal arm of the actor's message loop.
+  That change was incidental rather than deliberate: the same commit introduced
+  a deferred-init `termination_reason` binding, and without the `break` the loop
+  fell through to a second assignment of that immutable binding, i.e. E0384. The
+  `break` made the new bookkeeping compile and silently narrowed shutdown
+  semantics as a side effect. Nothing in the commit concerned shutdown, and the
+  CHANGELOG never recorded a change.
+
+  The visible symptom was `examples/basic`, which asserts its actor processed
+  both messages of a Ping/Pong exchange. It passed deterministically through
+  v0.6.0 and has failed intermittently ever since - 24 of 40 runs on this
+  machine - because the `PongMsg` its handler sends races the stop signal and
+  usually lands behind it. With the drain restored the same unmodified example
+  passes 40 of 40.
+
+  **The drain is bounded and cannot hang.** Closing the inbox first is what
+  bounds it: new sends are rejected, so the backlog can only shrink, and a
+  handler running during the drain cannot feed the loop more work. This is not a
+  "drain until quiescent" that two actors messaging each other could keep alive
+  indefinitely.
+
+- **Twenty-six documentation-example tests were never deterministic.** They
+  synchronised with `tokio::time::sleep` and so certified patterns that do not
+  hold; measured over ten runs of the suite, individual tests failed anywhere
+  from one to ten times out of ten, and two failed every single time. Because
+  each mirrors a published documentation snippet, the sleeps were not merely
+  test noise - they were the pattern being taught.
+
+  All the synchronising sleeps are gone. Request/reply examples use `ask`, whose
+  reply is proof the handler ran; because inboxes are FIFO, one `ask` is also
+  the barrier for everything sent to that actor beforehand. Broadcast examples
+  rely on the `shutdown_all` flush above, or use `FlushBroadcasts` explicitly
+  where the broadcast has not been issued yet. The genuinely order-independent
+  cases - a stream of replies, an actor still performing async initialization -
+  hold the reply envelope and answer when the work is done, so the result does
+  not depend on whether the question arrived first.
+
+  Three cases are worth naming, because the fix was not simply "swap the sleep
+  for an ask":
+
+  - `test_lightweight_handlers` needs *two* asks. Its handler self-sends
+    `ProcessComplete` from a pending future, so a single ask would sit *ahead*
+    of that message and observe the unfinished state - the same race behind a
+    nicer API. Asking `Process` first, with its reply sent after the self-send,
+    puts the second ask strictly behind it.
+  - `test_deferred_reply` no longer reads a task id out of an atomic after a
+    50 ms guess and feeds it into the next message; the id comes back from the
+    ask, and a mismatched id is now caught explicitly instead of silently
+    missing the pending-reply map.
+  - `test_async_initialization_pattern` cannot be fixed by asking, because an
+    `after_start` hook returning `Reply::pending` does **not** hold the actor
+    back - its future runs alongside the message loop, so the actor can answer
+    while initialization is still going. It holds the reply envelope instead
+    and answers when the connection is established.
+
+  Four sleeps remain, all inside handlers, modelling slow work rather than
+  guessing at timing: a deliberately slow service in the `ask_with_timeout`
+  example, an async database connect, and an async-work demonstration.
+  Measured 0 failures in 20 runs of the full suite, against 26 racy tests before.
+
+- **`examples/lifecycles` slept three seconds to outlast a two-second handler.**
+  Its `GetItems` handler is a mutable one, so the actor awaits it before taking
+  another message and `Terminate` queues behind it regardless. The sleep bought
+  nothing and cost three seconds per run.
+
+
+- **The `broadcast` example no longer races its own shutdown.** It reported the
+  final sum from the `Aggregator`'s `before_stop` hook, so the message was
+  emitted after shutdown had begun and had to cross the broker a second time to
+  reach the `Printer` — which by then could already have closed its inbox. The
+  example has never printed the right total in any released version; measured
+  here it failed 40 of 40 runs.
+
+  It now closes the pipeline explicitly instead. `main` broadcasts the data and
+  then a `Finalize` marker, which the broker's FIFO inbox places behind that
+  data at every subscriber; each collector answers with a `Finished` marker, and
+  the `Aggregator` reports the total there rather than from `before_stop`. The
+  `Printer` counts the markers and answers an `ask`, holding the reply envelope
+  if the request arrives before the work is done — which is what makes the
+  result independent of arrival order rather than merely likely. Measured 0
+  failures in 100 runs.
+
+  **Shutdown ordering is unchanged.** Broker-first was tried and measured
+  strictly worse; the broker is live routing fabric during shutdown, not a queue
+  to flush.
+
+- **The documentation site taught the pre-9.0.0 framework.** Every page has been
+  brought in line with what the crate now does. The corrections that were not
+  merely additive:
+
+  - Supervision was documented as something you implement. "Acton does not
+    restart actors automatically" was the stated model, with a warning that
+    `with_supervision_strategy` and `with_restart_limiter` "record intent only".
+    Both pages now describe the restart engine, and say plainly that a
+    hand-rolled restart must be deleted when a child is migrated to
+    `supervise_with`, or it comes back twice.
+  - Eleven code samples used `ActorConfig::new(id, Some(parent), broker)?`,
+    which no longer compiles.
+  - The cheatsheet listed `handle.ask(msg)` in its *Common Mistakes* table, under
+    "Wrong".
+  - "Testing Actors" taught **"Allow time for async processing"** as a named best
+    practice, with `sleep` in nine samples across the site. That page is now
+    built around barriers, and the sleeps in caller position are gone.
+  - Pub/sub said broadcasts "might" arrive in different orders. Per subscriber
+    they do not: the broker's inbox is FIFO and its broadcast handler awaits
+    fan-out. What is unordered is one subscriber against another, which is a
+    different claim and now the one being made.
+  - `max_connections` still documented its old default of 100, and `ipc.toml`
+    was documented as loading from one path when it now searches two.
+
+  New material covers `ask` and `Request`, `FlushBroadcasts`, `SupervisedChild`,
+  `Escalation`, group restarts, `release` versus `unsupervise`, `IpcClient::actor`
+  and `RemoteRequest`, `PeerCredentials`, and an 8.x to 9.0 migration guide that
+  leads with the two silent behaviour changes.
+
+- **Five of the thirteen pages the `docs_examples` tests cite did not exist.**
+  Each test names its source as `From: docs/<path>/page.md`, and those markers
+  read as proof the published documentation compiles and runs. For five pages'
+  worth of tests that guarantee was void, and it failed silently, because nothing
+  checked the markers resolved.
+
+  The markers now point at the pages that cover the material, and
+  `docs_example_provenance` fails if any marker names a file that is not there.
+  This is the reverse of the usual documentation risk: the docs did not drift
+  from the tested code, the test drifted from a page that moved.
+
+The remaining entries are example-side fixes. None of them touch the library,
+and every one predates this release: they reproduce unchanged on 8.2.0.
 
 - **Service discovery returned nothing in the Python and Node.js client
   libraries.** Both read the discovery result out of the response's `payload`
