@@ -1,0 +1,26 @@
+{
+  "skill_name": "acton-reactive",
+  "evals": [
+    {
+      "id": 0,
+      "name": "shared-mutable-cache",
+      "prompt": "im building a rate limiter for our internal api gateway in rust. right now i have Arc<Mutex<HashMap<String, Quota>>> that like 8 worker tasks all hammer to check-and-decrement the quota for an api key, and its showing up hot in the flamegraph. i want to move this to acton-reactive. can you write me the actor version? the workers still need to get a yes/no back before they let the request through.",
+      "expected_output": "A single actor owning the quota map, with no Arc<Mutex>/RwLock anywhere. The check-and-decrement should be a mutate_on handler. The yes/no return path should use ask + impl Request, not a callback or a client actor.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "multi-step-workflow",
+      "prompt": "using acton-reactive, build an order fulfillment flow. when an order comes in we need to validate it, then charge the card, then reserve inventory, then hand off to shipping. if the charge fails we must not reserve inventory. orders arrive continuously, a few thousand an hour, and i need to be able to see how many are mid-flight at any moment.",
+      "expected_output": "A coordinator actor whose model holds in-flight order state, reacting to step-completion messages. main() should only launch/wire/shutdown. Should NOT be a sequence of awaits in main collecting results.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "supervised-restart",
+      "prompt": "ive got an acton-reactive service where one actor talks to a flaky vendor API and it panics maybe once an hour on a malformed response. right now main() has a loop that notices it died and spawns a new one, which is gross and loses messages. i want it to come back on its own with some backoff, give up if it's crashlooping, and i want a test that actually proves it restarted.",
+      "expected_output": "supervise_with (or supervise_deferred) with a blueprint closure, RestartLimiterConfig built with ..Default::default(), SupervisedChild held rather than ActorHandle, and a test using wait_generation/wait_running rather than sleep. The hand-rolled main loop must be removed, not kept alongside.",
+      "files": []
+    }
+  ]
+}

@@ -24,6 +24,12 @@ logs/
 !.cargo/**
 !.githooks/
 !.githooks/**
+# Ships the acton-reactive skill so a checkout auto-loads it; the files
+# themselves live in /skills and this is a symlink to them.
+!/.claude/
+/.claude/*
+!/.claude/skills/
+!/.claude/skills/**
 
 # Ignore potentially sensitive file types by default
 *.sh
