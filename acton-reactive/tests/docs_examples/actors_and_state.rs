@@ -21,7 +21,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -76,7 +76,6 @@ async fn test_complex_actor_state() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     let total = f64::from_bits(final_total.load(Ordering::SeqCst));
@@ -134,7 +133,6 @@ async fn test_custom_default_actor() -> anyhow::Result<()> {
     let handle = actor.start().await;
     handle.send(GetConfig).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert!(config_verified.load(Ordering::SeqCst));
@@ -186,7 +184,6 @@ async fn test_accessing_state_in_handlers() -> anyhow::Result<()> {
     handle.send(UpdateBalance { amount: 50.0 }).await;
     handle.send(UpdateBalance { amount: -25.0 }).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     let balance = f64::from_bits(final_balance.load(Ordering::SeqCst));
@@ -198,19 +195,11 @@ async fn test_accessing_state_in_handlers() -> anyhow::Result<()> {
 /// Tests mutable vs read-only access.
 ///
 /// From: docs/actors-and-state/page.md - "Mutable vs Read-Only Access"
-///
-/// Note: Request-reply requires using `ctx.new_envelope()` with a trigger pattern.
 #[acton_test]
 async fn test_mutable_vs_readonly_access() -> anyhow::Result<()> {
     #[acton_actor]
     struct Account {
         balance: f64,
-    }
-
-    #[acton_actor]
-    struct Client {
-        account_handle: Option<ActorHandle>,
-        received_balance: Option<f64>,
     }
 
     #[acton_message]
@@ -219,16 +208,14 @@ async fn test_mutable_vs_readonly_access() -> anyhow::Result<()> {
     }
 
     #[acton_message]
-    struct QueryBalance;
-
-    #[acton_message]
     struct GetBalance;
 
     #[acton_message]
     struct BalanceResponse(f64);
 
-    let received_balance = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let received_clone = received_balance.clone();
+    impl Request for GetBalance {
+        type Response = BalanceResponse;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
@@ -252,40 +239,16 @@ async fn test_mutable_vs_readonly_access() -> anyhow::Result<()> {
 
     let account_handle = account.start().await;
 
-    // Create client to request balance using proper reply chain
-    let mut client = runtime.new_actor::<Client>();
-    client.model.account_handle = Some(account_handle.clone());
-
-    client
-        .mutate_on::<QueryBalance>(|actor, ctx| {
-            let target = actor.model.account_handle.clone().unwrap();
-            let request_envelope = ctx.new_envelope(&target.reply_address());
-            Reply::pending(async move {
-                request_envelope.send(GetBalance).await;
-            })
-        })
-        .mutate_on::<BalanceResponse>(move |actor, ctx| {
-            actor.model.received_balance = Some(ctx.message().0);
-            received_clone.store(ctx.message().0.to_bits(), Ordering::SeqCst);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
     // Make deposits
     account_handle.send(Deposit { amount: 100.0 }).await;
     account_handle.send(Deposit { amount: 50.0 }).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Both deposits are ahead of this request in the inbox, so the balance it reports
+    // has both applied.
+    let response: BalanceResponse = account_handle.ask(GetBalance).await?;
+    assert!((response.0 - 150.0).abs() < f64::EPSILON);
 
-    // Query balance via client trigger
-    client_handle.send(QueryBalance).await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
-
-    let balance = f64::from_bits(received_balance.load(Ordering::SeqCst));
-    assert!((balance - 150.0).abs() < f64::EPSILON);
 
     Ok(())
 }
@@ -336,7 +299,6 @@ async fn test_multiple_actors() -> anyhow::Result<()> {
         handle.send(Task { id: u32::try_from(*i).unwrap() + 10 }).await;
     }
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     // Each worker processed 2 tasks, 3 workers total = 6
@@ -376,7 +338,6 @@ async fn test_named_actors() -> anyhow::Result<()> {
 
     handle.send(ProcessOrder).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     Ok(())
@@ -433,7 +394,6 @@ async fn test_focused_actor_state() -> anyhow::Result<()> {
         .await;
     handle.send(StartProcessing).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert!(processed.load(Ordering::SeqCst));

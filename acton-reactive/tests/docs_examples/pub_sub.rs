@@ -21,7 +21,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -62,7 +61,6 @@ async fn test_broker_basics() -> anyhow::Result<()> {
     // Broadcast
     broker.broadcast(TestEvent).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(received.load(Ordering::SeqCst));
@@ -141,7 +139,6 @@ async fn test_price_feed_example() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(display_received.load(Ordering::SeqCst));
@@ -185,15 +182,14 @@ async fn test_unsubscribing() -> anyhow::Result<()> {
 
     // First broadcast - should receive
     broker.broadcast(Event).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Unsubscribe
+    // Unsubscribe. No wait is needed between the two: both the broadcast and the
+    // unsubscribe are ordinary messages to the broker, and its inbox is FIFO, so the
+    // subscription is removed strictly after the broadcast above was fanned out.
     handle.unsubscribe_async::<Event>().await;
 
     // Second broadcast - should NOT receive
     broker.broadcast(Event).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     runtime.shutdown_all().await?;
 
     // Should only have received 1 event
@@ -269,7 +265,6 @@ async fn test_multiple_message_types() -> anyhow::Result<()> {
     broker.broadcast(TradeExecuted).await;
     broker.broadcast(TradeExecuted).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     let counts = final_counts.lock().unwrap();
@@ -361,7 +356,6 @@ async fn test_filtering_broadcasts() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     let prices = final_prices.lock().unwrap();
@@ -463,7 +457,6 @@ async fn test_event_bus_pattern() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     let counts = analytics_counts.lock().unwrap();
@@ -529,8 +522,6 @@ async fn test_system_alerts_pattern() -> anyhow::Result<()> {
 
     // Send maintenance alert
     broker.broadcast(SystemAlert::MaintenanceMode).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     runtime.shutdown_all().await?;
 
     let state = final_state.lock().unwrap();
@@ -565,6 +556,17 @@ async fn test_broadcast_from_handler() -> anyhow::Result<()> {
         price: f64,
     }
 
+    /// A question the publisher can answer, used purely to know its handler has run.
+    #[acton_message]
+    struct HasPublished;
+
+    #[acton_message]
+    struct Published;
+
+    impl Request for HasPublished {
+        type Response = Published;
+    }
+
     let received = Arc::new(AtomicBool::new(false));
     let received_clone = received.clone();
 
@@ -597,6 +599,13 @@ async fn test_broadcast_from_handler() -> anyhow::Result<()> {
         })
     });
 
+    publisher.mutate_on::<HasPublished>(|_actor, ctx| {
+        let reply = ctx.reply_envelope();
+        Reply::pending(async move {
+            reply.send(Published).await;
+        })
+    });
+
     let publisher_handle = publisher.start().await;
 
     // Trigger broadcast from handler
@@ -607,7 +616,15 @@ async fn test_broadcast_from_handler() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Two steps, because the broadcast has not even been issued yet. `shutdown_all`
+    // flushes the broker, but flushing only covers what the broker already holds - and
+    // here the publisher has to run first before there is anything to flush.
+    //
+    // The publisher's reply proves its handler finished, so the broadcast is now in the
+    // broker's inbox; flushing the broker then puts it in the subscriber's.
+    let _: Published = publisher_handle.ask(HasPublished).await?;
+    broker.ask(FlushBroadcasts).await?;
+
     runtime.shutdown_all().await?;
 
     assert!(received.load(Ordering::SeqCst));

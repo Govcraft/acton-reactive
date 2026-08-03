@@ -21,7 +21,6 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -62,7 +61,6 @@ async fn test_actor_sequential_processing() -> anyhow::Result<()> {
     handle.send(Increment).await;
     handle.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 2);
@@ -108,7 +106,6 @@ async fn test_actors_are_lightweight() -> anyhow::Result<()> {
         handle.send(Request).await;
     }
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     Ok(())
@@ -164,7 +161,6 @@ async fn test_actors_are_isolated() -> anyhow::Result<()> {
     handle1.send(Task).await;
     handle2.send(Task).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     // They don't share state
@@ -174,21 +170,14 @@ async fn test_actors_are_isolated() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests `mutate_on` vs `act_on` distinction.
+/// Tests the distinction between mutating and read-only handlers.
 ///
 /// From: docs/core-concepts/what-are-actors/page.md - "`mutate_on` vs `act_on` distinction"
-///
-/// Note: Request-reply requires using `ctx.new_envelope()` with a trigger pattern.
 #[acton_test]
 async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
     #[acton_actor]
     struct DataStore {
         data: String,
-    }
-
-    #[acton_actor]
-    struct QueryClient {
-        store_handle: Option<ActorHandle>,
     }
 
     #[acton_message]
@@ -202,11 +191,9 @@ async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
     #[acton_message]
     struct QueryResponse(String);
 
-    #[acton_message]
-    struct QueryStore;
-
-    let query_response = Arc::new(std::sync::Mutex::new(String::new()));
-    let response_clone = query_response.clone();
+    impl Request for Query {
+        type Response = QueryResponse;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
@@ -231,28 +218,6 @@ async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
 
     let store_handle = store.start().await;
 
-    // Create client that will query the store using proper reply chain
-    let mut client = runtime.new_actor::<QueryClient>();
-    client.model.store_handle = Some(store_handle.clone());
-
-    client
-        .mutate_on::<QueryStore>(|actor, ctx| {
-            let target = actor.model.store_handle.clone().unwrap();
-            let request_envelope = ctx.new_envelope(&target.reply_address());
-            Reply::pending(async move {
-                request_envelope.send(Query).await;
-            })
-        })
-        .mutate_on::<QueryResponse>(move |_actor, ctx| {
-            response_clone
-                .lock()
-                .unwrap()
-                .clone_from(&ctx.message().0);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
     // Update then query
     store_handle
         .send(Update {
@@ -260,16 +225,12 @@ async fn test_mutate_vs_act_distinction() -> anyhow::Result<()> {
         })
         .await;
 
-    // Allow update to process
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The update is ahead of the query in the same inbox, so the answer necessarily
+    // reflects it. Ordering between the two comes from the inbox, not from timing.
+    let response: QueryResponse = store_handle.ask(Query).await?;
+    assert_eq!(response.0, "updated value");
 
-    // Query store via client trigger
-    client_handle.send(QueryStore).await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
-
-    assert_eq!(*query_response.lock().unwrap(), "updated value");
 
     Ok(())
 }

@@ -21,7 +21,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -80,7 +79,6 @@ async fn test_creating_actors() -> anyhow::Result<()> {
     // Verify handle is usable
     handle.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     Ok(())
@@ -151,7 +149,6 @@ async fn test_working_with_handles() -> anyhow::Result<()> {
     handle_for_web.send(Increment).await;
     handle_for_background.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(count1.load(Ordering::SeqCst), 3);
@@ -201,7 +198,6 @@ async fn test_broker_pubsub() -> anyhow::Result<()> {
     // Publishing Events
     broker.broadcast(UserLoggedIn { user_id: 123 }).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(received.load(Ordering::SeqCst));
@@ -282,7 +278,6 @@ async fn test_multiple_subscribers() -> anyhow::Result<()> {
     // Keep handles alive until after broadcast processing
     std::hint::black_box(&handles);
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     // All 3 listeners should have received the event
@@ -342,7 +337,6 @@ async fn test_direct_vs_broker() -> anyhow::Result<()> {
     // Use broker for broadcasts - when multiple actors should react
     broker.broadcast(BroadcastMessage).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(direct.load(Ordering::SeqCst), 2);

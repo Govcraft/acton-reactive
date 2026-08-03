@@ -77,9 +77,6 @@ async fn test_lifecycle_hooks() -> anyhow::Result<()> {
 
     let _handle = actor.start().await;
 
-    // Give time for after_start to complete
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     runtime.shutdown_all().await?;
 
     let order = hook_order.lock().unwrap();
@@ -119,7 +116,6 @@ async fn test_before_start_hook() -> anyhow::Result<()> {
     });
 
     let _handle = actor.start().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert!(before_start_ran.load(Ordering::SeqCst));
@@ -162,7 +158,6 @@ async fn test_after_start_hook() -> anyhow::Result<()> {
         });
 
     let _handle = actor.start().await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(heartbeat_received.load(Ordering::SeqCst));
@@ -194,7 +189,6 @@ async fn test_before_stop_hook() -> anyhow::Result<()> {
     });
 
     let _handle = actor.start().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert!(cleanup_ran.load(Ordering::SeqCst));
@@ -238,7 +232,6 @@ async fn test_after_stop_hook() -> anyhow::Result<()> {
     handle.send(Increment).await;
     handle.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     // after_stop assertion runs during shutdown
@@ -250,6 +243,15 @@ async fn test_after_stop_hook() -> anyhow::Result<()> {
 /// Tests async initialization pattern with `after_start`.
 ///
 /// From: docs/actor-lifecycle/page.md - "Async Initialization Pattern"
+///
+/// An `after_start` hook that returns `Reply::pending` does *not* hold the actor back:
+/// the future runs alongside the message loop, so the actor can take messages before
+/// initialization has finished. That is the point of the pattern - startup does not
+/// block - but it means callers need a way to know when the actor is ready.
+///
+/// The way to provide one is to make readiness a question the actor answers, and to
+/// have it hold the reply envelope while the answer is still unknown. The caller simply
+/// awaits; whether it asked before or after the connection landed makes no difference.
 #[acton_test]
 async fn test_async_initialization_pattern() -> anyhow::Result<()> {
     // Simulated connection
@@ -261,16 +263,24 @@ async fn test_async_initialization_pattern() -> anyhow::Result<()> {
     #[acton_actor]
     struct DatabaseActor {
         connection: Option<Connection>,
+        /// A caller waiting to be told initialization has finished.
+        waiting: Option<OutboundEnvelope>,
     }
 
     #[acton_message]
     struct SetConnection(Connection);
 
+    /// Asks the actor whether it has finished connecting.
     #[acton_message]
-    struct CheckConnection;
+    struct AwaitReady;
 
-    let connection_set = Arc::new(AtomicBool::new(false));
-    let connection_clone = connection_set.clone();
+    /// The actor's answer, carrying the state of the connection it made.
+    #[acton_message]
+    struct Ready(bool);
+
+    impl Request for AwaitReady {
+        type Response = Ready;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
     let mut actor = runtime.new_actor::<DatabaseActor>();
@@ -286,27 +296,39 @@ async fn test_async_initialization_pattern() -> anyhow::Result<()> {
             })
         })
         .mutate_on::<SetConnection>(|actor, ctx| {
-            actor.model.connection = Some(ctx.message().0.clone());
-            Reply::ready()
-        })
-        .act_on::<CheckConnection>(move |actor, _ctx| {
-            if let Some(conn) = &actor.model.connection {
-                connection_clone.store(conn.connected, Ordering::SeqCst);
+            let conn = ctx.message().0.clone();
+            let connected = conn.connected;
+            actor.model.connection = Some(conn);
+
+            // Initialization is done; answer anyone who asked while it was in progress.
+            if let Some(reply) = actor.model.waiting.take() {
+                Reply::pending(async move {
+                    reply.send(Ready(connected)).await;
+                })
+            } else {
+                Reply::ready()
             }
-            Reply::ready()
+        })
+        .mutate_on::<AwaitReady>(|actor, ctx| {
+            let reply = ctx.reply_envelope();
+            if let Some(conn) = &actor.model.connection {
+                let connected = conn.connected;
+                Reply::pending(async move {
+                    reply.send(Ready(connected)).await;
+                })
+            } else {
+                // Not connected yet - keep the envelope and answer from SetConnection.
+                actor.model.waiting = Some(reply);
+                Reply::ready()
+            }
         });
 
     let handle = actor.start().await;
 
-    // Wait for async initialization
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let ready: Ready = handle.ask(AwaitReady).await?;
+    assert!(ready.0);
 
-    handle.send(CheckConnection).await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
-
-    assert!(connection_set.load(Ordering::SeqCst));
 
     Ok(())
 }
@@ -348,9 +370,6 @@ async fn test_lifecycle_with_assertions() -> anyhow::Result<()> {
     handle.send(Increment).await;
     handle.send(Increment).await;
     handle.send(Increment).await;
-
-    // Give time to process
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     runtime.shutdown_all().await?;
     // after_stop assertion runs during shutdown

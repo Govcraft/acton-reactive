@@ -21,7 +21,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -67,7 +67,6 @@ async fn test_mutate_on_handler() -> anyhow::Result<()> {
     handle.send(UpdateCounter { increment: 10 }).await;
     handle.send(UpdateCounter { increment: 3 }).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 18);
@@ -78,9 +77,6 @@ async fn test_mutate_on_handler() -> anyhow::Result<()> {
 /// Tests `act_on` handler - shared read-only access.
 ///
 /// From: docs/handler-types/page.md - "`act_on`"
-///
-/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
-/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_act_on_handler() -> anyhow::Result<()> {
     #[acton_actor]
@@ -88,26 +84,19 @@ async fn test_act_on_handler() -> anyhow::Result<()> {
         status: String,
     }
 
-    #[acton_actor]
-    struct StatusClient {
-        holder_handle: Option<ActorHandle>,
-    }
-
-    #[acton_message]
-    struct QueryStatus;
-
     #[acton_message]
     struct GetStatus;
 
     #[acton_message]
     struct StatusResponse(String);
 
-    let received_status = Arc::new(std::sync::Mutex::new(String::new()));
-    let received_clone = received_status.clone();
+    // Naming the reply type is what makes `GetStatus` usable with `ask`.
+    impl Request for GetStatus {
+        type Response = StatusResponse;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
-    // Create status holder (responder)
     let mut holder = runtime.new_actor::<StatusHolder>();
     holder.model.status = "healthy".to_string();
 
@@ -123,36 +112,12 @@ async fn test_act_on_handler() -> anyhow::Result<()> {
 
     let holder_handle = holder.start().await;
 
-    // Create client (requester) that uses trigger pattern
-    let mut client = runtime.new_actor::<StatusClient>();
-    client.model.holder_handle = Some(holder_handle);
+    // `ask` resolves once the handler has answered, so the reply is in hand before the
+    // next line runs. Nothing here depends on how long the actor took.
+    let status: StatusResponse = holder_handle.ask(GetStatus).await?;
+    assert_eq!(status.0, "healthy");
 
-    client
-        .mutate_on::<QueryStatus>(|actor, ctx| {
-            let target = actor.model.holder_handle.clone().unwrap();
-            let request_envelope = ctx.new_envelope(&target.reply_address());
-
-            Reply::pending(async move {
-                request_envelope.send(GetStatus).await;
-            })
-        })
-        .mutate_on::<StatusResponse>(move |_actor, ctx| {
-            received_clone
-                .lock()
-                .unwrap()
-                .clone_from(&ctx.message().0);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
-    // Trigger request via client
-    client_handle.send(QueryStatus).await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
-
-    assert_eq!(*received_status.lock().unwrap(), "healthy");
 
     Ok(())
 }
@@ -244,7 +209,6 @@ async fn test_try_mutate_on_handler() -> anyhow::Result<()> {
     // Another successful payment
     handle.send(ProcessPayment { amount: 20 }).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     // 100 - 30 - 20 = 50 (the 100 payment failed)
@@ -346,7 +310,6 @@ async fn test_try_act_on_handler() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     // Both lookups should have been counted
@@ -405,7 +368,6 @@ async fn test_batch_operations() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 5);

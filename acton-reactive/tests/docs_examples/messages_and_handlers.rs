@@ -126,7 +126,6 @@ async fn test_message_types() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert!(all_received.load(Ordering::SeqCst));
@@ -180,7 +179,6 @@ async fn test_handler_anatomy() -> anyhow::Result<()> {
     handle.send(MyMessage { value: 10 }).await;
     handle.send(MyMessage { value: 20 }).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 30);
@@ -241,7 +239,6 @@ async fn test_actor_parameter() -> anyhow::Result<()> {
     let handle = actor.start().await;
     handle.send(TestMessage).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(self_message_received.load(Ordering::SeqCst));
@@ -314,7 +311,6 @@ async fn test_reply_types() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(counts_verified.load(Ordering::SeqCst));
@@ -368,7 +364,6 @@ async fn test_self_messaging() -> anyhow::Result<()> {
     let handle = actor.start().await;
     handle.send(StartProcess).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_step.load(Ordering::SeqCst), 2);
@@ -379,9 +374,6 @@ async fn test_self_messaging() -> anyhow::Result<()> {
 /// Tests request-reply pattern.
 ///
 /// From: docs/messages-and-handlers/page.md - "Request-Reply"
-///
-/// Note: Request-reply in acton-reactive requires using `ctx.new_envelope()` to
-/// maintain the proper reply chain. This test uses the trigger pattern.
 #[acton_test]
 async fn test_request_reply_pattern() -> anyhow::Result<()> {
     #[acton_actor]
@@ -389,22 +381,15 @@ async fn test_request_reply_pattern() -> anyhow::Result<()> {
         balance: f64,
     }
 
-    #[acton_actor]
-    struct BalanceClient {
-        account_handle: Option<ActorHandle>,
-    }
-
-    #[acton_message]
-    struct QueryBalance;
-
     #[acton_message]
     struct GetBalance;
 
     #[acton_message]
     struct BalanceResponse(f64);
 
-    let received_balance = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let received_clone = received_balance.clone();
+    impl Request for GetBalance {
+        type Response = BalanceResponse;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
@@ -423,34 +408,10 @@ async fn test_request_reply_pattern() -> anyhow::Result<()> {
 
     let account_handle = account.start().await;
 
-    // Create client (requester) that uses trigger pattern
-    let mut client = runtime.new_actor::<BalanceClient>();
-    client.model.account_handle = Some(account_handle);
+    let response: BalanceResponse = account_handle.ask(GetBalance).await?;
+    assert!((response.0 - 1000.0).abs() < f64::EPSILON);
 
-    client
-        .mutate_on::<QueryBalance>(|actor, ctx| {
-            let target = actor.model.account_handle.clone().unwrap();
-            let request_envelope = ctx.new_envelope(&target.reply_address());
-
-            Reply::pending(async move {
-                request_envelope.send(GetBalance).await;
-            })
-        })
-        .mutate_on::<BalanceResponse>(move |_actor, ctx| {
-            received_clone.store(ctx.message().0.to_bits(), Ordering::SeqCst);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
-    // Trigger request via client
-    client_handle.send(QueryBalance).await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
-
-    let balance = f64::from_bits(received_balance.load(Ordering::SeqCst));
-    assert!((balance - 1000.0).abs() < f64::EPSILON);
 
     Ok(())
 }
@@ -504,7 +465,6 @@ async fn test_command_pattern() -> anyhow::Result<()> {
     handle.send(Command::SetValue(42)).await;
     handle.send(Command::Stop).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_state.load(Ordering::SeqCst), 42);
@@ -533,8 +493,16 @@ async fn test_forwarding_messages() -> anyhow::Result<()> {
         id: u32,
     }
 
-    let task_received = Arc::new(AtomicBool::new(false));
-    let task_received_clone = task_received.clone();
+    /// Asks an actor whether it has dealt with the task yet.
+    #[acton_message]
+    struct WasReceived;
+
+    #[acton_message]
+    struct Received(bool);
+
+    impl Request for WasReceived {
+        type Response = Received;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
@@ -545,34 +513,50 @@ async fn test_forwarding_messages() -> anyhow::Result<()> {
             actor.model.received = true;
             Reply::ready()
         })
-        .after_stop(move |actor| {
-            task_received_clone.store(actor.model.received, Ordering::SeqCst);
-            Reply::ready()
+        .mutate_on::<WasReceived>(|actor, ctx| {
+            let reply = ctx.reply_envelope();
+            let received = actor.model.received;
+            Reply::pending(async move {
+                reply.send(Received(received)).await;
+            })
         });
     let worker_handle = worker.start().await;
 
     // Create router
     let mut router = runtime.new_actor::<Router>();
-    router.model.worker = Some(worker_handle);
+    router.model.worker = Some(worker_handle.clone());
 
-    router.mutate_on::<TaskRequest>(|actor, ctx| {
-        // Pick a worker and forward
-        let worker = actor.model.worker.clone().unwrap();
-        let task = ctx.message().clone();
+    router
+        .mutate_on::<TaskRequest>(|actor, ctx| {
+            // Pick a worker and forward
+            let worker = actor.model.worker.clone().unwrap();
+            let task = ctx.message().clone();
 
-        Reply::pending(async move {
-            worker.send(task).await;
+            Reply::pending(async move {
+                worker.send(task).await;
+            })
         })
-    });
+        .mutate_on::<WasReceived>(|_actor, ctx| {
+            let reply = ctx.reply_envelope();
+            Reply::pending(async move {
+                reply.send(Received(true)).await;
+            })
+        });
 
     let router_handle = router.start().await;
 
     router_handle.send(TaskRequest { id: 1 }).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    runtime.shutdown_all().await?;
+    // Two hops, so two barriers. The router's answer proves it has already forwarded,
+    // because a mutable handler is awaited before the actor takes its next message - so
+    // the task is in the worker's inbox by the time that reply lands. The question to
+    // the worker is therefore queued behind the task in its own FIFO inbox, and its
+    // answer proves the task was handled.
+    let _: Received = router_handle.ask(WasReceived).await?;
+    let received: Received = worker_handle.ask(WasReceived).await?;
+    assert!(received.0);
 
-    assert!(task_received.load(Ordering::SeqCst));
+    runtime.shutdown_all().await?;
 
     Ok(())
 }

@@ -21,7 +21,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -72,7 +71,6 @@ async fn test_creating_child_actors() -> anyhow::Result<()> {
     // Send task to child
     child_handle.send(Task).await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     assert!(child_ran.load(Ordering::SeqCst));
@@ -146,8 +144,6 @@ async fn test_cascading_shutdown() -> anyhow::Result<()> {
     // Verify hierarchy
     assert_eq!(parent_handle.children().len(), 1);
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     // Stop parent - should cascade to child
     runtime.shutdown_all().await?;
 
@@ -207,7 +203,6 @@ async fn test_worker_pool_pattern() -> anyhow::Result<()> {
         worker.send(Task).await;
     }
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
 
     // Each worker should have processed 3 tasks (9 tasks / 3 workers)
@@ -268,9 +263,11 @@ async fn test_child_lifecycle_hooks() -> anyhow::Result<()> {
 
     let child_handle = parent_handle.supervise(child).await?;
 
-    // `after_start` runs to completion before the actor takes its first message, so a
-    // reply here proves the hook has already run. That is an exact statement about the
-    // child's progress, where the previous sleep was only a guess about elapsed time.
+    // This hook returns `Reply::ready()`, so it finishes before the child takes its
+    // first message and a reply here proves it has already run. A hook that returned
+    // `Reply::pending` would not carry that guarantee - its future runs alongside the
+    // message loop, so the actor can answer while initialization is still going. See
+    // `actor_lifecycle::test_async_initialization_pattern` for how to wait on that.
     let _: Pong = child_handle.ask(Ping).await?;
 
     assert!(child_started.load(Ordering::SeqCst));

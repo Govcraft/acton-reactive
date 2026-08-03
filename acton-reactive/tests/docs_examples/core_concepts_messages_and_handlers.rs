@@ -21,7 +21,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -79,7 +78,6 @@ async fn test_defining_messages() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_total.load(Ordering::SeqCst), 8);
@@ -140,7 +138,6 @@ async fn test_mutate_on_sequential() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert!(items_verified.load(Ordering::SeqCst));
@@ -151,18 +148,11 @@ async fn test_mutate_on_sequential() -> anyhow::Result<()> {
 /// Tests `act_on` for concurrent read-only operations.
 ///
 /// From: docs/core-concepts/messages-and-handlers/page.md - "`act_on`: Concurrent Read-Only Operations"
-///
-/// Note: Request-reply requires using `ctx.new_envelope()` with a trigger pattern.
 #[acton_test]
 async fn test_act_on_concurrent() -> anyhow::Result<()> {
     #[acton_actor]
     struct Store {
         total: u32,
-    }
-
-    #[acton_actor]
-    struct QueryClient {
-        store_handle: Option<ActorHandle>,
     }
 
     #[acton_message]
@@ -171,11 +161,9 @@ async fn test_act_on_concurrent() -> anyhow::Result<()> {
     #[acton_message]
     struct TotalResponse(u32);
 
-    #[acton_message]
-    struct QueryStore;
-
-    let received_total = Arc::new(AtomicU32::new(0));
-    let received_clone = received_total.clone();
+    impl Request for GetTotal {
+        type Response = TotalResponse;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
@@ -194,32 +182,13 @@ async fn test_act_on_concurrent() -> anyhow::Result<()> {
 
     let store_handle = store.start().await;
 
-    // Create client that will query the store using proper reply chain
-    let mut client = runtime.new_actor::<QueryClient>();
-    client.model.store_handle = Some(store_handle.clone());
+    // `act_on` handlers run concurrently, so several of these can be in flight at once;
+    // each `ask` still waits for its own reply, and the private reply channel is what
+    // keeps concurrent answers from being confused with one another.
+    let total: TotalResponse = store_handle.ask(GetTotal).await?;
+    assert_eq!(total.0, 42);
 
-    client
-        .mutate_on::<QueryStore>(|actor, ctx| {
-            let target = actor.model.store_handle.clone().unwrap();
-            let request_envelope = ctx.new_envelope(&target.reply_address());
-            Reply::pending(async move {
-                request_envelope.send(GetTotal).await;
-            })
-        })
-        .mutate_on::<TotalResponse>(move |_actor, ctx| {
-            received_clone.store(ctx.message().0, Ordering::SeqCst);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
-    // Query the store via client trigger
-    client_handle.send(QueryStore).await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
-
-    assert_eq!(received_total.load(Ordering::SeqCst), 42);
 
     Ok(())
 }
@@ -260,7 +229,6 @@ async fn test_handler_distinction() -> anyhow::Result<()> {
     handle.send(Increment).await;
     handle.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 3);
@@ -316,7 +284,6 @@ async fn test_working_with_message_data() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     let items = items_stored.lock().unwrap();
@@ -362,7 +329,6 @@ async fn test_messages_without_data() -> anyhow::Result<()> {
 
     handle.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 1);
@@ -413,7 +379,6 @@ async fn test_no_response_needed() -> anyhow::Result<()> {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(event_count.load(Ordering::SeqCst), 1);
@@ -433,22 +398,15 @@ async fn test_sending_response() -> anyhow::Result<()> {
         count: i32,
     }
 
-    #[acton_actor]
-    struct QueryClient {
-        counter_handle: Option<ActorHandle>,
-    }
-
     #[acton_message]
     struct GetCount;
 
     #[acton_message]
     struct CountResponse(i32);
 
-    #[acton_message]
-    struct QueryCounter;
-
-    let received_count = Arc::new(std::sync::atomic::AtomicI32::new(-1));
-    let received_clone = received_count.clone();
+    impl Request for GetCount {
+        type Response = CountResponse;
+    }
 
     let mut runtime = ActonApp::launch_async().await;
 
@@ -456,6 +414,8 @@ async fn test_sending_response() -> anyhow::Result<()> {
     let mut counter = runtime.new_actor::<Counter>();
     counter.model.count = 42;
 
+    // The handler side of a reply is the same whether the caller used `send` or `ask`:
+    // take the reply envelope from the context and send the answer through it.
     counter.act_on::<GetCount>(|actor, envelope| {
         let count = actor.model.count;
         let reply_envelope = envelope.reply_envelope();
@@ -467,32 +427,10 @@ async fn test_sending_response() -> anyhow::Result<()> {
 
     let counter_handle = counter.start().await;
 
-    // Create client that will query the counter using proper reply chain
-    let mut client = runtime.new_actor::<QueryClient>();
-    client.model.counter_handle = Some(counter_handle.clone());
+    let count: CountResponse = counter_handle.ask(GetCount).await?;
+    assert_eq!(count.0, 42);
 
-    client
-        .mutate_on::<QueryCounter>(|actor, ctx| {
-            let target = actor.model.counter_handle.clone().unwrap();
-            let request_envelope = ctx.new_envelope(&target.reply_address());
-            Reply::pending(async move {
-                request_envelope.send(GetCount).await;
-            })
-        })
-        .mutate_on::<CountResponse>(move |_actor, ctx| {
-            received_clone.store(ctx.message().0, Ordering::SeqCst);
-            Reply::ready()
-        });
-
-    let client_handle = client.start().await;
-
-    // Query counter via client trigger
-    client_handle.send(QueryCounter).await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
     runtime.shutdown_all().await?;
-
-    assert_eq!(received_count.load(Ordering::SeqCst), 42);
 
     Ok(())
 }

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Twenty-six documentation-example tests were never deterministic.** They
+  synchronised with `tokio::time::sleep` and so certified patterns that do not
+  hold; measured over ten runs of the suite, individual tests failed anywhere
+  from one to ten times out of ten, and two failed every single time. Because
+  each mirrors a published documentation snippet, the sleeps were not merely
+  test noise - they were the pattern being taught.
+
+  All the synchronising sleeps are gone. Request/reply examples use `ask`, whose
+  reply is proof the handler ran; because inboxes are FIFO, one `ask` is also
+  the barrier for everything sent to that actor beforehand. Broadcast examples
+  rely on the `shutdown_all` flush above, or use `FlushBroadcasts` explicitly
+  where the broadcast has not been issued yet. The genuinely order-independent
+  cases - a stream of replies, an actor still performing async initialization -
+  hold the reply envelope and answer when the work is done, so the result does
+  not depend on whether the question arrived first.
+
+  Four sleeps remain, all inside handlers, modelling slow work rather than
+  guessing at timing: a deliberately slow service in the `ask_with_timeout`
+  example, an async database connect, and an async-work demonstration.
+  Measured 0 failures in 20 runs of the full suite, against 26 racy tests before.
+
 
 - **A graceful stop drains the messages queued behind its signal again.** An
   actor that receives `SystemSignal::Terminate` runs `before_stop`, closes its

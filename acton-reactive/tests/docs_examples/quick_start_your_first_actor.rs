@@ -21,7 +21,6 @@
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use acton_reactive::prelude::*;
 use acton_test::prelude::*;
@@ -77,10 +76,8 @@ async fn test_complete_counter_example() -> anyhow::Result<()> {
     handle.send(Increment).await;
     handle.send(PrintCount).await;
 
-    // Wait for messages to be processed
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Clean shutdown
+    // Clean shutdown. `Terminate` queues behind the sends above and the actor drains
+    // its backlog before stopping, so the count is final by the time this returns.
     runtime.shutdown_all().await?;
 
     // Verify final count
@@ -125,7 +122,6 @@ async fn test_message_with_data() -> anyhow::Result<()> {
     handle.send(IncrementBy { amount: 5 }).await;
     handle.send(IncrementBy { amount: 10 }).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 15);
@@ -179,7 +175,6 @@ async fn test_mutate_on_vs_act_on() -> anyhow::Result<()> {
     handle.send(GetCount).await;
     handle.send(Increment).await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     runtime.shutdown_all().await?;
 
     assert_eq!(final_count.load(Ordering::SeqCst), 3);
