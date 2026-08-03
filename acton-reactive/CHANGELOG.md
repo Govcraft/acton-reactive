@@ -5,6 +5,34 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.0.1] - 2026-08-03
+
+A test-harness fix. `acton-reactive` itself is unchanged, so nothing in a
+running program behaves differently; only writing tests with `#[acton_test]`
+is affected.
+
+### Fixed
+
+- **One test's panic no longer fails its neighbours.** `#[acton_test]`
+  installed a process-global panic hook per test, chained onto whatever hook
+  was already installed and never restored. Under `cargo test`, where every
+  test shares one process across many threads, a panic raised anywhere marked
+  *every* test then in flight as panicked, and each failed reporting a
+  stranger's message and location. Any suite with a handler that panics on
+  purpose was affected, and the failures moved around between runs.
+
+  The hook now records only panics raised on the test's own threads: the
+  harness thread running `#[test]`, and the runtime workers, which are named
+  `acton-test-<test name>` so they can be recognised.
+
+  This was latent from the time the macro was written and invisible under
+  `cargo nextest`, which gives each test its own process and therefore only
+  ever one hook.
+
+- **Panic messages built with `format!` are no longer reported as "No error
+  message".** The hook read only `&str` payloads, so every `panic!("{}", ..)`
+  lost its message and left a bare location behind.
+
 ## [9.0.0] - 2026-08-03
 
 This is the first changelog for `acton-reactive`; it covers the 9.0.0 release.
