@@ -7,10 +7,21 @@ Actors can communicate across process boundaries using Acton's IPC system. This 
 
 ## When You Need IPC
 
-- **Multi-process architectures** — Separate concerns into different processes
-- **External monitoring** — Query actor state from monitoring tools
+A second process is Acton's unit of **isolation, not parallelism**. Parallelism is already free: every actor is a task on Tokio's multi-threaded work-stealing runtime, so putting work on more cores never requires another process. (Coming from Actix, this is the arbiter model inverted — an arbiter adds a thread to buy parallelism; an Acton peer process adds a bulkhead to buy isolation.) Merely long-running or blocking work doesn't need a process either: `spawn_blocking` inside a handler, or a dedicated actor that owns the blocking resource, solves scheduler starvation without leaving the process.
+
+Reach for IPC when the work needs a separate failure or resource domain — or was never in your process to begin with:
+
+- **Process isolation** — Crashy FFI or native code that can corrupt a heap, contained where in-process supervision can't reach
+- **Resource envelopes** — Memory-hungry or CPU-heavy work the OS should schedule, `nice`, or OOM-kill independently
+- **Independent lifecycle** — Components that deploy, restart, or version on their own cadence
 - **Language interop** — Python, Node.js, or other languages talking to Rust actors
-- **Process isolation** — Crash one process without affecting others
+- **External monitoring** — Query actor state from monitoring tools
+
+The price of the bulkhead is serialization at the boundary: in-process messages move as cheap clones through channels, while every IPC message pays encoding plus syscalls, and both sides must register the types that cross.
+
+{% callout type="note" title="Isolation's seam is process death" %}
+A peer that is itself an Acton runtime is fully supervised from the inside — its actors get restart policies and panic containment, and a supervised restart rebinds the actor's exposed IPC names, so remote callers keep addressing a valid handle. What no supervision tree covers is death of the peer process itself: that surfaces to the caller as an `IpcError`, not a supervision event, because a supervisor knows nothing about a process it did not start. Give the process an external supervisor (systemd or similar), and on the client side model the connection as state owned by an actor that can observe it dropping and react.
+{% /callout %}
 
 ---
 
