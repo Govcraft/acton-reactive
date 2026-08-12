@@ -2,6 +2,7 @@ import { nodes as defaultNodes, Tag } from '@markdoc/markdoc'
 import { slugifyWithCounter } from '@sindresorhus/slugify'
 import yaml from 'js-yaml'
 
+import { DocLink } from '@/components/DocLink'
 import { DocsLayout } from '@/components/DocsLayout'
 import { Fence } from '@/components/Fence'
 
@@ -39,6 +40,10 @@ const nodes = {
         children,
       )
     },
+  },
+  link: {
+    ...defaultNodes.link,
+    render: DocLink,
   },
   th: {
     ...defaultNodes.th,

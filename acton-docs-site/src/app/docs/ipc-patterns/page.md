@@ -43,7 +43,7 @@ calculator.mutate_on::<AddRequest>(|_actor, ctx| {
 
 ### Rust Client
 
-Use [`IpcClient`](#the-rust-client-ipcclient) — it handles framing, correlation, and timeouts for you:
+Use [`IpcClient`](#the-rust-client-ipc-client) — it handles framing, correlation, and timeouts for you:
 
 ```rust
 use acton_reactive::prelude::*;

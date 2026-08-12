@@ -68,7 +68,7 @@ export function Hero() {
                 actor-based architecture with message passing and pub/sub.
               </p>
               <div className="mt-8 flex gap-4 md:justify-center lg:justify-start">
-                <Button href="/docs/installation">Get started</Button>
+                <Button href="/docs/quick-start/installation">Get started</Button>
                 <Button
                   href="https://github.com/GovCraft/acton-reactive"
                   variant="secondary"
