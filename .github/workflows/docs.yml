@@ -50,6 +50,9 @@ jobs:
       - name: Build with Next.js
         run: pnpm run build
 
+      - name: Check links
+        run: python3 scripts/check-links.py --base-path /acton-reactive
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
