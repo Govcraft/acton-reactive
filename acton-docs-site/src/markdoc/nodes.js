@@ -1,6 +1,6 @@
 import { nodes as defaultNodes, Tag } from '@markdoc/markdoc'
 import { slugifyWithCounter } from '@sindresorhus/slugify'
-import yaml from 'js-yaml'
+import { load as yamlLoad } from 'js-yaml'
 
 import { DocLink } from '@/components/DocLink'
 import { DocsLayout } from '@/components/DocsLayout'
@@ -18,7 +18,7 @@ const nodes = {
       return new Tag(
         this.render,
         {
-          frontmatter: yaml.load(node.attributes.frontmatter),
+          frontmatter: yamlLoad(node.attributes.frontmatter),
           nodes: node.children,
         },
         node.transformChildren(config),
