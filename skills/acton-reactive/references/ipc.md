@@ -73,9 +73,20 @@ alone.
 
 ## Design note
 
-IPC does not make remote actors equivalent to local ones. A remote send can
-fail because the peer is gone, and the failure surfaces as `IpcError` rather
-than as a supervision event — the supervisor knows nothing about a process it
-did not start. Model the connection itself as state owned by an actor that can
-observe it dropping and react, rather than assuming a `RemoteActorRef` stays
-valid.
+A second process is acton's unit of isolation, not parallelism. Parallelism is
+already free: every actor is a task on the work-stealing runtime, so more cores
+never require another process (contrast actix, where parallelism means placing
+actors on new arbiter threads). Reach for a peer instance when the work needs a
+separate failure or resource domain — crashy FFI, memory-hungry native code, a
+different lifecycle — and accept serialization at the boundary as the price of
+the bulkhead. The peer is a full acton runtime: its actors get supervision,
+restart policies, and panic containment, and a supervised restart rebinds the
+actor's exposed IPC names so remote callers keep addressing a valid handle.
+
+The seam is process death. IPC does not make remote actors equivalent to local
+ones: a remote send can fail because the peer is gone, and the failure surfaces
+as `IpcError` rather than as a supervision event — the supervisor knows nothing
+about a process it did not start. The process itself needs an external
+supervisor (systemd or similar), and on the caller side, model the connection
+as state owned by an actor that can observe it dropping and react, rather than
+assuming a `RemoteActorRef` stays valid.
