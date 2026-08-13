@@ -5,6 +5,63 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.1.0] - 2026-08-12
+
+Adds scheduled sends. Nothing existing behaves differently.
+
+### Added
+
+- **`ActorHandle::send_after`, `send_at`, and `send_every`: the same message,
+  later.** Until now the only way to defer a message was `tokio::spawn` plus
+  `tokio::time::sleep`, which produces a task nobody owns — it does not take
+  part in shutdown, cannot be cancelled, hides its panics, and can only be
+  tested by sleeping in the test and hoping.
+
+  All three return a `ScheduledSend`: cancel it with `cancel()`, ask what
+  became of it with `outcome()`, count its deliveries with `deliveries()`.
+  Dropping the handle does *not* cancel the schedule, because a
+  fire-and-forget deferral is a legitimate thing to want.
+
+  A schedule ends when the target actor's inbox closes, so it cannot outlive
+  what it was sending to. That signal is the outbox closing rather than the
+  handle's cancellation token, which is an orphan that nothing in the crate
+  ever cancels, and the timer runs on a bare task rather than the actor's
+  `TaskTracker`, which `stop` waits on — either alternative would have been a
+  silent hang.
+
+- **`Cadence`, for repeating sends.** `Cadence::FixedRate` keeps deadlines on
+  a grid anchored at the call, so slow sends do not shift the schedule;
+  `Cadence::FixedDelay` measures each interval from the end of the previous
+  send, so consecutive ticks are always at least one interval apart.
+
+  The first tick lands one whole interval after the call, never immediately,
+  following Erlang's `timer:send_interval`.
+
+  **Missed ticks are skipped and coalesced.** A schedule that falls behind
+  steps over the deadlines that went by rather than firing them as a burst, so
+  at most one tick is ever pending and an actor cannot be flooded by the
+  schedule meant to pace it.
+
+- **`Interval`, a repeating period that cannot be zero.** A zero interval is a
+  spin loop rather than a schedule, and the fixed-rate arithmetic divides by
+  it. `Interval::new`, `from_secs`, and `from_millis` return `Option`;
+  `Duration::try_into` yields `ZeroInterval`.
+
+- **`Clock`, `SystemClock`, and `ManualClock`: time as an injectable seam.**
+  `handle.with_clock(clock)` returns a handle whose scheduled sends measure
+  against `clock`; everything else about it is unchanged.
+
+  `ManualClock` is public rather than a private test fixture, because anyone
+  writing an actor with a scheduled send has the same problem the crate does.
+  `tokio::time::pause` does not solve it here: it needs the `test-util`
+  feature and a current-thread runtime, while `#[acton_test]` builds a
+  multi-thread one, and it is process-global.
+
+  `Clock::timer` is deliberately not `async`. It registers the deadline before
+  returning, and schedules arm their first timer before spawning anything, so
+  a test that arms a schedule and immediately advances the clock is not racing
+  the timer task's first poll.
+
 ## [9.0.1] - 2026-08-03
 
 A test-harness fix. `acton-reactive` itself is unchanged, so nothing in a
