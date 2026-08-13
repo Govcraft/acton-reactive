@@ -330,8 +330,31 @@ impl OutboundEnvelope {
     /// Uses a fast-path with `try_reserve()` for the common case when the channel has capacity.
     #[instrument(skip(self, message), level = "trace", fields(message_type = std::any::type_name_of_val(&message)))]
     pub async fn try_send(&self, message: impl ActonMessage + 'static) -> Result<(), MessageError> {
-        let message = Arc::new(message);
+        self.try_send_dyn(Arc::new(message)).await
+    }
 
+    /// Sends an already-erased message with explicit error handling.
+    ///
+    /// The body of [`try_send`](Self::try_send), reachable for callers that
+    /// hold `Arc<dyn ActonMessage>` rather than a concrete type — a scheduled
+    /// send, which clones one copy of its payload per tick, is the reason this
+    /// exists. The public [`send_arc`](Self::send_arc) and
+    /// [`try_send_arc`](Self::try_send_arc) are both gated on the `ipc`
+    /// feature and neither returns a [`MessageError`], so neither can serve.
+    ///
+    /// Callers must pass an `Arc` built from the *message*, never from a `Box`
+    /// containing one. `Box<dyn ActonMessage>` itself satisfies the
+    /// `ActonMessage` blanket impl, so an `Arc::new(the_box)` would double-wrap
+    /// the payload and every handler's downcast would fail while the message
+    /// still looked correct in logs.
+    ///
+    /// # Errors
+    ///
+    /// As [`try_send`](Self::try_send).
+    pub(crate) async fn try_send_dyn(
+        &self,
+        message: Arc<dyn ActonMessage + Send + Sync>,
+    ) -> Result<(), MessageError> {
         // Determine the target address: recipient if Some, otherwise return_address.
         let target_address = self
             .recipient_address

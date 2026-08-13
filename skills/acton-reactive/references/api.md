@@ -10,6 +10,7 @@ Exact surface, verified against source. Everything here comes from
 - [Handlers](#handlers)
 - [Lifecycle hooks](#lifecycle-hooks)
 - [Sending and asking](#sending-and-asking)
+- [Sending later](#sending-later)
 - [ActorConfig](#actorconfig)
 - [What the prelude exports](#what-the-prelude-exports)
 
@@ -194,6 +195,99 @@ deadlocks the moment it asks back. Send instead, or move the exchange into a
 `send_sync` exists but spawns a blocking task and builds a new runtime. Avoid
 it.
 
+## Sending later
+
+Inherent on `ActorHandle`, new in 9.1. All three return immediately, having
+armed a timer.
+
+```rust
+fn send_after(&self, message: impl ActonMessage, delay: Duration) -> ScheduledSend
+fn send_at(&self, message: impl ActonMessage, deadline: Instant) -> ScheduledSend
+fn send_every(&self, message: impl ActonMessage, interval: Interval, cadence: Cadence)
+    -> ScheduledSend
+fn with_clock(&self, clock: Arc<dyn Clock>) -> ActorHandle
+fn clock(&self) -> Arc<dyn Clock>
+```
+
+Reach for these instead of `tokio::spawn` plus `tokio::time::sleep`. That task
+belongs to nobody: it survives shutdown, cannot be cancelled, and can only be
+tested by sleeping. A `ScheduledSend` ends when the actor does, reports what
+became of it, and runs on an injectable clock.
+
+`ScheduledSend`:
+
+```rust
+fn cancel(&self)                                    // idempotent
+fn due_at(&self) -> Option<FireAt>                  // next deadline, None once settled
+fn deliveries(&self) -> u64
+fn settled(&self) -> Option<ScheduledSendOutcome>   // non-blocking peek
+fn is_settled(&self) -> bool
+async fn outcome(&self) -> ScheduledSendOutcome     // barrier
+async fn wait_for_deliveries(&self, at_least: u64) -> u64
+```
+
+Dropping it does **not** cancel the schedule. `outcome` and
+`wait_for_deliveries` always resolve — they report `Abandoned` rather than
+hanging if the timer is torn down — which is what makes them usable as test
+barriers in place of a sleep.
+
+`ScheduledSendOutcome`:
+
+| Variant | Means |
+|---|---|
+| `Delivered` | reached the inbox; terminal for one-shots only |
+| `Cancelled` | `cancel()` beat the deadline |
+| `Abandoned` | the actor's inbox closed first |
+| `Undeliverable { detail }` | came due, but the send failed |
+
+### Repeating sends
+
+The first tick lands **one whole interval after the call**, never immediately
+(Erlang's `timer:send_interval` convention). `send` first if you also want one
+now.
+
+`Interval` cannot be zero — a zero interval is a spin loop, not a schedule.
+Build it with `Interval::new(Duration)`, `from_secs`, `from_millis` (all
+returning `Option`) or `Duration::try_into()`, which yields `ZeroInterval`.
+
+`Cadence` picks how the gap is measured:
+
+| Variant | Next deadline | Use for |
+|---|---|---|
+| `FixedRate` | `armed_at + n * interval` — a grid that slow sends do not shift | ticks that mark *times* |
+| `FixedDelay` | `now_after_send + interval` | ticks that mark *gaps* |
+
+**Missed ticks are skipped and coalesced.** If a schedule falls behind, the
+deadlines that went by are stepped over rather than fired as a burst; at most
+one tick is ever pending. So advancing a clock by three intervals delivers
+**one** message, not three, under either cadence.
+
+A repeating schedule never settles on `Delivered`. It runs until cancelled, the
+actor stops, or a delivery fails — including when the returned handle is
+dropped, which is worth being deliberate about.
+
+### Testing scheduled sends
+
+`tokio::time::pause` does not work here: it needs the `test-util` feature and a
+current-thread runtime, while `#[acton_test]` builds a multi-thread one. Inject
+a `ManualClock` instead.
+
+```rust
+let clock = Arc::new(ManualClock::new());
+let scheduled = handle.with_clock(clock.clone()).send_after(Tick, Duration::from_secs(60));
+
+assert_eq!(clock.armed(), 1);          // armed before `send_after` returned
+clock.advance(Duration::from_secs(60));
+assert_eq!(scheduled.outcome().await, ScheduledSendOutcome::Delivered);
+```
+
+`Clock` is a two-method trait: `now()` and `timer(deadline) -> Timer`. `timer`
+is deliberately *not* `async` — it registers the deadline before returning, so
+a test that arms a schedule and immediately advances the clock is not racing
+the timer task's first poll. `ManualClock::armed()` is exact for the same
+reason. `ManualClock` also has `starting_at`, `advance`, and `advance_to`,
+which never moves time backwards.
+
 ## ActorConfig
 
 ```rust
@@ -226,7 +320,9 @@ build it with `..Default::default()` rather than listing fields.
 Macros from `acton_macro`, all of `acton_ern`, `async_trait`, and `tokio`.
 
 **Core:** `ActonApp`, `ActorRuntime`, `ActorHandle`, `Broker`, `BrokerRef`,
-`ParentRef`, `Reply`, `AskError`, `DEFAULT_ASK_TIMEOUT`.
+`ParentRef`, `Reply`, `AskError`, `DEFAULT_ASK_TIMEOUT`, `ScheduledSend`,
+`ScheduledSendOutcome`, `Cadence`, `Interval`, `ZeroInterval`, `FireAt`, `Clock`,
+`SystemClock`, `ManualClock`, `Timer`.
 
 **Actors and supervision:** `ActorConfig`, `ManagedActor`, `Idle`, `Started`,
 `SupervisedChild`, `SupervisionState`, `SupervisionStatus`,

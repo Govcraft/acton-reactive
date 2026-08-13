@@ -15,6 +15,8 @@
 //! *   [`Broker`]: The central publish-subscribe message broker implementation.
 //! *   [`Reply`]: A utility struct for creating standard return types for message handlers.
 //! *   [`AskError`]: Why a request/reply exchange produced no reply.
+//! *   [`ScheduledSend`]: A message deferred to a deadline, cancellable and observable.
+//! *   [`Clock`]: The seam scheduled sends measure time against, so tests need not wait.
 //!
 //! Internal types and submodules handle the implementation details for these components.
 
@@ -39,6 +41,10 @@ pub use acton::ActonApp;
 pub use actor_handle::ActorHandle;
 pub use actor_reply::Reply;
 pub use ask::{AskError, DEFAULT_ASK_TIMEOUT};
+pub use clock::{Clock, ManualClock, SystemClock, Timer};
+pub use scheduled_send::{
+    Cadence, FireAt, Interval, ScheduledSend, ScheduledSendOutcome, ZeroInterval,
+};
 pub use actor_runtime::ActorRuntime;
 #[cfg(feature = "ipc")]
 pub use actor_runtime::IpcNameInUse;
@@ -64,6 +70,11 @@ mod actor_handle;
 mod actor_reply;
 /// Defines request/reply support: [`AskError`] and the machinery behind `ask`.
 pub mod ask;
+/// Defines the [`Clock`] seam that scheduled sends measure time against.
+pub mod clock;
+/// Defines scheduled sends: the machinery behind `send_after`, `send_at`, and
+/// `send_every`.
+pub mod scheduled_send;
 /// Defines the `ActorRuntime` for managing the system.
 mod actor_runtime;
 /// Defines the `Broker` implementation.

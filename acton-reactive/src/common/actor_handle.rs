@@ -16,6 +16,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::time::{Duration, Instant};
 
 use acton_ern::Ern;
 use async_trait::async_trait;
@@ -29,6 +30,10 @@ use tracing::{error, instrument, trace, warn}; // warn seems unused
 use crate::actor::{
     status_channel, ActorConfig, ChildBlueprint, ChildSpawner, Idle, ManagedActor, RestartGeneration,
     SupervisedChild, SupervisionError, SupervisionState, SupervisionStatus, TypedSpawner,
+};
+use crate::common::clock::{Clock, SystemClock};
+use crate::common::scheduled_send::{
+    arm, Cadence, FireAt, Interval, Plan, Schedule, ScheduledSend,
 };
 use crate::common::{ActorRuntime, ActorSender, BrokerRef, OutboundEnvelope};
 use crate::message::{
@@ -75,6 +80,10 @@ pub struct ActorHandle {
     children: DashMap<String, Self>,
     /// The actor's cancellation token (clone).
     pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
+    /// The clock that scheduled sends made through this handle measure their
+    /// deadlines against. [`SystemClock`] unless
+    /// [`with_clock`](Self::with_clock) says otherwise.
+    clock: Arc<dyn Clock>,
 }
 
 impl ActorHandle {
@@ -92,6 +101,7 @@ impl ActorHandle {
             broker: Box::new(None),
             children: DashMap::new(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -113,6 +123,7 @@ impl ActorHandle {
             broker: Box::new(None),
             children: DashMap::new(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
+            clock: Arc::new(SystemClock),
         }
     }
 }
@@ -125,6 +136,182 @@ impl Default for ActorHandle {
     /// before being properly configured when a `ManagedActor` is created.
     fn default() -> Self {
         Self::placeholder()
+    }
+}
+
+/// Scheduled sends: the same message, later.
+impl ActorHandle {
+    /// Sends `message` to this actor after `delay`.
+    ///
+    /// Returns immediately, having armed a timer. The returned
+    /// [`ScheduledSend`] is how you cancel it and how you learn what became of
+    /// it; dropping the handle does **not** cancel the send, because a
+    /// fire-and-forget deferral is a legitimate thing to want.
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use acton_reactive::prelude::*;
+    /// # async fn example(handle: ActorHandle) {
+    /// # #[acton_message] struct Remind;
+    /// let scheduled = handle.send_after(Remind, Duration::from_secs(30));
+    /// // ... and, if it turns out not to be wanted after all:
+    /// scheduled.cancel();
+    /// # }
+    /// ```
+    ///
+    /// # Why not `tokio::spawn` and `sleep`
+    ///
+    /// Because that task belongs to nobody: it does not take part in
+    /// shutdown, cannot be cancelled, and can only be tested by sleeping. This
+    /// ends when the actor does, reports its outcome, and can be driven by an
+    /// injected clock — see [`with_clock`](Self::with_clock).
+    ///
+    /// A delay of [`Duration::ZERO`](std::time::Duration::ZERO) sends as soon
+    /// as the timer task is scheduled, which is *not* the same as
+    /// [`send`](crate::traits::ActorHandleInterface::send): the ordering
+    /// against messages sent afterwards is not guaranteed.
+    pub fn send_after(&self, message: impl ActonMessage, delay: Duration) -> ScheduledSend {
+        let due = FireAt::after(self.clock.now(), delay);
+        self.schedule(message, Plan::Once(due))
+    }
+
+    /// Sends `message` to this actor at `deadline`.
+    ///
+    /// [`send_after`](Self::send_after) with an absolute instant rather than a
+    /// delay. A deadline that has already passed sends promptly rather than
+    /// being dropped, so a schedule restored from persisted state does not
+    /// silently lose everything that fell due while the process was down.
+    ///
+    /// The instant is interpreted against this handle's clock, so pair it with
+    /// [`with_clock`](Self::with_clock) rather than mixing an
+    /// [`Instant`](std::time::Instant) from one clock with a deadline on
+    /// another.
+    pub fn send_at(&self, message: impl ActonMessage, deadline: Instant) -> ScheduledSend {
+        self.schedule(message, Plan::Once(FireAt::at(deadline)))
+    }
+
+    /// Sends a copy of `message` to this actor every `interval`, forever.
+    ///
+    /// The first tick lands **one whole interval after this call**, never
+    /// immediately — Erlang's `timer:send_interval` convention, and the only
+    /// one under which `send_every` and [`send_after`](Self::send_after)
+    /// compose predictably. Send [`send`](crate::traits::ActorHandleInterface::send)
+    /// first if you want one now as well.
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use acton_reactive::prelude::*;
+    /// # async fn example(handle: ActorHandle) {
+    /// # #[acton_message] struct Sample;
+    /// let every_second = Interval::from_secs(1).expect("one second is not zero");
+    /// let ticks = handle.send_every(Sample, every_second, Cadence::FixedRate);
+    /// # ticks.cancel();
+    /// # }
+    /// ```
+    ///
+    /// The schedule runs until [`cancel`](ScheduledSend::cancel) is called, the
+    /// actor's inbox closes, or a delivery fails. It does **not** stop when the
+    /// returned handle is dropped, so a `send_every` whose receipt is discarded
+    /// runs for the life of the actor. That is usually what is wanted for a
+    /// heartbeat, and is worth being deliberate about otherwise.
+    ///
+    /// # Cadence
+    ///
+    /// [`Cadence::FixedRate`] keeps deadlines on a grid anchored at this call;
+    /// [`Cadence::FixedDelay`] measures each interval from the end of the
+    /// previous send. The two are indistinguishable while sends are prompt and
+    /// diverge once one runs late.
+    ///
+    /// # Missed ticks are skipped, never queued
+    ///
+    /// If the schedule falls behind — a slow handler, a suspended process, a
+    /// clock jumped forward — the deadlines that went by are stepped over
+    /// rather than fired as a catch-up burst. At most one tick is ever
+    /// pending, so an actor cannot be flooded by the schedule that was meant
+    /// to pace it. Advancing a clock by three intervals therefore delivers
+    /// **one** message, not three.
+    ///
+    /// # Backpressure
+    ///
+    /// A tick waits for room in the inbox rather than being dropped, so a full
+    /// inbox delays the next deadline as a slow send would. Under
+    /// [`Cadence::FixedRate`] the schedule then skips forward to the grid; the
+    /// pacing survives, individual ticks do not.
+    pub fn send_every(
+        &self,
+        message: impl ActonMessage,
+        interval: Interval,
+        cadence: Cadence,
+    ) -> ScheduledSend {
+        self.schedule(
+            message,
+            Plan::Repeat {
+                armed_at: self.clock.now(),
+                interval,
+                cadence,
+            },
+        )
+    }
+
+    /// A clone of this handle whose scheduled sends measure time against
+    /// `clock`.
+    ///
+    /// The injection point for [`Clock`], and the whole of it: nothing else in
+    /// the framework needs threading, because scheduling is the only thing
+    /// that reads a clock. Everything else about the returned handle — its
+    /// identity, its inbox, its children — is unchanged, so it addresses the
+    /// same actor and compares equal to the handle it came from.
+    ///
+    /// Pair it with [`ManualClock`](crate::common::ManualClock) to test
+    /// scheduling without waiting:
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::time::Duration;
+    /// # use acton_reactive::prelude::*;
+    /// # async fn example(handle: ActorHandle) -> anyhow::Result<()> {
+    /// # #[acton_message] struct Tick;
+    /// let clock = Arc::new(ManualClock::new());
+    /// let scheduled = handle
+    ///     .with_clock(clock.clone())
+    ///     .send_after(Tick, Duration::from_secs(3600));
+    ///
+    /// clock.advance(Duration::from_secs(3600));
+    /// assert_eq!(scheduled.outcome().await, ScheduledSendOutcome::Delivered);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Only sends scheduled *through the returned handle* use `clock`. Handles
+    /// obtained elsewhere — including the one this was cloned from — keep
+    /// their own.
+    #[must_use]
+    pub fn with_clock(&self, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            clock,
+            ..self.clone()
+        }
+    }
+
+    /// The clock this handle's scheduled sends measure against.
+    #[must_use]
+    pub fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+
+    /// Arms `plan` for `message`, addressed at this actor.
+    ///
+    /// The shared body of the three scheduling methods, written once so they
+    /// cannot drift apart: they differ only in the [`Plan`] they build.
+    fn schedule(&self, message: impl ActonMessage, plan: Plan) -> ScheduledSend {
+        trace!(recipient = %self.id, ?plan, "Arming a scheduled send");
+        arm(Schedule {
+            clock: Arc::clone(&self.clock),
+            envelope: self.create_envelope(Some(self.reply_address())),
+            outbox: self.outbox.clone(),
+            message: Box::new(message),
+            plan,
+        })
     }
 }
 

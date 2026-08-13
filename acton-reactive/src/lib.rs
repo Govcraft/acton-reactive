@@ -141,6 +141,16 @@ pub mod ipc {
 /// *   [`crate::common::ActorRuntime`]: Represents the initialized Acton runtime.
 /// *   [`crate::common::AskError`]: Why a request/reply exchange produced no reply.
 /// *   [`crate::common::DEFAULT_ASK_TIMEOUT`]: The deadline `ask` applies by default.
+/// *   [`crate::common::ScheduledSend`]: A message deferred to a deadline; cancel it and observe it.
+/// *   [`crate::common::ScheduledSendOutcome`]: What became of a scheduled send.
+/// *   [`crate::common::Cadence`]: Whether a repeating send is fixed-rate or fixed-delay.
+/// *   [`crate::common::Interval`]: A repeating interval, never zero.
+/// *   [`crate::common::ZeroInterval`]: An [`Interval`](crate::common::Interval) was asked for with a period of zero.
+/// *   [`crate::common::FireAt`]: The moment a scheduled send comes due.
+/// *   [`crate::common::Clock`]: The seam scheduled sends measure time against.
+/// *   [`crate::common::SystemClock`]: The wall clock, and every handle's default.
+/// *   [`crate::common::ManualClock`]: A clock that only moves when a test moves it.
+/// *   [`crate::common::Timer`]: The future an armed deadline hands back.
 /// *   [`crate::message::BrokerRequest`]: Wrapper for messages intended for broadcast.
 /// *   [`crate::message::BrokerRequestEnvelope`]: Specialized envelope for broadcast messages.
 /// *   [`crate::message::MessageAddress`]: Addressable endpoint of an actor.
@@ -185,8 +195,9 @@ pub mod prelude {
         SupervisionStatus, SupervisionStrategy, TerminationReason, MAX_SUPERVISION_DEPTH,
     };
     pub use crate::common::{
-        ActonApp, ActorHandle, ActorRuntime, AskError, Broker, BrokerRef, ParentRef, Reply,
-        DEFAULT_ASK_TIMEOUT,
+        ActonApp, ActorHandle, ActorRuntime, AskError, Broker, BrokerRef, Cadence, Clock, FireAt,
+        Interval, ManualClock, ParentRef, Reply, ScheduledSend, ScheduledSendOutcome, SystemClock,
+        Timer, ZeroInterval, DEFAULT_ASK_TIMEOUT,
     };
     pub use crate::message::{
         BroadcastsFlushed, BrokerRequest, BrokerRequestEnvelope, ChildTerminated, FlushBroadcasts,

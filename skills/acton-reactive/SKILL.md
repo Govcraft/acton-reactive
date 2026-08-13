@@ -173,6 +173,13 @@ directly inside it. For fire-and-forget work triggered from outside the actor
 system (an HTTP route, say), send a message to an actor that does the work; its
 concurrency cap becomes natural backpressure.
 
+**The special case worth naming: `spawn` plus `sleep` to send something later.**
+That is the most common form of this reflex and it has had its own answer since
+9.1 — `handle.send_after(msg, delay)`, `send_at`, and `send_every`. They return
+a `ScheduledSend` you can cancel and await, they end when the target actor does,
+and they take an injectable `Clock` so the test drives time instead of waiting
+for it. Reach for them before writing a timer by hand.
+
 ### Reflex 4: treating `ask` as a function call
 
 `ask` is new in 9.0 and it is genuinely useful, which is exactly why it gets
@@ -324,6 +331,9 @@ it does not.
 | Need | Reach for |
 |---|---|
 | Fire and forget | `handle.send(msg).await` |
+| Send it later | `handle.send_after(msg, delay)` / `send_at(msg, deadline)` |
+| Send it repeatedly | `handle.send_every(msg, interval, Cadence::FixedRate)` |
+| Drive scheduled time in a test | `handle.with_clock(Arc::new(ManualClock::new()))` |
 | Ask and wait for one reply | `handle.ask(req).await?` (needs `impl Request`) |
 | Ask with a deadline | `handle.ask_with_timeout(req, dur).await?` |
 | Reply from a handler | `ctx.reply_envelope()` then `.send(reply).await` |
@@ -353,7 +363,7 @@ Run these. They catch the reflexes above mechanically.
 ```sh
 rg 'Arc<(Mutex|RwLock)' --type rust     # every hit needs a reason
 rg 'tokio::spawn' --type rust           # none inside handlers
-rg 'sleep\(' --type rust                # none as synchronisation
+rg 'sleep\(' --type rust                # none as synchronisation, none as a timer
 cargo clippy --all-targets -- -D warnings
 cargo nextest run
 ```
