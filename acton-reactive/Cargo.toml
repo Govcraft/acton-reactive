@@ -22,7 +22,6 @@ dyn-clone.workspace = true
 derive-new.workspace = true
 acton-ern.workspace = true
 tracing-appender.workspace = true
-xdg.workspace = true
 serde.workspace = true
 toml.workspace = true
 rand.workspace = true
@@ -178,3 +177,6 @@ required-features = ["ipc"]
 [[bench]]
 name = "actor_benchmarks"
 harness = false
+
+[target."cfg(unix)".dependencies]
+xdg = "2.5"
