@@ -24,3 +24,16 @@ jobs:
       run: cargo test --verbose --features ipc-messagepack
     - name: Run tests (no default features)
       run: cargo test --verbose -p acton-reactive --no-default-features
+
+  windows:
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+    - name: Check no default features
+      run: cargo check --verbose -p acton-reactive --no-default-features
