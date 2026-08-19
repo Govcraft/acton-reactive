@@ -15,13 +15,15 @@
  */
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 /// Configuration for the Acton Reactive framework
 ///
-/// This struct contains all configurable values for the Acton framework,
-/// loaded from TOML files in XDG-compliant directories.
+/// This struct contains all configurable values for the Acton framework, loaded
+/// from a TOML file in the host platform's configuration directory (XDG on Unix,
+/// `%APPDATA%` elsewhere). See [`ActonConfig::load`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -169,31 +171,27 @@ impl ActonConfig {
         Duration::from_millis(self.timeouts.system_shutdown)
     }
 
-    /// Load configuration from XDG-compliant locations
+    /// Load configuration from the host platform's configuration directory
     ///
-    /// This function attempts to load configuration from the following locations
-    /// in order of preference:
-    /// 1. `$XDG_CONFIG_HOME/acton/config.toml` (Linux/macOS)
-    /// 2. `~/.config/acton/config.toml` (Linux fallback)
-    /// 3. `~/Library/Application Support/acton/config.toml` (macOS fallback)
-    /// 4. `%APPDATA%/acton/config.toml` (Windows)
+    /// On Unix the XDG base directory search path is used, under the `acton`
+    /// prefix: `$XDG_CONFIG_HOME/acton/config.toml` (defaulting to
+    /// `~/.config/acton/config.toml`), then each entry of `$XDG_CONFIG_DIRS`.
+    /// On every other platform the file is read from `%APPDATA%\acton\config.toml`.
     ///
     /// If no configuration file is found, returns the default configuration.
     /// If a configuration file exists but is malformed, logs an error and uses defaults.
     pub fn load() -> Self {
         use tracing::{error, info};
 
-        // Get the XDG base directories
-        let xdg_dirs = match xdg::BaseDirectories::with_prefix("acton") {
-            Ok(dirs) => dirs,
+        let located = match super::config_paths::find_config_file(Path::new("config.toml")) {
+            Ok(located) => located,
             Err(e) => {
-                error!("Failed to initialize XDG directories: {}", e);
+                error!("Failed to locate the configuration directory: {}", e);
                 return Self::default();
             }
         };
 
-        // Try to find the configuration file
-        xdg_dirs.find_config_file("config.toml").map_or_else(
+        located.map_or_else(
             || {
                 info!("No configuration file found, using defaults");
                 Self::default()
@@ -229,5 +227,6 @@ impl ActonConfig {
     }
 }
 
-/// Global configuration instance loaded from XDG-compliant locations
+/// Global configuration instance loaded from the host platform's configuration
+/// directory
 pub static CONFIG: LazyLock<ActonConfig> = LazyLock::new(ActonConfig::load);

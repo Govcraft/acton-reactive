@@ -81,6 +81,9 @@ mod actor_runtime;
 mod broker;
 /// Defines the configuration system for the Acton framework.
 pub mod config;
+/// Locates configuration files on the host platform (XDG on Unix, `%APPDATA%`
+/// elsewhere).
+mod config_paths;
 
 /// IPC (Inter-Process Communication) support for external process messaging.
 ///

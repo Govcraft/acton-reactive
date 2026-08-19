@@ -5,6 +5,32 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.2.0] - 2026-08-19
+
+Makes the crate compile off Unix. Nothing behaves differently on Unix.
+
+### Fixed
+
+- **The crate no longer fails to build on non-Unix targets.** `xdg` is declared
+  under `[target.'cfg(unix)'.dependencies]`, but `ActonConfig::load` named it
+  unconditionally, so `cargo check --target x86_64-pc-windows-msvc` died with
+  `cannot find module or crate xdg` before reaching any Acton code. Configuration
+  discovery now goes through a single internal module that states the platform
+  rule once: the XDG search path under the `acton` prefix on Unix, and
+  `%APPDATA%\acton\config.toml` everywhere else.
+
+  Unix resolution is unchanged, including `$XDG_CONFIG_HOME` and the
+  `$XDG_CONFIG_DIRS` search path. A configuration directory that cannot be
+  determined at all is now distinguished from one that simply holds no file, so
+  the former is logged as an error rather than passed off as "using defaults".
+
+### Changed
+
+- **Enabling `ipc` on a non-Unix target now fails with an explanation.** The
+  feature is built on Unix domain sockets and never could have worked there; it
+  previously produced a wall of unresolved-import errors from the transport
+  layer. A `compile_error!` now leads that output and names the fix.
+
 ## [9.1.0] - 2026-08-12
 
 Adds scheduled sends. Nothing existing behaves differently.

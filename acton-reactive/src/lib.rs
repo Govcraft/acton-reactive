@@ -52,6 +52,17 @@
 //! }
 //! ```
 
+// The `ipc` feature is built on Unix domain sockets and has no equivalent on other
+// targets. Refusing here gives one legible message instead of a cascade of
+// unresolved-import errors from the transport layer.
+#[cfg(all(feature = "ipc", not(unix)))]
+compile_error!(
+    "the `ipc` feature of acton-reactive requires a Unix target: it is built on Unix domain \
+     sockets, which this target does not provide. Disable the `ipc` feature (and \
+     `ipc-messagepack`, which enables it) for this target, for example with \
+     `default-features = false` or a `[target.'cfg(unix)'.dependencies]` entry."
+);
+
 /// Internal utilities and structures used throughout the Acton framework.
 pub(crate) mod common;
 

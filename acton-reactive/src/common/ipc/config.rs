@@ -302,17 +302,23 @@ impl IpcConfig {
     /// If neither exists, the default configuration is returned.
     #[must_use]
     pub fn load() -> Self {
-        let xdg_dirs = match xdg::BaseDirectories::with_prefix("acton") {
-            Ok(dirs) => dirs,
+        let app_name = Self::default_app_name();
+
+        let located = crate::common::config_paths::find_config_file(
+            &PathBuf::from(&app_name).join(CONFIG_FILE_NAME),
+        )
+        .and_then(|per_app| {
+            crate::common::config_paths::find_config_file(Path::new(CONFIG_FILE_NAME))
+                .map(|shared| (per_app, shared))
+        });
+
+        let (per_app, shared) = match located {
+            Ok(paths) => paths,
             Err(e) => {
-                warn!("Failed to initialize XDG directories for IPC config: {}", e);
+                warn!("Failed to locate the configuration directory for IPC config: {e}");
                 return Self::default();
             }
         };
-
-        let app_name = Self::default_app_name();
-        let per_app = xdg_dirs.find_config_file(PathBuf::from(&app_name).join(CONFIG_FILE_NAME));
-        let shared = xdg_dirs.find_config_file(CONFIG_FILE_NAME);
 
         resolve_config_path(per_app, shared).map_or_else(
             || {
