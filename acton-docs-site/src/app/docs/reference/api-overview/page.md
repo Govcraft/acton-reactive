@@ -101,7 +101,7 @@ handle.stop().await.ok();
 | `supervise(child).await` | Adopt an already-built actor for cascading shutdown. No blueprint, so **never restarted** |
 | `unsupervise(&ern).await` | Retire the record and **stop** the child, dropping its IPC names |
 | `release(&ern).await` | Retire the record and hand the child back **still running** |
-| `children()` | The local view of children supervised through *this handle clone*; handles go stale across a restart |
+| `children()` | Children supervised through this actor's handles — every clone shares one map; handles go stale across a restart |
 | `find_child(&ern)` | Look up a direct child by ERN, with the same caveat |
 | `id()` | Get actor's identifier (`Ern`) |
 | `name()` | Get actor's root name |

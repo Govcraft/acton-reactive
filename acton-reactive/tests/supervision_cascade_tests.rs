@@ -17,10 +17,10 @@
 //! Cascading shutdown reaches every supervised child.
 //!
 //! A supervisor decides which children to stop from two views that can
-//! legitimately disagree: its own registry, and the `children` map on the handle
-//! a `supervise()` call was made through. Each test here covers a case that only
-//! one of those two views can see, so a "simplification" to either one alone
-//! fails a test rather than silently orphaning a child.
+//! legitimately disagree: its own registry, and the `children` map its handles
+//! share. Each test here covers a case that only one of those two views can
+//! see, so a "simplification" to either one alone fails a test rather than
+//! silently orphaning a child.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -71,9 +71,11 @@ fn spawn_child(
 /// A child supervised through a handle clone obtained *after* the parent started
 /// is still stopped when the parent stops.
 ///
-/// This is the case the registry exists for. `ActorHandle::clone` deep-copies
-/// the `children` map, so a child adopted through such a clone is invisible to
-/// the parent's own task — before the registry, it simply outlived its parent.
+/// This is the case the registry was added for: `ActorHandle::clone` used to
+/// deep-copy the `children` map, so a child adopted through such a clone was
+/// invisible to the parent's own task and simply outlived it. The map is now
+/// shared, so both views see this child; the registry still has to carry it,
+/// because a caller may drop the clone it supervised through.
 ///
 /// The parent is stopped directly rather than through `shutdown_all()`, because
 /// `shutdown_all()` stops roots itself and would pass even if the cascade were
@@ -84,8 +86,7 @@ async fn a_child_supervised_through_a_handle_clone_is_stopped_with_its_parent(
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let parent = runtime.new_actor::<Parent>().start().await;
-    // A clone obtained after the parent started: its `children` map is a
-    // separate copy that the parent's task can never see.
+    // A clone obtained after the parent started.
     let external = parent.clone();
 
     let stopped = Arc::new(AtomicBool::new(false));
@@ -106,15 +107,15 @@ async fn a_child_supervised_through_a_handle_clone_is_stopped_with_its_parent(
     Ok(())
 }
 
-/// A handle clone carries an independent `children` map.
+/// Every clone of a handle shares one `children` map.
 ///
-/// The mechanism the whole cascade story rests on. `ActorHandle` holds a
-/// `DashMap`, whose `Clone` deep-copies, so what one clone supervises is
-/// invisible to every other clone — including the one living inside the actor's
-/// own task. Pinned here so that a change to how handles clone shows up as a
-/// failure with an explanation rather than as an orphaned child.
+/// The map lives behind an `Arc`, so cloning a handle costs a reference-count
+/// bump instead of a deep copy of every child handle, and a child supervised
+/// through any clone is visible through all of them — including the handle
+/// living inside the actor's own task. Pinned here in both directions so that
+/// a regression to per-clone maps fails with an explanation.
 #[acton_test]
-async fn supervising_through_one_clone_is_invisible_to_another() -> anyhow::Result<()> {
+async fn supervising_through_one_clone_is_visible_to_another() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let parent = runtime.new_actor::<Parent>().start().await;
@@ -122,13 +123,74 @@ async fn supervising_through_one_clone_is_invisible_to_another() -> anyhow::Resu
 
     let stopped = Arc::new(AtomicBool::new(false));
     let child = spawn_child(&mut runtime, &stopped);
-    other_clone.supervise(child).await?;
+    let through_clone = other_clone.supervise(child).await?;
 
     assert_eq!(other_clone.children().len(), 1);
     assert_eq!(
         parent.children().len(),
-        0,
-        "a clone's children map is its own"
+        1,
+        "a child supervised through a clone is missing from the original handle"
+    );
+    assert!(
+        parent.find_child(&through_clone.id()).is_some(),
+        "the original handle cannot find a child supervised through its clone"
+    );
+
+    // And the other way round: a clone taken before the child was supervised,
+    // and one taken after, both read the same map.
+    let stopped_second = Arc::new(AtomicBool::new(false));
+    let second = spawn_child(&mut runtime, &stopped_second);
+    let through_original = parent.supervise(second).await?;
+
+    assert_eq!(other_clone.children().len(), 2);
+    assert!(
+        other_clone.find_child(&through_original.id()).is_some(),
+        "the clone cannot find a child supervised through the original handle"
+    );
+    assert_eq!(parent.clone().children().len(), 2);
+
+    runtime.shutdown_all().await?;
+    Ok(())
+}
+
+/// What cloning a handle costs, measured rather than asserted.
+///
+/// Ignored by default because it is a timing report, not a pass/fail property:
+/// run it with `cargo nextest run --ignored handle_clone_cost` (or
+/// `cargo test -- --ignored --nocapture`) and read the printed ns/clone.
+#[acton_test]
+#[ignore = "timing report, not a correctness check"]
+async fn handle_clone_cost_with_fifty_children() -> anyhow::Result<()> {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const ITERATIONS: u32 = 100_000;
+
+    let mut runtime: ActorRuntime = ActonApp::launch_async().await;
+    let parent = runtime.new_actor::<Parent>().start().await;
+
+    let stopped = Arc::new(AtomicBool::new(false));
+    for _ in 0..50 {
+        parent
+            .supervise(spawn_child(&mut runtime, &stopped))
+            .await?;
+    }
+    assert_eq!(parent.children().len(), 50);
+
+    // Warm the allocator so the first few clones do not dominate.
+    for _ in 0..1_000 {
+        drop(black_box(parent.clone()));
+    }
+
+    let started = Instant::now();
+    for _ in 0..ITERATIONS {
+        drop(black_box(parent.clone()));
+    }
+    let elapsed = started.elapsed();
+
+    println!(
+        "clone+drop of a handle with 50 children: {} ns/clone ({elapsed:?} for {ITERATIONS} iterations)",
+        elapsed.as_nanos() / u128::from(ITERATIONS)
     );
 
     runtime.shutdown_all().await?;

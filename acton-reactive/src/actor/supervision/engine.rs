@@ -354,19 +354,19 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// - the registry, which is authoritative but only knows what this actor's
     ///   task has already processed;
     /// - `handle.children()`, which is written synchronously by `supervise()`
-    ///   but only on the handle clone that call was made through;
+    ///   through any clone of this actor's handle, since all clones share one
+    ///   map;
     /// - `late_arrivals`, children whose start landed in the inbox after this
     ///   actor stopped reading it.
     ///
-    /// No one of them is sufficient. A child supervised through a handle clone
-    /// obtained after this actor started is absent from the task-local
-    /// `children` map, because cloning a handle deep-copies that map. A child
-    /// supervised from inside this actor's own handler is present there
-    /// immediately, but its registration message may still be queued behind the
-    /// very `Terminate` that triggered this shutdown. And a child this actor
-    /// started itself is in neither until its start task's report is processed,
-    /// which may never happen. Reading fewer views drops one of those children
-    /// on the floor.
+    /// No one of them is sufficient. A child supervised from inside this
+    /// actor's own handler is in the `children` map immediately, but its
+    /// registration message may still be queued behind the very `Terminate`
+    /// that triggered this shutdown. A child this actor started itself from a
+    /// blueprint is never in the `children` map at all, and is not in the
+    /// registry either until its start task's report is processed, which may
+    /// never happen. Reading fewer views drops one of those children on the
+    /// floor.
     pub(crate) fn shutdown_child_handles(&self, late_arrivals: Vec<ActorHandle>) -> Vec<ActorHandle> {
         let mut seen = std::collections::HashSet::new();
         let mut handles = Vec::new();

@@ -31,7 +31,7 @@ let child = parent_handle.release(&child_ern).await?;
 
 **2. Cascading shutdown now reaches every supervised child.**
 
-A child supervised through a **handle clone obtained after the parent started** used to be invisible to the parent's own task and simply outlived it. `ActorHandle` stores its children in a map that is deep-copied on clone. Such a child is now stopped with its parent.
+A child supervised through a **handle clone obtained after the parent started** used to be invisible to the parent's own task and simply outlived it, because `ActorHandle` stored its children in a map that was deep-copied on clone. Such a child is now stopped with its parent. (Since 9.2.1 the map is shared by every clone of a handle, so the parent's own task sees it too.)
 
 If a child genuinely should outlive its supervisor, start it as a root actor instead of supervising it.
 

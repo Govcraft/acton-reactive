@@ -55,14 +55,17 @@ pub trait ActorHandleInterface: Send + Sync + Debug + Clone + 'static {
     ///   If `None`, the envelope is created without a specific recipient.
     fn create_envelope(&self, recipient_address: Option<MessageAddress>) -> OutboundEnvelope;
 
-    /// Returns a reference to the map of children supervised **through this
-    /// handle**.
+    /// Returns a reference to the map of children supervised through this
+    /// actor's handles.
     ///
-    /// This is a local view, not the supervisor's roster. `ActorHandle` holds
-    /// its children in a `DashMap` that is deep-copied on clone, so each clone
-    /// accumulates only what was supervised through it. A child adopted through
-    /// a different clone of the same actor's handle will not appear here, and
-    /// neither will one adopted from inside the actor's own message handler.
+    /// Every clone of a handle shares one map, so a child adopted through any
+    /// clone — including one obtained after the actor started, or the handle
+    /// living inside the actor's own message handler — appears here.
+    ///
+    /// This is still not the supervisor's roster: children the framework
+    /// started from a blueprint are recorded by the actor's own task and are
+    /// not inserted here, and nothing is ever removed from this map, so a
+    /// child that has since stopped still appears.
     ///
     /// The handles stored here name one incarnation. If a child is restarted,
     /// the handle kept here goes stale. Use

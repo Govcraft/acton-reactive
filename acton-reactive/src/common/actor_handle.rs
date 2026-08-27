@@ -77,7 +77,19 @@ pub struct ActorHandle {
     pub broker: Box<Option<Self>>,
     /// A map holding handles to the direct children supervised by this actor.
     /// Keys are the string representation of the child actor's `Ern`.
-    children: DashMap<String, Self>,
+    ///
+    /// Behind an `Arc` so that cloning a handle is a reference-count bump
+    /// rather than a deep copy of every child handle, and so that every clone
+    /// of a handle — including the one living inside the actor's own task —
+    /// reads and writes one map.
+    ///
+    /// # Invariant: nothing in here may point back up
+    ///
+    /// A handle stored in this map must not hold a strong reference to an
+    /// ancestor's `children` map, or the `Arc` becomes a cycle and leaks. The
+    /// framework never sets [`parent`](Self::parent) on the handles it stores,
+    /// so this holds today.
+    children: Arc<DashMap<String, Self>>,
     /// The actor's cancellation token (clone).
     pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
     /// The clock that scheduled sends made through this handle measure their
@@ -99,7 +111,7 @@ impl ActorHandle {
             tracker: TaskTracker::new(),
             parent: None,
             broker: Box::new(None),
-            children: DashMap::new(),
+            children: Arc::new(DashMap::new()),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             clock: Arc::new(SystemClock),
         }
@@ -121,7 +133,7 @@ impl ActorHandle {
             tracker: TaskTracker::new(),
             parent: None,
             broker: Box::new(None),
-            children: DashMap::new(),
+            children: Arc::new(DashMap::new()),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             clock: Arc::new(SystemClock),
         }
@@ -381,9 +393,11 @@ impl ActorHandle {
         );
         self.children.insert(handle.id.to_string(), handle.clone()); // Store child handle
 
-        // Ask the supervising actor's own task to record the child, so that it
-        // is stopped when the supervisor stops even if this handle is a clone
-        // whose `children` map the actor's task cannot see.
+        // Ask the supervising actor's own task to record the child. The map
+        // written just above is shared by every clone of this handle, so the
+        // actor's task can already see the child; the registry is what carries
+        // the restart policy, reports termination, and survives this handle
+        // being dropped.
         //
         // The receiving end is dropped: `supervise` returns a bare handle, so
         // there is no caller to hand it to. Publishing into a channel with no
@@ -753,14 +767,17 @@ impl ActorHandleInterface for ActorHandle {
         }
     }
 
-    /// Returns a reference to the map of children supervised **through this
-    /// handle**.
+    /// Returns a reference to the map of children supervised through this
+    /// actor's handles.
     ///
-    /// This is a local view, not the supervisor's roster. `ActorHandle` holds
-    /// its children in a `DashMap` that is deep-copied on clone, so each clone
-    /// accumulates only what was supervised through it. A child adopted through
-    /// a different clone of the same actor's handle will not appear here, and
-    /// neither will one adopted from inside the actor's own message handler.
+    /// Every clone of a handle shares one map, so a child adopted through any
+    /// clone — including one obtained after the actor started, or the handle
+    /// living inside the actor's own message handler — appears here.
+    ///
+    /// This is still not the supervisor's roster: children the framework
+    /// started from a blueprint are recorded by the actor's own task and are
+    /// not inserted here, and nothing is ever removed from this map, so a
+    /// child that has since stopped still appears.
     ///
     /// The handles stored here name one incarnation. If a child is restarted,
     /// the handle kept here goes stale. Use
@@ -774,9 +791,10 @@ impl ActorHandleInterface for ActorHandle {
         &self.children
     }
 
-    /// Searches for a child supervised **through this handle** by its identifier.
+    /// Searches for a child supervised through this actor's handles by its
+    /// identifier.
     ///
-    /// Subject to the same local-view and staleness caveats as
+    /// Subject to the same coverage and staleness caveats as
     /// [`children`](Self::children).
     ///
     /// # Arguments
@@ -786,7 +804,7 @@ impl ActorHandleInterface for ActorHandle {
     /// # Returns
     ///
     /// * `Some(ActorHandle)`: If a child with the matching `Ern` was supervised
-    ///   through this handle.
+    ///   through this handle or any clone of it.
     /// * `None`: Otherwise.
     #[instrument(skip(self))]
     fn find_child(&self, ern: &Ern) -> Option<Self> {

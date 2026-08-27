@@ -5,6 +5,37 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.2.1] - 2026-08-26
+
+Makes cloning an `ActorHandle` cheap. One behaviour follows from it, described
+below.
+
+### Changed
+
+- **Cloning an `ActorHandle` no longer deep-copies its children.** The handle
+  held its supervised children in a `DashMap` that `#[derive(Clone)]` copied
+  entry by entry, and every copied entry was itself a full child handle, so
+  cloning a handle cost work proportional to the whole subtree beneath it. A
+  service that clones a handle per request — an `AppState` carried through an
+  HTTP stack, say — paid that on every request: `<ActorHandle as Clone>::clone`
+  plus its drop glue measured ~22% of process CPU in one such service. The map
+  now lives behind an `Arc`, so a clone is a reference-count bump. Measured on a
+  handle supervising 50 children, clone-and-drop went from ~755,600 ns to
+  ~1,060 ns.
+
+- **`children()` and `find_child()` now see children supervised through any
+  clone of a handle**, including the handle inside the actor's own task, because
+  all clones share one map. Previously each clone accumulated only what was
+  supervised through it, which the documentation called out as a local view and
+  which cascading shutdown had to work around by taking the union of three
+  views. That union stays — the registry still holds children started from a
+  blueprint, and children whose start lands late still arrive by their own route
+  — but no view is now blind to a sibling clone's work.
+
+  No signature changed, and nothing that appeared in `children()` before is
+  missing now: a handle may report children it did not report before. Code that
+  relied on one clone's map staying empty is the only code affected.
+
 ## [9.2.0] - 2026-08-19
 
 Makes the crate compile off Unix. Nothing behaves differently on Unix.
