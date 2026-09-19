@@ -799,7 +799,7 @@ pub struct IpcUnsubscribeRequest {
 
     /// List of message type names to unsubscribe from.
     ///
-    /// If empty, unsubscribes from all message types.
+    /// If empty, removes all exact and pattern subscriptions.
     pub message_types: Vec<String>,
 }
 
@@ -827,6 +827,110 @@ impl IpcUnsubscribeRequest {
         Self {
             correlation_id: "unsub".create_type_id::<V7>().to_string(),
             message_types: Vec::new(),
+        }
+    }
+}
+
+/// Request to subscribe to case-sensitive IPC prefix patterns.
+///
+/// Patterns consist of a prefix followed by one `*`, or `*` alone.
+/// Requires a server running acton-reactive 9.3.0 or later.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcPatternSubscribeRequest {
+    /// Correlation ID matching the server response.
+    pub correlation_id: String,
+    /// Pattern selectors to add. An empty list leaves subscriptions unchanged.
+    pub patterns: Vec<String>,
+}
+
+impl IpcPatternSubscribeRequest {
+    /// Creates a request with an MTI correlation ID.
+    #[must_use]
+    pub fn new(patterns: Vec<String>) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "psub".create_type_id::<V7>().to_string(),
+            patterns,
+        }
+    }
+
+    /// Creates a request with a caller-provided correlation ID.
+    #[must_use]
+    pub fn with_correlation_id(correlation_id: impl Into<String>, patterns: Vec<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            patterns,
+        }
+    }
+}
+
+/// Request to unsubscribe from case-sensitive IPC prefix patterns.
+///
+/// Patterns consist of a prefix followed by one `*`, or `*` alone.
+/// Requires a server running acton-reactive 9.3.0 or later.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcPatternUnsubscribeRequest {
+    /// Correlation ID matching the server response.
+    pub correlation_id: String,
+    /// Pattern selectors. An empty unsubscribe list clears patterns only.
+    pub patterns: Vec<String>,
+}
+
+impl IpcPatternUnsubscribeRequest {
+    /// Creates a request with an MTI correlation ID.
+    #[must_use]
+    pub fn new(patterns: Vec<String>) -> Self {
+        use mti::prelude::*;
+        Self {
+            correlation_id: "punsub".create_type_id::<V7>().to_string(),
+            patterns,
+        }
+    }
+
+    /// Creates a request with a caller-provided correlation ID.
+    #[must_use]
+    pub fn with_correlation_id(correlation_id: impl Into<String>, patterns: Vec<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            patterns,
+        }
+    }
+}
+
+/// Result of a pattern subscription operation.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IpcPatternSubscriptionResponse {
+    /// Correlation ID matching the request.
+    pub correlation_id: String,
+    /// Whether the operation succeeded.
+    pub success: bool,
+    /// Failure explanation, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Active pattern selectors after a successful operation.
+    pub subscribed_patterns: Vec<String>,
+}
+
+impl IpcPatternSubscriptionResponse {
+    /// Creates a successful response with the active pattern selectors.
+    #[must_use]
+    pub fn success(correlation_id: impl Into<String>, subscribed_patterns: Vec<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: true,
+            error: None,
+            subscribed_patterns,
+        }
+    }
+
+    /// Creates a failure response. Existing subscriptions are unchanged.
+    #[must_use]
+    pub fn error(correlation_id: impl Into<String>, error: impl Into<String>) -> Self {
+        Self {
+            correlation_id: correlation_id.into(),
+            success: false,
+            error: Some(error.into()),
+            subscribed_patterns: Vec::new(),
         }
     }
 }

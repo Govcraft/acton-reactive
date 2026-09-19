@@ -5,6 +5,34 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.3.0] - 2026-09-19
+
+Adds opt-in prefix subscriptions for IPC broadcasts, with memoized routing.
+
+### Added
+
+- `SubscriptionManager::subscribe_patterns` and `unsubscribe_patterns`, with
+  matching methods on `IpcClient`. Patterns use a single terminal wildcard:
+  `Order*` matches registered names beginning with `Order`, and `*` matches all
+  registered IPC broadcasts. Matching includes names registered later.
+- `SubscriptionPattern`, `PatternSubscriptionError`, and separate pattern
+  request and response types. Existing exact subscription APIs, public request
+  layouts, and literal-name behavior remain compatible.
+- Atomic pattern validation, bounded pattern counts and lengths, and request
+  rate limiting for the new protocol operations.
+
+### Changed
+
+- IPC routing caches deduplicated recipient sets, including empty matches.
+  Repeated broadcasts reuse the cache until subscriptions change. Cache size
+  is bounded, and subscription mutations synchronize with forwarding so stale
+  routes cannot be published after an unsubscribe or disconnect.
+- Overlapping exact and pattern subscriptions produce one notification per
+  connection per broadcast. Empty `unsubscribe` clears both kinds of
+  subscription; empty `unsubscribe_patterns` clears patterns only.
+- Pattern-only clients use the existing subscription idle-timeout policy.
+  Push delivery retains its bounded queues and best-effort semantics.
+
 ## [9.2.1] - 2026-08-26
 
 Makes cloning an `ActorHandle` cheap. One behaviour follows from it, described

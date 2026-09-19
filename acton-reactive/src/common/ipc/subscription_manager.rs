@@ -23,10 +23,10 @@ use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use dashmap::DashMap;
 use parking_lot::RwLock;
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, trace, warn};
+use tracing::{trace, warn};
 
 use super::types::IpcPushNotification;
 
@@ -35,6 +35,95 @@ pub type ConnectionId = usize;
 
 /// Channel sender for pushing notifications to a connection.
 pub type PushSender = mpsc::Sender<IpcPushNotification>;
+
+/// A case-sensitive IPC name prefix selector ending in exactly one `*`.
+///
+/// `*` matches every IPC name. All characters before the final star are literal,
+/// including separators, question marks, and brackets. Selectors are limited to
+/// 256 UTF-8 bytes. Exact subscriptions retain their literal semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubscriptionPattern(String);
+
+impl SubscriptionPattern {
+    /// Returns the original selector.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Tests an IPC name against this selector.
+    #[must_use]
+    pub fn matches(&self, name: &str) -> bool {
+        name.starts_with(&self.0[..self.0.len() - 1])
+    }
+}
+
+impl std::fmt::Display for SubscriptionPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<String> for SubscriptionPattern {
+    type Error = PatternSubscriptionError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() > 256 {
+            return Err(PatternSubscriptionError::PatternTooLong);
+        }
+        let Some(prefix) = value.strip_suffix('*') else {
+            return Err(PatternSubscriptionError::InvalidPattern);
+        };
+        if prefix.contains('*') {
+            return Err(PatternSubscriptionError::InvalidPattern);
+        }
+        Ok(Self(value))
+    }
+}
+
+impl std::str::FromStr for SubscriptionPattern {
+    type Err = PatternSubscriptionError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::try_from(value.to_owned())
+    }
+}
+
+/// Failure to validate or apply a pattern subscription batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PatternSubscriptionError {
+    /// A selector must end in exactly one wildcard.
+    InvalidPattern,
+    /// A selector exceeds 256 UTF-8 bytes.
+    PatternTooLong,
+    /// A request or a connection exceeds the limit of 128 patterns.
+    TooManyPatterns,
+    /// The connection has not been registered.
+    UnknownConnection,
+}
+
+impl std::fmt::Display for PatternSubscriptionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidPattern => "pattern must contain exactly one terminal '*'",
+            Self::PatternTooLong => "pattern exceeds 256 UTF-8 bytes",
+            Self::TooManyPatterns => "pattern limit of 128 exceeded",
+            Self::UnknownConnection => "connection is not registered",
+        })
+    }
+}
+
+impl std::error::Error for PatternSubscriptionError {}
+
+fn validate_patterns(
+    values: &[String],
+) -> Result<HashSet<SubscriptionPattern>, PatternSubscriptionError> {
+    if values.len() > 128 {
+        return Err(PatternSubscriptionError::TooManyPatterns);
+    }
+    values.iter().map(|value| value.parse()).collect()
+}
 
 /// Credentials of the process on the other end of a Unix socket connection.
 ///
@@ -151,6 +240,7 @@ struct ConnectionInfo {
     push_sender: PushSender,
     /// Set of message type names this connection is subscribed to.
     subscribed_types: HashSet<String>,
+    subscribed_patterns: HashSet<SubscriptionPattern>,
     /// Credentials of the process behind this connection, when the platform
     /// reported them.
     peer: Option<PeerCredentials>,
@@ -167,15 +257,47 @@ struct ConnectionInfo {
 /// This struct is designed to be shared across multiple tasks using `Arc`.
 /// All operations are thread-safe.
 pub struct SubscriptionManager {
-    /// Maps connection ID to connection info (subscriptions and push channel).
-    connections: DashMap<ConnectionId, ConnectionInfo>,
-    /// Maps message type name to set of subscribed connection IDs.
-    /// This is the primary index for fast lookup during broadcast forwarding.
-    type_to_connections: DashMap<String, HashSet<ConnectionId>>,
-    /// Maps `TypeId` to message type name for internal type routing.
+    // Lock order: state, then routes. Keep state locked through cache use and
+    // nonblocking delivery so completed mutations cannot leave stale routes.
+    state: RwLock<SubscriptionState>,
+    routes: RwLock<HashMap<String, Arc<[ConnectionId]>>>,
     type_id_to_name: RwLock<HashMap<TypeId, String>>,
-    /// Statistics.
     stats: SubscriptionStats,
+}
+
+#[derive(Default)]
+struct SubscriptionState {
+    connections: HashMap<ConnectionId, ConnectionInfo>,
+    exact: HashMap<String, HashSet<ConnectionId>>,
+    patterns: HashMap<SubscriptionPattern, HashSet<ConnectionId>>,
+}
+
+fn remove_index<K: Eq + std::hash::Hash>(
+    index: &mut HashMap<K, HashSet<ConnectionId>>,
+    key: &K,
+    id: ConnectionId,
+) {
+    if let Some(ids) = index.get_mut(key) {
+        ids.remove(&id);
+        if ids.is_empty() {
+            index.remove(key);
+        }
+    }
+}
+
+impl SubscriptionState {
+    fn remove_connection(&mut self, id: ConnectionId) -> usize {
+        let Some(info) = self.connections.remove(&id) else {
+            return 0;
+        };
+        for name in &info.subscribed_types {
+            remove_index(&mut self.exact, name, id);
+        }
+        for pattern in &info.subscribed_patterns {
+            remove_index(&mut self.patterns, pattern, id);
+        }
+        info.subscribed_types.len() + info.subscribed_patterns.len()
+    }
 }
 
 impl Default for SubscriptionManager {
@@ -186,9 +308,12 @@ impl Default for SubscriptionManager {
 
 impl std::fmt::Debug for SubscriptionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.read();
         f.debug_struct("SubscriptionManager")
-            .field("connection_count", &self.connections.len())
-            .field("subscribed_types_count", &self.type_to_connections.len())
+            .field("connection_count", &state.connections.len())
+            .field("subscribed_types_count", &state.exact.len())
+            .field("subscribed_patterns_count", &state.patterns.len())
+            .field("cached_routes", &self.routes.read().len())
             .field("type_id_mappings", &self.type_id_to_name.read().len())
             .field("stats", &self.stats)
             .finish()
@@ -200,232 +325,309 @@ impl SubscriptionManager {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            connections: DashMap::new(),
-            type_to_connections: DashMap::new(),
+            state: RwLock::new(SubscriptionState::default()),
+            routes: RwLock::new(HashMap::new()),
             type_id_to_name: RwLock::new(HashMap::new()),
             stats: SubscriptionStats::default(),
         }
     }
 
-    /// Returns a reference to the statistics.
+    /// Returns a reference to the statistics, counting exact and pattern selectors.
     #[must_use]
     pub const fn stats(&self) -> &SubscriptionStats {
         &self.stats
     }
 
-    /// Registers a connection with its push notification channel.
-    ///
-    /// This should be called when a new IPC connection is established.
-    ///
-    /// `peer` carries the kernel-reported credentials of the connecting process,
-    /// or `None` when the platform did not report them. Callers with no interest
-    /// in peer identity pass `None`.
+    /// Registers a connection and its kernel-reported peer credentials.
+    /// Replacing an existing connection removes all its subscriptions.
     pub fn register_connection(
         &self,
         conn_id: ConnectionId,
         push_sender: PushSender,
         peer: Option<PeerCredentials>,
     ) {
-        trace!(conn_id, "Registering connection for subscriptions");
-        self.connections.insert(
+        let mut state = self.state.write();
+        let removed = state.remove_connection(conn_id);
+        self.stats
+            .subscriptions_removed
+            .fetch_add(removed, Ordering::Relaxed);
+        state.connections.insert(
             conn_id,
             ConnectionInfo {
                 push_sender,
-                subscribed_types: HashSet::new(),
                 peer,
+                subscribed_types: HashSet::new(),
+                subscribed_patterns: HashSet::new(),
             },
         );
+        self.routes.write().clear();
+        drop(state);
     }
 
-    /// Credentials of the process behind a connection.
-    ///
-    /// Returns `None` when the connection is unknown or the platform did not
-    /// report credentials for it.
+    /// Returns kernel-reported credentials, or `None` for unknown connections.
     #[must_use]
     pub fn peer_credentials(&self, conn_id: ConnectionId) -> Option<PeerCredentials> {
-        self.connections.get(&conn_id).and_then(|info| info.peer)
+        self.state
+            .read()
+            .connections
+            .get(&conn_id)
+            .and_then(|info| info.peer)
     }
 
-    /// Process ID of the peer behind a connection.
-    ///
-    /// Convenience over [`peer_credentials`](Self::peer_credentials). Note that a
-    /// PID is a diagnostic rather than an authorization primitive; see
-    /// [`PeerCredentials`] for why `uid`/`gid` are the sound basis for a policy
-    /// decision.
+    /// Returns the peer process ID, a diagnostic rather than an authorization primitive.
     #[must_use]
     pub fn peer_pid(&self, conn_id: ConnectionId) -> Option<u32> {
-        self.peer_credentials(conn_id).and_then(PeerCredentials::pid)
+        self.peer_credentials(conn_id)
+            .and_then(PeerCredentials::pid)
     }
 
-    /// Unregisters a connection, removing all its subscriptions.
-    ///
-    /// This should be called when an IPC connection is closed.
+    /// Unregisters a connection, removing all exact and pattern subscriptions.
     pub fn unregister_connection(&self, conn_id: ConnectionId) {
-        if let Some((_, info)) = self.connections.remove(&conn_id) {
-            // Remove this connection from all message type indices
-            for type_name in &info.subscribed_types {
-                if let Some(mut entry) = self.type_to_connections.get_mut(type_name) {
-                    entry.remove(&conn_id);
-                    if entry.is_empty() {
-                        // Clean up empty sets
-                        drop(entry);
-                        self.type_to_connections.remove(type_name);
-                    }
-                }
-                self.stats
-                    .subscriptions_removed
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            debug!(
-                conn_id,
-                removed_subscriptions = info.subscribed_types.len(),
-                "Unregistered connection and removed subscriptions"
-            );
-        }
+        let mut state = self.state.write();
+        let removed = state.remove_connection(conn_id);
+        self.stats
+            .subscriptions_removed
+            .fetch_add(removed, Ordering::Relaxed);
+        self.routes.write().clear();
+        drop(state);
     }
 
-    /// Subscribes a connection to one or more message types.
-    ///
-    /// Returns the list of message types the connection is now subscribed to.
+    /// Adds literal message type names and returns the current exact subscriptions.
     pub fn subscribe(&self, conn_id: ConnectionId, message_types: &[String]) -> Vec<String> {
-        let Some(mut conn_entry) = self.connections.get_mut(&conn_id) else {
-            warn!(conn_id, "Cannot subscribe: connection not registered");
+        let mut state = self.state.write();
+        let SubscriptionState {
+            connections, exact, ..
+        } = &mut *state;
+        let Some(info) = connections.get_mut(&conn_id) else {
             return Vec::new();
         };
-
-        for type_name in message_types {
-            if conn_entry.subscribed_types.insert(type_name.clone()) {
-                // Add to type index
-                self.type_to_connections
-                    .entry(type_name.clone())
-                    .or_default()
-                    .insert(conn_id);
+        for name in message_types {
+            if info.subscribed_types.insert(name.clone()) {
+                exact.entry(name.clone()).or_default().insert(conn_id);
                 self.stats
                     .subscriptions_added
                     .fetch_add(1, Ordering::Relaxed);
-                trace!(conn_id, message_type = %type_name, "Added subscription");
             }
         }
-
-        conn_entry.subscribed_types.iter().cloned().collect()
+        self.routes.write().clear();
+        let subscriptions = info.subscribed_types.iter().cloned().collect();
+        drop(state);
+        subscriptions
     }
 
-    /// Unsubscribes a connection from one or more message types.
-    ///
-    /// If `message_types` is empty, unsubscribes from all types.
-    /// Returns the list of message types the connection is still subscribed to.
+    /// Removes literal subscriptions and returns remaining exact subscriptions.
+    /// An empty batch removes both exact and pattern subscriptions.
     pub fn unsubscribe(&self, conn_id: ConnectionId, message_types: &[String]) -> Vec<String> {
-        let Some(mut conn_entry) = self.connections.get_mut(&conn_id) else {
-            warn!(conn_id, "Cannot unsubscribe: connection not registered");
+        let mut state = self.state.write();
+        let SubscriptionState {
+            connections,
+            exact,
+            patterns,
+        } = &mut *state;
+        let Some(info) = connections.get_mut(&conn_id) else {
             return Vec::new();
         };
-
-        if message_types.is_empty() {
-            // Unsubscribe from all
-            let types_to_remove: Vec<_> = conn_entry.subscribed_types.drain().collect();
-            for type_name in &types_to_remove {
-                if let Some(mut entry) = self.type_to_connections.get_mut(type_name) {
-                    entry.remove(&conn_id);
-                    if entry.is_empty() {
-                        drop(entry);
-                        self.type_to_connections.remove(type_name);
-                    }
-                }
+        let names = if message_types.is_empty() {
+            for pattern in info.subscribed_patterns.drain() {
+                remove_index(patterns, &pattern, conn_id);
                 self.stats
                     .subscriptions_removed
                     .fetch_add(1, Ordering::Relaxed);
             }
-            trace!(
-                conn_id,
-                count = types_to_remove.len(),
-                "Unsubscribed from all types"
-            );
-            return Vec::new();
-        }
-
-        for type_name in message_types {
-            if conn_entry.subscribed_types.remove(type_name) {
-                if let Some(mut entry) = self.type_to_connections.get_mut(type_name) {
-                    entry.remove(&conn_id);
-                    if entry.is_empty() {
-                        drop(entry);
-                        self.type_to_connections.remove(type_name);
-                    }
-                }
+            info.subscribed_types.iter().cloned().collect::<Vec<_>>()
+        } else {
+            message_types.to_vec()
+        };
+        for name in names {
+            if info.subscribed_types.remove(&name) {
+                remove_index(exact, &name, conn_id);
                 self.stats
                     .subscriptions_removed
                     .fetch_add(1, Ordering::Relaxed);
-                trace!(conn_id, message_type = %type_name, "Removed subscription");
             }
         }
-
-        conn_entry.subscribed_types.iter().cloned().collect()
+        self.routes.write().clear();
+        let subscriptions = info.subscribed_types.iter().cloned().collect();
+        drop(state);
+        subscriptions
     }
 
-    /// Gets the list of message types a connection is subscribed to.
+    /// Atomically adds validated selectors and returns all current patterns sorted.
+    ///
+    /// Each request and each connection may contain at most 128 patterns.
+    /// Selectors match future IPC names automatically. Overlapping selectors and
+    /// exact subscriptions deliver only one notification per broadcast.
+    ///
+    /// # Errors
+    /// Returns an error for invalid selectors, exceeded limits, or unknown connections.
+    /// No subscriptions are changed on error.
+    pub fn subscribe_patterns(
+        &self,
+        conn_id: ConnectionId,
+        values: &[String],
+    ) -> Result<Vec<String>, PatternSubscriptionError> {
+        let validated = validate_patterns(values)?;
+        let mut state = self.state.write();
+        let SubscriptionState {
+            connections,
+            patterns,
+            ..
+        } = &mut *state;
+        let info = connections
+            .get_mut(&conn_id)
+            .ok_or(PatternSubscriptionError::UnknownConnection)?;
+        if info.subscribed_patterns.union(&validated).count() > 128 {
+            return Err(PatternSubscriptionError::TooManyPatterns);
+        }
+        for pattern in validated {
+            if info.subscribed_patterns.insert(pattern.clone()) {
+                patterns.entry(pattern).or_default().insert(conn_id);
+                self.stats
+                    .subscriptions_added
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.routes.write().clear();
+        let subscriptions = sorted_patterns(&info.subscribed_patterns);
+        drop(state);
+        Ok(subscriptions)
+    }
+
+    /// Atomically removes the specified pattern selectors, returning remaining patterns sorted.
+    /// An empty batch removes all patterns while preserving exact subscriptions.
+    ///
+    /// # Errors
+    /// Returns an error for invalid selectors, exceeded request limits, or unknown connections.
+    /// No subscriptions are changed on error.
+    pub fn unsubscribe_patterns(
+        &self,
+        conn_id: ConnectionId,
+        values: &[String],
+    ) -> Result<Vec<String>, PatternSubscriptionError> {
+        let validated = validate_patterns(values)?;
+        let mut state = self.state.write();
+        let SubscriptionState {
+            connections,
+            patterns,
+            ..
+        } = &mut *state;
+        let info = connections
+            .get_mut(&conn_id)
+            .ok_or(PatternSubscriptionError::UnknownConnection)?;
+        let selected = if values.is_empty() {
+            info.subscribed_patterns.clone()
+        } else {
+            validated
+        };
+        for pattern in selected {
+            if info.subscribed_patterns.remove(&pattern) {
+                remove_index(patterns, &pattern, conn_id);
+                self.stats
+                    .subscriptions_removed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.routes.write().clear();
+        let subscriptions = sorted_patterns(&info.subscribed_patterns);
+        drop(state);
+        Ok(subscriptions)
+    }
+
+    /// Returns the connection's exact subscriptions.
     #[must_use]
     pub fn get_subscriptions(&self, conn_id: ConnectionId) -> Vec<String> {
-        self.connections
+        self.state
+            .read()
+            .connections
             .get(&conn_id)
-            .map(|entry| entry.subscribed_types.iter().cloned().collect())
+            .map(|info| info.subscribed_types.iter().cloned().collect())
             .unwrap_or_default()
     }
 
-    /// Registers a mapping from `TypeId` to message type name.
-    ///
-    /// This is used to route internal broker broadcasts (which use `TypeId`)
-    /// to the correct message type name for subscription matching.
-    pub fn register_type_mapping(&self, type_id: TypeId, type_name: String) {
-        let mut map = self.type_id_to_name.write();
-        map.insert(type_id, type_name);
+    /// Returns the connection's pattern selectors in sorted order.
+    #[must_use]
+    pub fn get_pattern_subscriptions(&self, conn_id: ConnectionId) -> Vec<String> {
+        self.state
+            .read()
+            .connections
+            .get(&conn_id)
+            .map(|info| sorted_patterns(&info.subscribed_patterns))
+            .unwrap_or_default()
     }
 
-    /// Gets the message type name for a `TypeId`.
+    /// Returns whether a connection has any exact or pattern subscriptions.
+    #[must_use]
+    pub fn has_subscriptions(&self, conn_id: ConnectionId) -> bool {
+        self.state
+            .read()
+            .connections
+            .get(&conn_id)
+            .is_some_and(|info| {
+                !info.subscribed_types.is_empty() || !info.subscribed_patterns.is_empty()
+            })
+    }
+
+    /// Registers the IPC name used for an internal broker message type.
+    pub fn register_type_mapping(&self, type_id: TypeId, type_name: String) {
+        self.type_id_to_name.write().insert(type_id, type_name);
+    }
+
+    /// Returns the IPC name for an internal message type.
     #[must_use]
     pub fn get_type_name(&self, type_id: &TypeId) -> Option<String> {
-        let map = self.type_id_to_name.read();
-        map.get(type_id).cloned()
+        self.type_id_to_name.read().get(type_id).cloned()
     }
 
-    /// Forwards a push notification to all connections subscribed to the message type.
+    fn recipients(&self, state: &SubscriptionState, name: &str) -> Arc<[ConnectionId]> {
+        if let Some(ids) = self.routes.read().get(name) {
+            return Arc::clone(ids);
+        }
+        let mut ids = state.exact.get(name).cloned().unwrap_or_default();
+        for (pattern, subscribers) in &state.patterns {
+            if pattern.matches(name) {
+                ids.extend(subscribers);
+            }
+        }
+        let ids: Arc<[ConnectionId]> = ids.into_iter().collect();
+        if name.len() <= 256 {
+            let mut routes = self.routes.write();
+            if routes.len() >= 1024 && !routes.contains_key(name) {
+                if let Some(evicted) = routes.keys().next().cloned() {
+                    routes.remove(&evicted);
+                }
+            }
+            routes.insert(name.to_owned(), Arc::clone(&ids));
+        }
+        ids
+    }
+
+    /// Forwards once to each connection matching an exact name or pattern.
     ///
-    /// Uses non-blocking `try_send` to avoid backpressure from slow consumers.
+    /// Resolved recipient sets (including empty sets) are memoized for up to
+    /// 1024 names of at most 256 bytes, and invalidated atomically on mutation.
+    /// Full or closed queues drop notifications rather than blocking delivery.
     pub fn forward_to_subscribers(&self, notification: &IpcPushNotification) {
-        let message_type = &notification.message_type;
-
-        let Some(connections_entry) = self.type_to_connections.get(message_type) else {
-            trace!(message_type, "No subscribers for message type");
-            return;
-        };
-
-        let conn_ids: Vec<_> = connections_entry.iter().copied().collect();
-        drop(connections_entry); // Release lock before sending
-
-        for conn_id in conn_ids {
-            if let Some(conn_info) = self.connections.get(&conn_id) {
-                let notification_clone = notification.clone();
-                match conn_info.push_sender.try_send(notification_clone) {
+        let state = self.state.read();
+        let ids = self.recipients(&state, &notification.message_type);
+        for conn_id in ids.iter() {
+            if let Some(info) = state.connections.get(conn_id) {
+                match info.push_sender.try_send(notification.clone()) {
                     Ok(()) => {
                         self.stats
                             .push_notifications_sent
                             .fetch_add(1, Ordering::Relaxed);
-                        trace!(conn_id, message_type, "Forwarded push notification");
                     }
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         self.stats
                             .push_notifications_dropped
                             .fetch_add(1, Ordering::Relaxed);
-                        warn!(
-                            conn_id,
-                            message_type, "Push channel full, dropping notification"
-                        );
+                        warn!(conn_id, message_type = %notification.message_type, "Push channel full, dropping notification");
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         self.stats
                             .push_notifications_dropped
                             .fetch_add(1, Ordering::Relaxed);
-                        trace!(conn_id, message_type, "Push channel closed");
-                        // Connection will be cleaned up when it fully disconnects
+                        trace!(conn_id, "Push channel closed");
                     }
                 }
             }
@@ -435,23 +637,34 @@ impl SubscriptionManager {
     /// Returns the number of registered connections.
     #[must_use]
     pub fn connection_count(&self) -> usize {
-        self.connections.len()
+        self.state.read().connections.len()
     }
 
-    /// Returns the number of unique message types with active subscriptions.
+    /// Returns the number of distinct exact names with active subscriptions.
     #[must_use]
     pub fn subscribed_types_count(&self) -> usize {
-        self.type_to_connections.len()
+        self.state.read().exact.len()
     }
 
-    /// Returns the total number of subscriptions across all connections.
+    /// Returns the number of distinct active pattern selectors.
+    #[must_use]
+    pub fn subscribed_patterns_count(&self) -> usize {
+        self.state.read().patterns.len()
+    }
+
+    /// Returns the total number of exact and pattern subscriptions across connections.
     #[must_use]
     pub fn total_subscriptions(&self) -> usize {
-        self.type_to_connections
-            .iter()
-            .map(|entry| entry.value().len())
-            .sum()
+        let state = self.state.read();
+        state.exact.values().map(HashSet::len).sum::<usize>()
+            + state.patterns.values().map(HashSet::len).sum::<usize>()
     }
+}
+
+fn sorted_patterns(patterns: &HashSet<SubscriptionPattern>) -> Vec<String> {
+    let mut values: Vec<_> = patterns.iter().map(ToString::to_string).collect();
+    values.sort();
+    values
 }
 
 /// A handle for sending push notifications to a specific connection.
@@ -759,5 +972,262 @@ mod tests {
     fn test_push_receiver_struct() {
         let (_, receiver) = create_push_channel(123, 5);
         assert_eq!(receiver.conn_id, 123);
+    }
+
+    fn notification(name: &str) -> IpcPushNotification {
+        IpcPushNotification::new(name, None, serde_json::json!({}))
+    }
+
+    #[test]
+    fn active_subscriptions_are_scoped_to_each_connection() {
+        let manager = SubscriptionManager::new();
+        let (sender, _receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        let (sender, _other_receiver) = mpsc::channel(10);
+        manager.register_connection(2, sender, None);
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        assert!(manager.has_subscriptions(1));
+        assert!(!manager.has_subscriptions(2));
+        assert!(!manager.has_subscriptions(99));
+        manager.subscribe(2, &["Exact".into()]);
+        assert!(manager.has_subscriptions(2));
+        manager.unsubscribe_patterns(1, &[]).unwrap();
+        assert!(!manager.has_subscriptions(1));
+        assert!(manager.has_subscriptions(2));
+    }
+
+    #[test]
+    fn patterns_validate_literal_prefixes_and_utf8_limits() {
+        for invalid in ["", "Order", "*Order", "Order**", "Or*der*"] {
+            assert_eq!(
+                invalid.parse::<SubscriptionPattern>(),
+                Err(PatternSubscriptionError::InvalidPattern)
+            );
+        }
+        let pattern: SubscriptionPattern = "注文::*".parse().unwrap();
+        assert!(pattern.matches("注文::Created"));
+        assert!(pattern.matches("注文::"));
+        assert!(!pattern.matches("注文Created"));
+        assert!("*".parse::<SubscriptionPattern>().unwrap().matches(""));
+        assert!(!"Order*"
+            .parse::<SubscriptionPattern>()
+            .unwrap()
+            .matches("orderCreated"));
+        assert!("[?]*"
+            .parse::<SubscriptionPattern>()
+            .unwrap()
+            .matches("[?]Created"));
+        assert!(format!("{}*", "a".repeat(255))
+            .parse::<SubscriptionPattern>()
+            .is_ok());
+        assert_eq!(
+            format!("{}*", "é".repeat(128)).parse::<SubscriptionPattern>(),
+            Err(PatternSubscriptionError::PatternTooLong)
+        );
+    }
+
+    #[test]
+    fn overlapping_selectors_deliver_once_and_reuse_cached_routes() {
+        let manager = SubscriptionManager::new();
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        manager.subscribe(1, &["OrderCreated".into()]);
+        assert_eq!(
+            manager
+                .subscribe_patterns(1, &["Order*".into(), "*".into(), "Order*".into()])
+                .unwrap(),
+            vec!["*", "Order*"]
+        );
+        let event = notification("OrderCreated");
+        manager.forward_to_subscribers(&event);
+        let cached = Arc::clone(manager.routes.read().get("OrderCreated").unwrap());
+        manager.forward_to_subscribers(&event);
+        assert!(Arc::ptr_eq(
+            &cached,
+            manager.routes.read().get("OrderCreated").unwrap()
+        ));
+        assert!(receiver.try_recv().is_ok());
+        assert!(receiver.try_recv().is_ok());
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(manager.total_subscriptions(), 3);
+        assert_eq!(manager.subscribed_types_count(), 1);
+        assert_eq!(manager.subscribed_patterns_count(), 2);
+        assert_eq!(manager.stats().subscriptions_added(), 3);
+    }
+
+    #[test]
+    fn failed_batches_do_not_change_subscriptions_or_cache() {
+        let manager = SubscriptionManager::new();
+        let (sender, _receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        manager.subscribe_patterns(1, &["Keep*".into()]).unwrap();
+        manager.forward_to_subscribers(&notification("KeepAlive"));
+        let cached = Arc::clone(manager.routes.read().get("KeepAlive").unwrap());
+        for values in [
+            vec!["Valid*".into(), "invalid".into()],
+            vec!["*".into(); 129],
+        ] {
+            assert!(manager.subscribe_patterns(1, &values).is_err());
+            assert!(manager.unsubscribe_patterns(1, &values).is_err());
+        }
+        assert_eq!(manager.get_pattern_subscriptions(1), vec!["Keep*"]);
+        assert!(Arc::ptr_eq(
+            &cached,
+            manager.routes.read().get("KeepAlive").unwrap()
+        ));
+        let full: Vec<_> = (0..127).map(|i| format!("{i}*")).collect();
+        manager.subscribe_patterns(1, &full).unwrap();
+        assert_eq!(
+            manager.subscribe_patterns(1, &["Extra*".into()]),
+            Err(PatternSubscriptionError::TooManyPatterns)
+        );
+        assert_eq!(manager.get_pattern_subscriptions(1).len(), 128);
+        assert_eq!(
+            manager.subscribe_patterns(9, &["*".into()]),
+            Err(PatternSubscriptionError::UnknownConnection)
+        );
+    }
+
+    #[test]
+    fn negative_routes_invalidate_and_patterns_match_future_names() {
+        let manager = SubscriptionManager::new();
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        assert!(manager
+            .routes
+            .read()
+            .get("OrderCreated")
+            .unwrap()
+            .is_empty());
+        manager.subscribe_patterns(1, &["Order*".into()]).unwrap();
+        assert!(manager.routes.read().is_empty());
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        manager.forward_to_subscribers(&notification("OrderFuture"));
+        assert_eq!(receiver.try_recv().unwrap().message_type, "OrderCreated");
+        assert_eq!(receiver.try_recv().unwrap().message_type, "OrderFuture");
+        manager.unsubscribe_patterns(1, &["Order*".into()]).unwrap();
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        assert!(receiver.try_recv().is_err());
+        manager.subscribe(1, &["OrderCreated".into()]);
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn unsubscribe_semantics_preserve_other_selectors() {
+        let manager = SubscriptionManager::new();
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        manager.subscribe(1, &["OrderCreated".into(), "Literal*".into()]);
+        manager.subscribe_patterns(1, &["Order*".into()]).unwrap();
+        manager.unsubscribe(1, &["OrderCreated".into()]);
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        assert!(receiver.try_recv().is_ok());
+        manager.unsubscribe_patterns(1, &[]).unwrap();
+        manager.forward_to_subscribers(&notification("LiteralOther"));
+        assert!(receiver.try_recv().is_err());
+        manager.forward_to_subscribers(&notification("Literal*"));
+        assert!(receiver.try_recv().is_ok());
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        manager.unsubscribe(1, &[]);
+        assert!(!manager.has_subscriptions(1));
+        assert_eq!(manager.total_subscriptions(), 0);
+        assert_eq!(
+            manager.stats().subscriptions_added(),
+            manager.stats().subscriptions_removed()
+        );
+    }
+
+    #[test]
+    fn replacement_and_disconnect_remove_indices_and_cached_recipients() {
+        let manager = SubscriptionManager::new();
+        let (sender, mut old_receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        manager.subscribe(1, &["OrderCreated".into()]);
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        old_receiver.try_recv().unwrap();
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_connection(1, sender, None);
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        assert!(receiver.try_recv().is_err());
+        assert!(!manager.has_subscriptions(1));
+        assert_eq!(manager.stats().subscriptions_removed(), 2);
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        manager.forward_to_subscribers(&notification("OrderCreated"));
+        receiver.try_recv().unwrap();
+        manager.unregister_connection(1);
+        assert!(manager.routes.read().is_empty());
+        assert!(!manager.has_subscriptions(1));
+        assert_eq!(manager.stats().subscriptions_removed(), 3);
+    }
+
+    #[test]
+    fn route_cache_is_bounded_and_long_names_still_deliver() {
+        let manager = SubscriptionManager::new();
+        let (sender, mut receiver) = mpsc::channel(1);
+        manager.register_connection(1, sender, None);
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        for i in 0..1025 {
+            manager.forward_to_subscribers(&notification(&format!("Event{i}")));
+            receiver.try_recv().unwrap();
+            assert!(manager.routes.read().len() <= 1024);
+        }
+        assert_eq!(manager.routes.read().len(), 1024);
+        let long_name = "a".repeat(257);
+        manager.forward_to_subscribers(&notification(&long_name));
+        assert_eq!(receiver.try_recv().unwrap().message_type, long_name);
+        assert!(!manager.routes.read().contains_key(&long_name));
+    }
+
+    #[test]
+    fn overlapping_patterns_count_drops_once_per_recipient() {
+        let manager = SubscriptionManager::new();
+        let (sender, receiver) = mpsc::channel(1);
+        manager.register_connection(1, sender, None);
+        manager
+            .subscribe_patterns(1, &["*".into(), "Order*".into()])
+            .unwrap();
+        let event = notification("OrderCreated");
+        manager.forward_to_subscribers(&event);
+        manager.forward_to_subscribers(&event);
+        assert_eq!(manager.stats().push_notifications_sent(), 1);
+        assert_eq!(manager.stats().push_notifications_dropped(), 1);
+        drop(receiver);
+        manager.forward_to_subscribers(&event);
+        assert_eq!(manager.stats().push_notifications_dropped(), 2);
+    }
+
+    #[test]
+    fn concurrent_mutations_leave_no_stale_routes() {
+        let manager = SubscriptionManager::new();
+        let (sender, mut receiver) = mpsc::channel(1024);
+        manager.register_connection(1, sender, None);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..128 {
+                    manager.subscribe_patterns(1, &["*".into()]).unwrap();
+                    manager.unsubscribe_patterns(1, &[]).unwrap();
+                }
+            });
+            scope.spawn(|| {
+                for _ in 0..128 {
+                    manager.subscribe(1, &["Event".into()]);
+                    manager.unsubscribe(1, &["Event".into()]);
+                }
+            });
+            for _ in 0..128 {
+                manager.forward_to_subscribers(&notification("Event"));
+            }
+        });
+        while receiver.try_recv().is_ok() {}
+        manager.forward_to_subscribers(&notification("Event"));
+        assert!(receiver.try_recv().is_err());
+        assert!(!manager.has_subscriptions(1));
+        assert_eq!(
+            manager.stats().subscriptions_added(),
+            manager.stats().subscriptions_removed()
+        );
     }
 }

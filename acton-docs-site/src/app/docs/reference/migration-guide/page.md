@@ -7,6 +7,12 @@ Two kinds of migration live here: [upgrading between Acton versions](#upgrading-
 
 ## Upgrading Acton Reactive
 
+### 9.2.x → 9.3.0
+
+No changes are required for existing exact subscriptions. New `IpcClient::subscribe_patterns` and `unsubscribe_patterns` methods add case-sensitive prefix matching, such as `Order*`, and a catch-all `*`. Upgrade the server to 9.3.0 before using these methods. Existing `subscribe` strings remain literal, including strings containing `*`.
+
+If you add pattern subscriptions, `unsubscribe(vec![])` clears both exact subscriptions and patterns. Use `unsubscribe_patterns(vec![])` to clear only patterns. See [prefix subscriptions](/docs/ipc-patterns#prefix-subscriptions-9-3-0) for syntax, limits, and delivery behavior.
+
 ### 8.x → 9.0
 
 A major release. Most of it is additive, but there are compile errors to fix and **two silent behaviour changes** that no compiler will point at. Start with those.

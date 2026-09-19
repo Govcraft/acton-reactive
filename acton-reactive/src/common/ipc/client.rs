@@ -84,16 +84,18 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, trace, warn};
 
-use super::remote_ask::RemoteActorRef;
 use super::protocol::{
     read_frame, write_frame, Format, MAX_FRAME_SIZE, MSG_TYPE_DISCOVER, MSG_TYPE_ERROR,
     MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST, MSG_TYPE_RESPONSE, MSG_TYPE_STREAM,
-    MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
+    MSG_TYPE_SUBSCRIBE, MSG_TYPE_SUBSCRIBE_PATTERNS, MSG_TYPE_UNSUBSCRIBE,
+    MSG_TYPE_UNSUBSCRIBE_PATTERNS,
 };
+use super::remote_ask::RemoteActorRef;
 use super::types::{
-    IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
-    IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
-    IpcUnsubscribeRequest, CONNECTION_REJECTED_CORRELATION_ID,
+    IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPatternSubscribeRequest,
+    IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest, IpcPushNotification, IpcResponse,
+    IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse, IpcUnsubscribeRequest,
+    CONNECTION_REJECTED_CORRELATION_ID,
 };
 
 // ============================================================================
@@ -132,7 +134,10 @@ type ActiveStreams = DashMap<String, mpsc::Sender<IpcStreamFrame>>;
 enum ClientWriteCommand {
     /// Send a fire-and-forget envelope (`MSG_TYPE_REQUEST`).
     /// The server responds with `MSG_TYPE_RESPONSE` which the reader drains.
-    Envelope { envelope: IpcEnvelope, format: Format },
+    Envelope {
+        envelope: IpcEnvelope,
+        format: Format,
+    },
 
     /// Send a request that expects a correlated response.
     Request {
@@ -144,7 +149,10 @@ enum ClientWriteCommand {
     /// Send a streaming request (`MSG_TYPE_REQUEST` with `expects_stream`).
     /// The reader routes each `MSG_TYPE_STREAM` frame to the per-correlation-id
     /// channel registered in `active_streams`.
-    StreamRequest { envelope: IpcEnvelope, format: Format },
+    StreamRequest {
+        envelope: IpcEnvelope,
+        format: Format,
+    },
 
     /// Send a subscribe request.
     Subscribe {
@@ -160,6 +168,18 @@ enum ClientWriteCommand {
         reply_tx: oneshot::Sender<RawResponse>,
     },
 
+    /// Send a pattern subscription operation.
+    SubscribePatterns {
+        request: IpcPatternSubscribeRequest,
+        format: Format,
+        reply_tx: oneshot::Sender<RawResponse>,
+    },
+    /// Send a pattern subscription operation.
+    UnsubscribePatterns {
+        request: IpcPatternUnsubscribeRequest,
+        format: Format,
+        reply_tx: oneshot::Sender<RawResponse>,
+    },
     /// Send a discovery request.
     Discover {
         request: IpcDiscoverRequest,
@@ -364,9 +384,9 @@ impl IpcClient {
         let path = path.as_ref();
         debug!(path = %path.display(), "IPC client connecting");
 
-        let stream = UnixStream::connect(path)
-            .await
-            .map_err(|e| IpcError::IoError(format!("Failed to connect to {}: {e}", path.display())))?;
+        let stream = UnixStream::connect(path).await.map_err(|e| {
+            IpcError::IoError(format!("Failed to connect to {}: {e}", path.display()))
+        })?;
 
         let (reader, writer) = stream.into_split();
 
@@ -375,12 +395,10 @@ impl IpcClient {
             mpsc::channel::<ClientWriteCommand>(config.writer_channel_capacity);
 
         // Create the push notification channel
-        let (push_tx, push_rx) =
-            mpsc::channel::<IpcPushNotification>(config.push_channel_capacity);
+        let (push_tx, push_rx) = mpsc::channel::<IpcPushNotification>(config.push_channel_capacity);
 
         // Shared pending requests map for correlation matching
-        let pending_requests: std::sync::Arc<PendingRequests> =
-            std::sync::Arc::new(DashMap::new());
+        let pending_requests: std::sync::Arc<PendingRequests> = std::sync::Arc::new(DashMap::new());
         let pending_for_writer = std::sync::Arc::clone(&pending_requests);
 
         // Shared active streams map for stream frame routing
@@ -649,7 +667,7 @@ impl IpcClient {
 
     /// Unsubscribe from message types.
     ///
-    /// Pass an empty vector to unsubscribe from all types.
+    /// Pass an empty vector to remove all exact and pattern subscriptions.
     ///
     /// # Errors
     ///
@@ -679,6 +697,67 @@ impl IpcClient {
             .map_err(|_| IpcError::Timeout)?
             .map_err(|_| self.connection_error())??;
 
+        format.deserialize(&bytes)
+    }
+
+    /// Subscribe using case-sensitive prefix patterns, such as `Order*` or `*`.
+    ///
+    /// Requires a server running 9.3.0 or later. Older servers reject the new
+    /// frame type and close this connection, interrupting other pending requests.
+    /// Selectors are limited to 256 bytes each and 128 per request and connection.
+    /// Inspect `success` for rejection.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, the connection closes, or it times out.
+    pub async fn subscribe_patterns(
+        &self,
+        patterns: Vec<String>,
+    ) -> Result<IpcPatternSubscriptionResponse, IpcError> {
+        let request = IpcPatternSubscribeRequest::new(patterns);
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(ClientWriteCommand::SubscribePatterns {
+                request,
+                format: self.format,
+                reply_tx,
+            })
+            .await
+            .map_err(|_| self.connection_error())?;
+        let (format, bytes) = tokio::time::timeout(self.default_timeout, reply_rx)
+            .await
+            .map_err(|_| IpcError::Timeout)?
+            .map_err(|_| self.connection_error())??;
+        format.deserialize(&bytes)
+    }
+
+    /// Unsubscribe using case-sensitive prefix patterns, such as `Order*` or `*`.
+    ///
+    /// Requires a server running 9.3.0 or later. Older servers reject the new
+    /// frame type and close this connection, interrupting other pending requests.
+    /// An empty unsubscribe vector
+    /// clears only pattern subscriptions. Selectors are limited to 256 bytes
+    /// each and 128 per request and connection. Inspect `success` for rejection.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, the connection closes, or it times out.
+    pub async fn unsubscribe_patterns(
+        &self,
+        patterns: Vec<String>,
+    ) -> Result<IpcPatternSubscriptionResponse, IpcError> {
+        let request = IpcPatternUnsubscribeRequest::new(patterns);
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(ClientWriteCommand::UnsubscribePatterns {
+                request,
+                format: self.format,
+                reply_tx,
+            })
+            .await
+            .map_err(|_| self.connection_error())?;
+        let (format, bytes) = tokio::time::timeout(self.default_timeout, reply_rx)
+            .await
+            .map_err(|_| IpcError::Timeout)?
+            .map_err(|_| self.connection_error())??;
         format.deserialize(&bytes)
     }
 
@@ -716,10 +795,7 @@ impl IpcClient {
     /// This is designed for one-time extraction — the `Mutex` is only contended
     /// during this call, never during normal operation.
     pub fn take_push_receiver(&self) -> Option<mpsc::Receiver<IpcPushNotification>> {
-        self.push_rx
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.take())
+        self.push_rx.lock().ok().and_then(|mut guard| guard.take())
     }
 
     /// Get the wire format used by this client.
@@ -778,10 +854,7 @@ impl IpcClient {
         drop(payload); // Not needed — server cleans up on disconnect
 
         // Signal the writer task to exit and wait for it to drain pending writes
-        let _ = self
-            .writer_tx
-            .send(ClientWriteCommand::Shutdown)
-            .await;
+        let _ = self.writer_tx.send(ClientWriteCommand::Shutdown).await;
 
         // Await the writer task so all pending frames (including large ones)
         // are flushed to the socket before we close the connection. Take the
@@ -902,12 +975,22 @@ async fn run_client_writer_task(
                 Some(write_frame(&mut writer, MSG_TYPE_REQUEST, format, &payload).await)
             }
 
-            ClientWriteCommand::Request { envelope, format, reply_tx } => {
+            ClientWriteCommand::Request {
+                envelope,
+                format,
+                reply_tx,
+            } => {
                 let cid = envelope.correlation_id.clone();
                 write_correlated_frame(
-                    &mut writer, &pending_requests, cid, reply_tx,
-                    MSG_TYPE_REQUEST, format, &envelope,
-                ).await
+                    &mut writer,
+                    &pending_requests,
+                    cid,
+                    reply_tx,
+                    MSG_TYPE_REQUEST,
+                    format,
+                    &envelope,
+                )
+                .await
             }
 
             ClientWriteCommand::StreamRequest { envelope, format } => {
@@ -928,28 +1011,92 @@ async fn run_client_writer_task(
                 Some(result)
             }
 
-            ClientWriteCommand::Subscribe { request, format, reply_tx } => {
+            ClientWriteCommand::Subscribe {
+                request,
+                format,
+                reply_tx,
+            } => {
                 let cid = request.correlation_id.clone();
                 write_correlated_frame(
-                    &mut writer, &pending_requests, cid, reply_tx,
-                    MSG_TYPE_SUBSCRIBE, format, &request,
-                ).await
+                    &mut writer,
+                    &pending_requests,
+                    cid,
+                    reply_tx,
+                    MSG_TYPE_SUBSCRIBE,
+                    format,
+                    &request,
+                )
+                .await
             }
 
-            ClientWriteCommand::Unsubscribe { request, format, reply_tx } => {
+            ClientWriteCommand::Unsubscribe {
+                request,
+                format,
+                reply_tx,
+            } => {
                 let cid = request.correlation_id.clone();
                 write_correlated_frame(
-                    &mut writer, &pending_requests, cid, reply_tx,
-                    MSG_TYPE_UNSUBSCRIBE, format, &request,
-                ).await
+                    &mut writer,
+                    &pending_requests,
+                    cid,
+                    reply_tx,
+                    MSG_TYPE_UNSUBSCRIBE,
+                    format,
+                    &request,
+                )
+                .await
             }
 
-            ClientWriteCommand::Discover { request, format, reply_tx } => {
+            ClientWriteCommand::SubscribePatterns {
+                request,
+                format,
+                reply_tx,
+            } => {
                 let cid = request.correlation_id.clone();
                 write_correlated_frame(
-                    &mut writer, &pending_requests, cid, reply_tx,
-                    MSG_TYPE_DISCOVER, format, &request,
-                ).await
+                    &mut writer,
+                    &pending_requests,
+                    cid,
+                    reply_tx,
+                    MSG_TYPE_SUBSCRIBE_PATTERNS,
+                    format,
+                    &request,
+                )
+                .await
+            }
+            ClientWriteCommand::UnsubscribePatterns {
+                request,
+                format,
+                reply_tx,
+            } => {
+                let cid = request.correlation_id.clone();
+                write_correlated_frame(
+                    &mut writer,
+                    &pending_requests,
+                    cid,
+                    reply_tx,
+                    MSG_TYPE_UNSUBSCRIBE_PATTERNS,
+                    format,
+                    &request,
+                )
+                .await
+            }
+            ClientWriteCommand::Discover {
+                request,
+                format,
+                reply_tx,
+            } => {
+                let cid = request.correlation_id.clone();
+                write_correlated_frame(
+                    &mut writer,
+                    &pending_requests,
+                    cid,
+                    reply_tx,
+                    MSG_TYPE_DISCOVER,
+                    format,
+                    &request,
+                )
+                .await
             }
 
             ClientWriteCommand::Shutdown => {
@@ -1093,7 +1240,10 @@ async fn handle_response_frame(
         .get(&correlation_id)
         .map(|entry| entry.value().clone())
     {
-        debug!(correlation_id, "Server rejected stream request, terminating stream");
+        debug!(
+            correlation_id,
+            "Server rejected stream request, terminating stream"
+        );
         let frame = synthesize_stream_termination(&correlation_id, format, &payload);
         let _ = frame_tx.send(frame).await;
         active_streams.remove(&correlation_id);
@@ -1109,11 +1259,7 @@ async fn handle_response_frame(
 ///
 /// Failing to decode is not fatal: the connection is closing either way, and the
 /// caller falls back to [`IpcError::ConnectionClosed`].
-fn record_connection_rejection(
-    format: Format,
-    payload: &[u8],
-    rejection: &ConnectionRejection,
-) {
+fn record_connection_rejection(format: Format, payload: &[u8], rejection: &ConnectionRejection) {
     let Ok(response) = format.deserialize::<IpcResponse>(payload) else {
         warn!("Failed to decode connection rejection from server");
         return;
@@ -1151,9 +1297,11 @@ fn synthesize_stream_termination(
             correlation_id: correlation_id.to_string(),
             sequence: 0,
             is_final: true,
-            error: Some(response.error.unwrap_or_else(|| {
-                "Server rejected the stream request".to_string()
-            })),
+            error: Some(
+                response
+                    .error
+                    .unwrap_or_else(|| "Server rejected the stream request".to_string()),
+            ),
             error_code: response.error_code,
             payload: response.payload,
         },
@@ -1194,13 +1342,19 @@ async fn handle_stream_frame(active_streams: &ActiveStreams, format: Format, pay
         .get(&correlation_id)
         .map(|entry| entry.value().clone())
     else {
-        warn!(correlation_id, "Received stream frame for unknown correlation_id, dropping");
+        warn!(
+            correlation_id,
+            "Received stream frame for unknown correlation_id, dropping"
+        );
         return;
     };
 
     if frame_tx.send(frame).await.is_err() {
         // The forwarder exited (receiver dropped or timed out) — clean up
-        debug!(correlation_id, "Stream frame channel closed, removing stream");
+        debug!(
+            correlation_id,
+            "Stream frame channel closed, removing stream"
+        );
         active_streams.remove(&correlation_id);
         return;
     }
@@ -1266,11 +1420,7 @@ async fn run_stream_forwarder(
 }
 
 /// Handle an incoming push notification frame.
-fn handle_push_frame(
-    push_tx: &mpsc::Sender<IpcPushNotification>,
-    format: Format,
-    payload: &[u8],
-) {
+fn handle_push_frame(push_tx: &mpsc::Sender<IpcPushNotification>, format: Format, payload: &[u8]) {
     match format.deserialize::<IpcPushNotification>(payload) {
         Ok(notification) => {
             if let Err(e) = push_tx.try_send(notification) {
@@ -1314,8 +1464,7 @@ mod tests {
         let socket_path = dir.path().join("test.sock");
 
         // Start a listener that accepts one connection
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1347,8 +1496,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1367,16 +1515,10 @@ mod tests {
 
             // Send a response back (server always responds to requests)
             let response = IpcResponse::success(&envelope.correlation_id, None);
-            let resp_payload =
-                serde_json::to_vec(&response).expect("should serialize response");
-            write_frame(
-                &mut writer,
-                MSG_TYPE_RESPONSE,
-                Format::Json,
-                &resp_payload,
-            )
-            .await
-            .expect("should write response");
+            let resp_payload = serde_json::to_vec(&response).expect("should serialize response");
+            write_frame(&mut writer, MSG_TYPE_RESPONSE, Format::Json, &resp_payload)
+                .await
+                .expect("should write response");
 
             // Keep connection alive briefly
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1403,8 +1545,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1424,16 +1565,10 @@ mod tests {
                 &envelope.correlation_id,
                 Some(serde_json::json!({"result": 42})),
             );
-            let resp_payload =
-                serde_json::to_vec(&response).expect("should serialize response");
-            write_frame(
-                &mut writer,
-                MSG_TYPE_RESPONSE,
-                Format::Json,
-                &resp_payload,
-            )
-            .await
-            .expect("should write response");
+            let resp_payload = serde_json::to_vec(&response).expect("should serialize response");
+            write_frame(&mut writer, MSG_TYPE_RESPONSE, Format::Json, &resp_payload)
+                .await
+                .expect("should write response");
 
             // Keep connection alive
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1453,10 +1588,7 @@ mod tests {
 
         let response = response.expect("should get response");
         assert!(response.success);
-        assert_eq!(
-            response.payload,
-            Some(serde_json::json!({"result": 42}))
-        );
+        assert_eq!(response.payload, Some(serde_json::json!({"result": 42})));
 
         accept_handle.await.expect("server task failed");
     }
@@ -1467,8 +1599,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1488,16 +1619,10 @@ mod tests {
                 &sub_request.correlation_id,
                 sub_request.message_types.clone(),
             );
-            let resp_payload =
-                serde_json::to_vec(&response).expect("should serialize");
-            write_frame(
-                &mut writer,
-                MSG_TYPE_RESPONSE,
-                Format::Json,
-                &resp_payload,
-            )
-            .await
-            .expect("should write response");
+            let resp_payload = serde_json::to_vec(&response).expect("should serialize");
+            write_frame(&mut writer, MSG_TYPE_RESPONSE, Format::Json, &resp_payload)
+                .await
+                .expect("should write response");
 
             // Send a push notification
             let notification = IpcPushNotification::new(
@@ -1505,16 +1630,10 @@ mod tests {
                 Some("test_actor".to_string()),
                 serde_json::json!({"data": "hello"}),
             );
-            let push_payload =
-                serde_json::to_vec(&notification).expect("should serialize");
-            write_frame(
-                &mut writer,
-                MSG_TYPE_PUSH,
-                Format::Json,
-                &push_payload,
-            )
-            .await
-            .expect("should write push");
+            let push_payload = serde_json::to_vec(&notification).expect("should serialize");
+            write_frame(&mut writer, MSG_TYPE_PUSH, Format::Json, &push_payload)
+                .await
+                .expect("should write push");
 
             // Keep connection alive
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1542,10 +1661,7 @@ mod tests {
             .expect("should receive notification");
 
         assert_eq!(notification.message_type, "TestEvent");
-        assert_eq!(
-            notification.payload,
-            serde_json::json!({"data": "hello"})
-        );
+        assert_eq!(notification.payload, serde_json::json!({"data": "hello"}));
 
         accept_handle.await.expect("server task failed");
     }
@@ -1557,8 +1673,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1581,8 +1696,7 @@ mod tests {
                     sequence,
                     serde_json::json!({ "n": sequence }),
                 );
-                let frame_payload =
-                    serde_json::to_vec(&frame).expect("should serialize frame");
+                let frame_payload = serde_json::to_vec(&frame).expect("should serialize frame");
                 write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
                     .await
                     .expect("should write frame");
@@ -1603,21 +1717,17 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let mut stream_rx = client
             .request_stream(envelope)
             .await
             .expect("should start stream");
 
         let mut frames = Vec::new();
-        while let Some(frame) =
-            tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
-                .await
-                .expect("should not timeout")
+        while let Some(frame) = tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+            .await
+            .expect("should not timeout")
         {
             frames.push(frame);
         }
@@ -1642,8 +1752,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1658,11 +1767,8 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let mut stream_rx = client
             .request_stream_with_timeout(envelope, Duration::from_millis(100))
             .await
@@ -1687,8 +1793,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1707,8 +1812,7 @@ mod tests {
                     sequence,
                     serde_json::json!({ "n": sequence }),
                 );
-                let frame_payload =
-                    serde_json::to_vec(&frame).expect("should serialize frame");
+                let frame_payload = serde_json::to_vec(&frame).expect("should serialize frame");
                 write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
                     .await
                     .expect("should write frame");
@@ -1719,21 +1823,17 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let mut stream_rx = client
             .request_stream(envelope)
             .await
             .expect("should start stream");
 
         let mut frames = Vec::new();
-        while let Some(frame) =
-            tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
-                .await
-                .expect("stream should terminate, not hang")
+        while let Some(frame) = tokio::time::timeout(Duration::from_secs(2), stream_rx.recv())
+            .await
+            .expect("stream should terminate, not hang")
         {
             frames.push(frame);
         }
@@ -1751,8 +1851,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1766,13 +1865,9 @@ mod tests {
 
             // Send a frame after the client has dropped its receiver
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let frame = IpcStreamFrame::data(
-                &envelope.correlation_id,
-                0,
-                serde_json::json!({ "n": 0 }),
-            );
-            let frame_payload =
-                serde_json::to_vec(&frame).expect("should serialize frame");
+            let frame =
+                IpcStreamFrame::data(&envelope.correlation_id, 0, serde_json::json!({ "n": 0 }));
+            let frame_payload = serde_json::to_vec(&frame).expect("should serialize frame");
             write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
                 .await
                 .expect("should write frame");
@@ -1784,11 +1879,8 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let stream_rx = client
             .request_stream(envelope)
             .await
@@ -1811,8 +1903,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1841,8 +1932,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1861,8 +1951,7 @@ mod tests {
                     sequence,
                     serde_json::json!({ "n": sequence }),
                 );
-                let frame_payload =
-                    serde_json::to_vec(&frame).expect("should serialize frame");
+                let frame_payload = serde_json::to_vec(&frame).expect("should serialize frame");
                 write_frame(&mut writer, MSG_TYPE_STREAM, Format::Json, &frame_payload)
                     .await
                     .expect("should write frame");
@@ -1884,11 +1973,8 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let mut stream_rx = client
             .request_stream(envelope)
             .await
@@ -1898,10 +1984,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         let mut frames = Vec::new();
-        while let Some(frame) =
-            tokio::time::timeout(Duration::from_secs(5), stream_rx.recv())
-                .await
-                .expect("stream should terminate, not hang")
+        while let Some(frame) = tokio::time::timeout(Duration::from_secs(5), stream_rx.recv())
+            .await
+            .expect("stream should terminate, not hang")
         {
             frames.push(frame);
         }
@@ -1924,8 +2009,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -1941,10 +2025,11 @@ mod tests {
             // limiter does: a plain error response on the same correlation ID.
             let response = IpcResponse::error(
                 &envelope.correlation_id,
-                &IpcError::RateLimited { retry_after_ms: 100 },
+                &IpcError::RateLimited {
+                    retry_after_ms: 100,
+                },
             );
-            let resp_payload =
-                serde_json::to_vec(&response).expect("should serialize response");
+            let resp_payload = serde_json::to_vec(&response).expect("should serialize response");
             write_frame(&mut writer, MSG_TYPE_ERROR, Format::Json, &resp_payload)
                 .await
                 .expect("should write response");
@@ -1957,11 +2042,8 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let mut stream_rx = client
             .request_stream(envelope)
             .await
@@ -1993,8 +2075,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");
@@ -2009,11 +2090,8 @@ mod tests {
             .await
             .expect("should connect");
 
-        let envelope = IpcEnvelope::new_stream_request(
-            "test_actor",
-            "TestStream",
-            serde_json::json!({}),
-        );
+        let envelope =
+            IpcEnvelope::new_stream_request("test_actor", "TestStream", serde_json::json!({}));
         let mut stream_rx = client
             .request_stream(envelope)
             .await
@@ -2038,8 +2116,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let socket_path = dir.path().join("test.sock");
 
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .expect("failed to bind socket");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("failed to bind socket");
 
         let accept_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("failed to accept");

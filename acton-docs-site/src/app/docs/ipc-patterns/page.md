@@ -308,6 +308,40 @@ To stop, send `IpcUnsubscribeRequest` (frame type `0x07`) — or `client.unsubsc
 Push forwarding serializes broadcasts through the IPC type registry, so a broadcast type only reaches subscribers if it was registered with `registry.register::<T>("T")`. Subscribers never time out by default (`timeouts.subscription_read` is `0`), and if a client reads too slowly, notifications beyond `limits.push_buffer_size` (default 100) are dropped.
 {% /callout %}
 
+### Prefix subscriptions (9.3.0+)
+
+Use `subscribe_patterns` to receive a family of registered IPC broadcasts without listing every type:
+
+```rust
+let response = client
+    .subscribe_patterns(vec!["Order*".to_string()])
+    .await?;
+if !response.success {
+    eprintln!("Subscription rejected: {:?}", response.error);
+}
+```
+
+Read notifications through the same `take_push_receiver` channel used for exact subscriptions. `Order*` matches `OrderCreated`, `OrderCancelled`, and any matching names registered later. Matching is case-sensitive and uses the registered IPC name, including any namespace separators. It does not match actor names or message payloads. `*` matches every broadcast that the IPC registry can serialize.
+
+A pattern must contain exactly one `*`, at its end. Patterns such as `*Created`, `Order**`, and `Order` are rejected. Each pattern may contain at most 256 UTF-8 bytes. A request may contain at most 128 patterns, and a connection may hold at most 128 distinct patterns. Validation is atomic: a rejected request adds or removes nothing. Successful responses list the active pattern selectors in `subscribed_patterns`.
+
+Exact subscriptions keep their literal meaning. `subscribe(vec!["Order*".to_string()])` subscribes to the literal name `Order*`; only `subscribe_patterns` interprets the wildcard. If exact and pattern subscriptions overlap, the connection receives one notification per broadcast.
+
+| Operation | Effect |
+| --- | --- |
+| `unsubscribe_patterns(vec!["Order*".to_string()])` | Removes that pattern; preserves other patterns and exact subscriptions |
+| `unsubscribe_patterns(vec![])` | Removes all patterns; preserves exact subscriptions |
+| `unsubscribe(vec!["OrderCreated".to_string()])` | Removes that exact subscription; matching patterns still apply |
+| `unsubscribe(vec![])` | Removes all exact and pattern subscriptions |
+
+Pattern operations require a server running 9.3.0 or later. Older servers reject the new frame types and close the connection, which can also interrupt other requests sharing the client. Upgrade the server before using patterns.
+
+The new operations use protocol v2 message types `0x0a` (subscribe) and `0x0b` (unsubscribe), with request fields `correlation_id` and `patterns`. Responses use message type `0x02` with `correlation_id`, `success`, optional `error`, and `subscribed_patterns`. JSON and MessagePack use the same fields. These operations follow the server's configured request rate limit.
+
+Routing memoizes the deduplicated recipient set for each message name, including names with no subscribers. Subscription changes invalidate those results before subsequent forwarding. The cache holds at most 1,024 names and does not retain names longer than 256 bytes; uncached names still route normally. Pattern-only connections receive the same subscription idle-timeout policy as exact subscribers.
+
+Delivery remains best effort. A broader subscription can fill the connection's push queue faster, and excess notifications are dropped. Removing a subscription prevents subsequent forwarding for that selector, but does not retract notifications already queued.
+
 ### Architecture
 
 ```mermaid

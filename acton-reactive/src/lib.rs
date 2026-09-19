@@ -90,13 +90,14 @@ pub(crate) mod traits;
 pub mod ipc {
     pub use crate::common::ipc::{
         socket_exists, socket_is_alive, start_listener, ActorInfo, ConfigSource, ConnectionId,
-        IpcClient, IpcClientConfig, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope,
-        IpcError, IpcLimitsConfig, IpcListenerHandle, IpcListenerStats, IpcPushNotification,
-        IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
-        IpcTimeoutsConfig, IpcTypeRegistry, IpcUnsubscribeRequest, PeerCredentials,
-        ProtocolCapabilities, ProtocolVersionInfo, RateLimitConfig, ShutdownConfig, ShutdownResult,
-        SocketConfig, SubscriptionManager, CONNECTION_LIMIT_REACHED_CODE,
-        CONNECTION_REJECTED_CORRELATION_ID,
+        IpcClient, IpcClientConfig, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse,
+        IpcEnvelope, IpcError, IpcLimitsConfig, IpcListenerHandle, IpcListenerStats,
+        IpcPatternSubscribeRequest, IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest,
+        IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
+        IpcSubscriptionResponse, IpcTimeoutsConfig, IpcTypeRegistry, IpcUnsubscribeRequest,
+        PatternSubscriptionError, PeerCredentials, ProtocolCapabilities, ProtocolVersionInfo,
+        RateLimitConfig, ShutdownConfig, ShutdownResult, SocketConfig, SubscriptionManager,
+        SubscriptionPattern, CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID,
     };
     pub use crate::common::IpcNameInUse;
 
@@ -106,18 +107,22 @@ pub mod ipc {
     /// using the length-prefixed binary wire protocol.
     pub mod protocol {
         pub use crate::common::ipc::protocol::{
-            is_discover, is_heartbeat, is_stream, is_subscribe, is_unsubscribe, read_envelope,
-            read_frame, read_response, write_discover, write_discover_with_format,
-            write_discovery_response, write_discovery_response_with_format, write_envelope,
-            write_envelope_with_format, write_frame, write_heartbeat, write_push_with_format,
+            is_discover, is_heartbeat, is_stream, is_subscribe, is_subscribe_patterns,
+            is_unsubscribe, is_unsubscribe_patterns, read_envelope, read_frame, read_response,
+            write_discover, write_discover_with_format, write_discovery_response,
+            write_discovery_response_with_format, write_envelope, write_envelope_with_format,
+            write_frame, write_heartbeat, write_pattern_subscription_response,
+            write_pattern_subscription_response_with_format, write_push_with_format,
             write_response, write_response_with_format, write_stream_frame,
-            write_stream_frame_with_format, write_subscribe_with_format,
+            write_stream_frame_with_format, write_subscribe_patterns,
+            write_subscribe_patterns_with_format, write_subscribe_with_format,
             write_subscription_response, write_subscription_response_with_format,
+            write_unsubscribe_patterns, write_unsubscribe_patterns_with_format,
             write_unsubscribe_with_format, Format, ProtocolVersion, HEADER_SIZE, HEADER_SIZE_V1,
             HEADER_SIZE_V2, MAX_FRAME_SIZE, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION,
             MSG_TYPE_DISCOVER, MSG_TYPE_ERROR, MSG_TYPE_HEARTBEAT, MSG_TYPE_PUSH, MSG_TYPE_REQUEST,
-            MSG_TYPE_RESPONSE, MSG_TYPE_STREAM, MSG_TYPE_SUBSCRIBE, MSG_TYPE_UNSUBSCRIBE,
-            PROTOCOL_VERSION,
+            MSG_TYPE_RESPONSE, MSG_TYPE_STREAM, MSG_TYPE_SUBSCRIBE, MSG_TYPE_SUBSCRIBE_PATTERNS,
+            MSG_TYPE_UNSUBSCRIBE, MSG_TYPE_UNSUBSCRIBE_PATTERNS, PROTOCOL_VERSION,
         };
     }
 }

@@ -87,15 +87,16 @@ pub use registry::IpcTypeRegistry;
 // Subscription manager types - used by external clients for broker forwarding
 #[allow(unused_imports)]
 pub use subscription_manager::{
-    create_push_channel, ConnectionId, PeerCredentials, PushReceiver, PushSender,
-    SubscriptionManager, SubscriptionStats,
+    create_push_channel, ConnectionId, PatternSubscriptionError, PeerCredentials, PushReceiver,
+    PushSender, SubscriptionManager, SubscriptionPattern, SubscriptionStats,
 };
 
 // IPC types - used by external clients for message serialization
 #[allow(unused_imports)]
 pub use types::{
-    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
-    IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
+    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
+    IpcPatternSubscribeRequest, IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest,
+    IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
     IpcUnsubscribeRequest, ProtocolCapabilities, ProtocolVersionInfo,
     CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID, NO_REPLY_MESSAGE,
 };

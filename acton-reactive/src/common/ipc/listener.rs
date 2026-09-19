@@ -35,9 +35,11 @@ use tracing::{debug, error, info, trace, warn};
 use super::config::IpcConfig;
 use super::protocol::{
     is_discover, is_heartbeat, is_subscribe, is_unsubscribe, read_frame,
-    write_discovery_response_with_format, write_heartbeat, write_push, write_response,
+    write_discovery_response_with_format, write_heartbeat,
+    write_pattern_subscription_response_with_format, write_push, write_response,
     write_response_with_format, write_stream_frame_with_format,
-    write_subscription_response_with_format, Format, MSG_TYPE_REQUEST,
+    write_subscription_response_with_format, Format, MSG_TYPE_REQUEST, MSG_TYPE_SUBSCRIBE_PATTERNS,
+    MSG_TYPE_UNSUBSCRIBE_PATTERNS,
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
@@ -45,8 +47,9 @@ use super::subscription_manager::{
     create_push_channel, PeerCredentials, PushReceiver, SubscriptionManager,
 };
 use super::types::{
-    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError, IpcPushNotification,
-    IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
+    ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
+    IpcPatternSubscribeRequest, IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest,
+    IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest, IpcSubscriptionResponse,
     IpcUnsubscribeRequest,
 };
 use crate::common::{ActorHandle, Envelope};
@@ -64,7 +67,10 @@ use crate::traits::{ActonMessage, ActorHandleInterface};
 /// loop and the push forwarder task.
 enum WriteCommand {
     /// Write a response message.
-    Response { response: IpcResponse, format: Format },
+    Response {
+        response: IpcResponse,
+        format: Format,
+    },
     /// Write a heartbeat.
     Heartbeat,
     /// Write a push notification.
@@ -74,13 +80,21 @@ enum WriteCommand {
         response: IpcSubscriptionResponse,
         format: Format,
     },
+    /// Write a pattern subscription response.
+    PatternSubscriptionResponse {
+        response: IpcPatternSubscriptionResponse,
+        format: Format,
+    },
     /// Write a discovery response.
     DiscoveryResponse {
         response: IpcDiscoverResponse,
         format: Format,
     },
     /// Write a stream frame.
-    StreamFrame { frame: IpcStreamFrame, format: Format },
+    StreamFrame {
+        frame: IpcStreamFrame,
+        format: Format,
+    },
 }
 
 /// Channel capacity for the writer command channel.
@@ -235,7 +249,8 @@ impl IpcListenerStats {
     /// treat it as a preflight hint rather than a reservation.
     #[must_use]
     pub fn connections_available(&self) -> usize {
-        self.max_connections().saturating_sub(self.connections_active())
+        self.max_connections()
+            .saturating_sub(self.connections_active())
     }
 
     /// Get the number of connections accepted.
@@ -819,6 +834,9 @@ async fn run_writer_task(
                     WriteCommand::SubscriptionResponse { response, format } => {
                         write_subscription_response_with_format(&mut writer, &response, format).await
                     }
+                    WriteCommand::PatternSubscriptionResponse { response, format } => {
+                        write_pattern_subscription_response_with_format(&mut writer, &response, format).await
+                    }
                     WriteCommand::DiscoveryResponse { response, format } => {
                         write_discovery_response_with_format(&mut writer, &response, format).await
                     }
@@ -876,7 +894,10 @@ async fn handle_request_frame(
             .await
             .is_err()
         {
-            error!(conn_id, "Failed to send shutdown response: writer channel closed");
+            error!(
+                conn_id,
+                "Failed to send shutdown response: writer channel closed"
+            );
             return RequestResult::Break;
         }
         return RequestResult::Continue;
@@ -902,7 +923,10 @@ async fn handle_request_frame(
             .await
             .is_err()
         {
-            error!(conn_id, "Failed to send rate limit response: writer channel closed");
+            error!(
+                conn_id,
+                "Failed to send rate limit response: writer channel closed"
+            );
             return RequestResult::Break;
         }
         return RequestResult::Continue;
@@ -926,7 +950,10 @@ async fn handle_request_frame(
                 .await
                 .is_err()
             {
-                error!(conn_id, "Failed to send error response: writer channel closed");
+                error!(
+                    conn_id,
+                    "Failed to send error response: writer channel closed"
+                );
                 return RequestResult::Break;
             }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -995,6 +1022,22 @@ async fn process_frame(
         return true;
     }
 
+    if matches!(
+        msg_type,
+        MSG_TYPE_SUBSCRIBE_PATTERNS | MSG_TYPE_UNSUBSCRIBE_PATTERNS
+    ) {
+        return handle_pattern_frame(
+            conn_id,
+            msg_type,
+            payload,
+            format,
+            rate_limiter,
+            ctx,
+            writer_tx,
+        )
+        .await;
+    }
+
     if is_subscribe(msg_type) {
         return handle_subscribe_frame(conn_id, payload, format, ctx, writer_tx).await;
     }
@@ -1050,7 +1093,9 @@ async fn handle_connection(
         rate_limiting_enabled = rate_limiter.is_enabled(),
         available_tokens = rate_limiter.available_tokens(),
         push_buffer_size,
-        peer = peer.as_ref().map_or_else(|| "unknown".to_string(), ToString::to_string),
+        peer = peer
+            .as_ref()
+            .map_or_else(|| "unknown".to_string(), ToString::to_string),
         "Connection handler started with subscription support"
     );
 
@@ -1114,7 +1159,7 @@ async fn run_connection_loop(
 ) {
     loop {
         // Determine timeout based on whether connection has subscriptions
-        let has_subscriptions = !ctx.subscription_manager.get_subscriptions(conn_id).is_empty();
+        let has_subscriptions = ctx.subscription_manager.has_subscriptions(conn_id);
         let effective_timeout = if has_subscriptions {
             limits.subscription_read_timeout
         } else {
@@ -1232,6 +1277,67 @@ async fn run_push_forwarder(
     trace!(conn_id, "Push forwarder finished");
 }
 
+/// Handles an atomic pattern subscription operation and preserves its correlation ID.
+async fn handle_pattern_frame(
+    conn_id: usize,
+    msg_type: u8,
+    payload: &[u8],
+    format: Format,
+    rate_limiter: &mut RateLimiter,
+    ctx: &ConnectionContext,
+    writer: &WriterHandle,
+) -> bool {
+    let request = if msg_type == MSG_TYPE_SUBSCRIBE_PATTERNS {
+        format
+            .deserialize::<IpcPatternSubscribeRequest>(payload)
+            .map(|request| (request.correlation_id, request.patterns))
+    } else {
+        format
+            .deserialize::<IpcPatternUnsubscribeRequest>(payload)
+            .map(|request| (request.correlation_id, request.patterns))
+    };
+    let response = match request {
+        Err(error) => {
+            IpcPatternSubscriptionResponse::error("unknown", format!("Parse error: {error}"))
+        }
+        Ok((correlation_id, patterns)) => {
+            if rate_limiter.try_acquire() {
+                let result = if msg_type == MSG_TYPE_SUBSCRIBE_PATTERNS {
+                    ctx.subscription_manager
+                        .subscribe_patterns(conn_id, &patterns)
+                } else {
+                    ctx.subscription_manager
+                        .unsubscribe_patterns(conn_id, &patterns)
+                };
+                match result {
+                    Ok(patterns) => {
+                        IpcPatternSubscriptionResponse::success(correlation_id, patterns)
+                    }
+                    Err(error) => {
+                        IpcPatternSubscriptionResponse::error(correlation_id, error.to_string())
+                    }
+                }
+            } else {
+                ctx.stats.rate_limited.fetch_add(1, Ordering::Relaxed);
+                IpcPatternSubscriptionResponse::error(
+                    correlation_id,
+                    "Pattern subscription request rate limit exceeded",
+                )
+            }
+        }
+    };
+    ctx.stats
+        .subscriptions_processed
+        .fetch_add(1, Ordering::Relaxed);
+    if !response.success {
+        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+    }
+    writer
+        .send(WriteCommand::PatternSubscriptionResponse { response, format })
+        .await
+        .is_ok()
+}
+
 /// Handle a subscribe request frame.
 ///
 /// Returns `true` to continue processing, `false` to break the connection loop.
@@ -1252,7 +1358,10 @@ async fn handle_subscribe_frame(
                 .await
                 .is_err()
             {
-                error!(conn_id, "Failed to send subscribe error: writer channel closed");
+                error!(
+                    conn_id,
+                    "Failed to send subscribe error: writer channel closed"
+                );
                 return false;
             }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -1283,7 +1392,10 @@ async fn handle_subscribe_frame(
         .await
         .is_err()
     {
-        error!(conn_id, "Failed to send subscribe response: writer channel closed");
+        error!(
+            conn_id,
+            "Failed to send subscribe response: writer channel closed"
+        );
         return false;
     }
 
@@ -1310,7 +1422,10 @@ async fn handle_unsubscribe_frame(
                 .await
                 .is_err()
             {
-                error!(conn_id, "Failed to send unsubscribe error: writer channel closed");
+                error!(
+                    conn_id,
+                    "Failed to send unsubscribe error: writer channel closed"
+                );
                 return false;
             }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -1341,7 +1456,10 @@ async fn handle_unsubscribe_frame(
         .await
         .is_err()
     {
-        error!(conn_id, "Failed to send unsubscribe response: writer channel closed");
+        error!(
+            conn_id,
+            "Failed to send unsubscribe response: writer channel closed"
+        );
         return false;
     }
 
@@ -1368,7 +1486,10 @@ async fn handle_discover_frame(
                 .await
                 .is_err()
             {
-                error!(conn_id, "Failed to send discover error: writer channel closed");
+                error!(
+                    conn_id,
+                    "Failed to send discover error: writer channel closed"
+                );
                 return false;
             }
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -1413,7 +1534,10 @@ async fn handle_discover_frame(
         .await
         .is_err()
     {
-        error!(conn_id, "Failed to send discover response: writer channel closed");
+        error!(
+            conn_id,
+            "Failed to send discover response: writer channel closed"
+        );
         return false;
     }
 

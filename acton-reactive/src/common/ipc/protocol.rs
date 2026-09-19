@@ -399,6 +399,12 @@ pub const MSG_TYPE_DISCOVER: u8 = 0x08;
 /// Message type: Stream frame (server → client, for streaming responses).
 pub const MSG_TYPE_STREAM: u8 = 0x09;
 
+/// Message type: subscribe to IPC prefix patterns (requires server 9.3.0+).
+pub const MSG_TYPE_SUBSCRIBE_PATTERNS: u8 = 0x0a;
+
+/// Message type: unsubscribe from IPC prefix patterns (requires server 9.3.0+).
+pub const MSG_TYPE_UNSUBSCRIBE_PATTERNS: u8 = 0x0b;
+
 /// Frame header size for v1: 4 bytes length + 1 byte version + 1 byte type.
 pub const HEADER_SIZE_V1: usize = 6;
 
@@ -430,6 +436,8 @@ const V2_MESSAGE_TYPES: &[u8] = &[
     MSG_TYPE_UNSUBSCRIBE,
     MSG_TYPE_DISCOVER,
     MSG_TYPE_STREAM,
+    MSG_TYPE_SUBSCRIBE_PATTERNS,
+    MSG_TYPE_UNSUBSCRIBE_PATTERNS,
 ];
 
 /// Validate message type for a given protocol version.
@@ -797,6 +805,90 @@ where
     }
 
     format.deserialize(&payload)
+}
+
+/// Whether this is a pattern subscribe request.
+#[must_use]
+pub const fn is_subscribe_patterns(msg_type: u8) -> bool {
+    msg_type == MSG_TYPE_SUBSCRIBE_PATTERNS
+}
+
+/// Whether this is a pattern unsubscribe request.
+#[must_use]
+pub const fn is_unsubscribe_patterns(msg_type: u8) -> bool {
+    msg_type == MSG_TYPE_UNSUBSCRIBE_PATTERNS
+}
+
+/// Writes a pattern subscription frame using JSON.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
+pub async fn write_subscribe_patterns<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &super::types::IpcPatternSubscribeRequest,
+) -> Result<(), IpcError> {
+    write_subscribe_patterns_with_format(writer, request, Format::Json).await
+}
+
+/// Writes a pattern subscription frame using the selected format.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
+pub async fn write_subscribe_patterns_with_format<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &super::types::IpcPatternSubscribeRequest,
+    format: Format,
+) -> Result<(), IpcError> {
+    let payload = format.serialize(request)?;
+    write_frame(writer, MSG_TYPE_SUBSCRIBE_PATTERNS, format, &payload).await
+}
+
+/// Writes a pattern subscription frame using JSON.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
+pub async fn write_unsubscribe_patterns<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &super::types::IpcPatternUnsubscribeRequest,
+) -> Result<(), IpcError> {
+    write_unsubscribe_patterns_with_format(writer, request, Format::Json).await
+}
+
+/// Writes a pattern subscription frame using the selected format.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
+pub async fn write_unsubscribe_patterns_with_format<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &super::types::IpcPatternUnsubscribeRequest,
+    format: Format,
+) -> Result<(), IpcError> {
+    let payload = format.serialize(request)?;
+    write_frame(writer, MSG_TYPE_UNSUBSCRIBE_PATTERNS, format, &payload).await
+}
+
+/// Writes a pattern subscription frame using JSON.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
+pub async fn write_pattern_subscription_response<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &super::types::IpcPatternSubscriptionResponse,
+) -> Result<(), IpcError> {
+    write_pattern_subscription_response_with_format(writer, request, Format::Json).await
+}
+
+/// Writes a pattern subscription frame using the selected format.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
+pub async fn write_pattern_subscription_response_with_format<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &super::types::IpcPatternSubscriptionResponse,
+    format: Format,
+) -> Result<(), IpcError> {
+    let payload = format.serialize(request)?;
+    write_frame(writer, MSG_TYPE_RESPONSE, format, &payload).await
 }
 
 /// Write a subscribe request to the stream using JSON format.
