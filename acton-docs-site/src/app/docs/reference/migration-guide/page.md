@@ -7,6 +7,10 @@ Two kinds of migration live here: [upgrading between Acton versions](#upgrading-
 
 ## Upgrading Acton Reactive
 
+### 9.3.x → 9.4.0
+
+Existing listener APIs and wire formats remain compatible. To enable authentication and authorization, implement `IpcSecurityPolicy` and start the listener with `start_ipc_listener_with_policy(config, policy)`. The application decides which peer credentials to accept and what admitted identities may do. See [IPC security policies](/docs/advanced/ipc) for trusted handler context, delivery authorization, and revocation.
+
 ### 9.2.x → 9.3.0
 
 No changes are required for existing exact subscriptions. New `IpcClient::subscribe_patterns` and `unsubscribe_patterns` methods add case-sensitive prefix matching, such as `Order*`, and a catch-all `*`. Upgrade the server to 9.3.0 before using these methods. Existing `subscribe` strings remain literal, including strings containing `*`.

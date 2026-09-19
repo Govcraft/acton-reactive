@@ -183,6 +183,7 @@ pub struct IpcTimeoutsConfig {
 
     /// Connection read timeout in milliseconds.
     ///
+    /// This also bounds security policy admission; zero disables both timeouts.
     /// This applies to connections that do not have active subscriptions.
     /// Connections with subscriptions use `subscription_read` instead.
     #[serde(rename = "read_timeout_ms")]
@@ -355,7 +356,10 @@ impl IpcConfig {
 
         match toml::from_str::<Self>(&contents) {
             Ok(config) => {
-                info!(source = source.as_str(), "Successfully loaded IPC configuration");
+                info!(
+                    source = source.as_str(),
+                    "Successfully loaded IPC configuration"
+                );
                 config
             }
             Err(e) => {
@@ -631,8 +635,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         write_limits_config(&dir.path().join("my_app").join(CONFIG_FILE_NAME), 7);
 
-        let (config, logs) =
-            capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
+        let (config, logs) = capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
 
         assert_eq!(config.limits.max_connections, 7);
         assert!(
@@ -650,8 +653,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         write_limits_config(&dir.path().join(CONFIG_FILE_NAME), 11);
 
-        let (config, logs) =
-            capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
+        let (config, logs) = capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
 
         assert_eq!(config.limits.max_connections, 11);
         assert!(
@@ -664,8 +666,7 @@ mod tests {
     fn finding_no_config_file_is_reported() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        let (config, logs) =
-            capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
+        let (config, logs) = capture_logs(|| IpcConfig::load_from_root(dir.path(), "my_app"));
 
         assert_eq!(
             config.limits.max_connections,
@@ -688,10 +689,7 @@ mod tests {
     #[test]
     fn test_timeout_duration() {
         let config = IpcConfig::default();
-        assert_eq!(
-            config.request_timeout(),
-            std::time::Duration::from_secs(30)
-        );
+        assert_eq!(config.request_timeout(), std::time::Duration::from_secs(30));
     }
 
     #[test]
@@ -732,10 +730,7 @@ mod tests {
     fn test_shutdown_defaults() {
         let config = IpcConfig::default();
         assert_eq!(config.shutdown.drain_timeout, 5_000);
-        assert_eq!(
-            config.drain_timeout(),
-            std::time::Duration::from_secs(5)
-        );
+        assert_eq!(config.drain_timeout(), std::time::Duration::from_secs(5));
     }
 
     #[test]

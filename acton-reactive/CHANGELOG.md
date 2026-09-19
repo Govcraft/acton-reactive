@@ -5,6 +5,34 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.4.0] - 2026-09-19
+
+Adds opt-in IPC admission, trusted caller context, authorization, and revocation.
+
+### Added
+
+- `IpcSecurityPolicy` with asynchronous per-connection admission and synchronous
+  operation authorization. Applications establish an opaque `IpcIdentity` from
+  kernel peer credentials and enforce their own capability rules.
+- Additive listener and runtime entry points accepting a policy. Existing
+  listener APIs preserve their permissive behavior and existing wire formats.
+- `MessageContext::ipc_context()` exposes server-established caller identity
+  in typed IPC handlers, including fallible handlers. Client payload fields
+  cannot forge the private context wrapper. Ordinary actor sends do not
+  implicitly propagate IPC identity.
+- Authorization for requests, discovery, exact and pattern subscription
+  operations, and each outgoing notification. Cached recipient matches do not
+  cache permission decisions. Direct subscription-manager forwarding also
+  enforces delivery policy.
+- Per-connection revocation removes subscriptions and cached routes, cancels
+  socket activity, and skips revoked messages awaiting actor dispatch.
+  Already executing handler work and bytes already written cannot be undone.
+
+Admission uses the existing connection read timeout and connection limit.
+Applications retain responsibility for live process identity, PID reuse,
+capability rules, and inherited sockets. Implements #20 in support of
+Govcraft/emergent#24.
+
 ## [9.3.0] - 2026-09-19
 
 Adds opt-in prefix subscriptions for IPC broadcasts, with memoized routing.

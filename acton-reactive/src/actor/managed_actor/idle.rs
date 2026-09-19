@@ -28,7 +28,9 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace};
 
 use crate::actor::supervision::SupervisionRegistry;
-use crate::actor::{ActorConfig, Escalation, ManagedActor, RestartPolicy, Started, SupervisionStrategy};
+use crate::actor::{
+    ActorConfig, Escalation, ManagedActor, RestartPolicy, Started, SupervisionStrategy,
+};
 use crate::common::{
     ActorHandle, ActorRuntime, Envelope, FutureBox, OutboundEnvelope, ReactorItem,
 };
@@ -173,6 +175,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
+                            #[cfg(feature = "ipc")]
+                            ipc_context: crate::common::ipc::security::message_context(
+                                envelope.message.as_ref(),
+                            )
+                            .cloned(),
                             message: concrete_msg.clone(),
 
                             origin_envelope,
@@ -246,6 +253,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
+                            #[cfg(feature = "ipc")]
+                            ipc_context: crate::common::ipc::security::message_context(
+                                envelope.message.as_ref(),
+                            )
+                            .cloned(),
                             message: concrete_msg.clone(),
                             origin_envelope,
                             reply_envelope,
@@ -320,8 +332,13 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                                 actor.handle.cancellation_token.clone(),
                             );
                             MessageContext {
+                                #[cfg(feature = "ipc")]
+                                ipc_context: crate::common::ipc::security::message_context(
+                                    envelope.message.as_ref(),
+                                )
+                                .cloned(),
                                 message: concrete_msg.clone(),
-    
+
                                 origin_envelope,
                                 reply_envelope,
                             }
@@ -416,6 +433,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
+                            #[cfg(feature = "ipc")]
+                            ipc_context: crate::common::ipc::security::message_context(
+                                envelope.message.as_ref(),
+                            )
+                            .cloned(),
                             message: concrete_msg.clone(),
 
                             origin_envelope,
@@ -488,6 +510,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
+                            #[cfg(feature = "ipc")]
+                            ipc_context: crate::common::ipc::security::message_context(
+                                envelope.message.as_ref(),
+                            )
+                            .cloned(),
                             message: concrete_msg.clone(),
                             origin_envelope,
                             reply_envelope,
@@ -586,6 +613,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
+                            #[cfg(feature = "ipc")]
+                            ipc_context: crate::common::ipc::security::message_context(
+                                envelope.message.as_ref(),
+                            )
+                            .cloned(),
                             message: concrete_msg.clone(),
 
                             origin_envelope,
@@ -664,6 +696,11 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
                             actor.handle.cancellation_token.clone(),
                         );
                         MessageContext {
+                            #[cfg(feature = "ipc")]
+                            ipc_context: crate::common::ipc::security::message_context(
+                                envelope.message.as_ref(),
+                            )
+                            .cloned(),
                             message: concrete_msg.clone(),
 
                             origin_envelope,
@@ -991,7 +1028,10 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
 
         // Execute before_start hook if registered.
         if let Some(ref hook) = active_actor.before_start {
-            trace!("Executing before_start hook for actor: {}", active_actor.id());
+            trace!(
+                "Executing before_start hook for actor: {}",
+                active_actor.id()
+            );
             hook(&active_actor).await;
         }
 
@@ -1055,6 +1095,8 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
 /// * `Some(&T)`: If the trait object `msg` actually holds a value of type `T`.
 /// * `None`: If the trait object does not hold a value of type `T`.
 pub fn downcast_message<T: ActonMessage + 'static>(msg: &dyn ActonMessage) -> Option<&T> {
+    #[cfg(feature = "ipc")]
+    let msg = crate::common::ipc::security::message_payload(msg);
     // Use the Any trait's downcast_ref method provided via ActonMessage's supertraits.
     msg.as_any().downcast_ref::<T>()
 }
@@ -1143,4 +1185,3 @@ impl<State: Default + Send + Debug + 'static> Default for ManagedActor<Idle, Sta
         }
     }
 }
-

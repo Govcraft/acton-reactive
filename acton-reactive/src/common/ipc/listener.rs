@@ -43,9 +43,14 @@ use super::protocol::{
 };
 use super::rate_limiter::RateLimiter;
 use super::registry::IpcTypeRegistry;
+use super::security::{
+    wrap_message, IpcAccessDenied, IpcConnectionContext, IpcConnectionInfo, IpcOperation,
+    IpcSecurityPolicy, IPC_ACCESS_DENIED_CODE,
+};
 use super::subscription_manager::{
     create_push_channel, PeerCredentials, PushReceiver, SubscriptionManager,
 };
+use super::types::CONNECTION_REJECTED_CORRELATION_ID;
 use super::types::{
     ActorInfo, IpcDiscoverRequest, IpcDiscoverResponse, IpcEnvelope, IpcError,
     IpcPatternSubscribeRequest, IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest,
@@ -379,6 +384,8 @@ impl IpcListenerStats {
 /// function argument count and improve code clarity.
 #[derive(Clone)]
 struct ConnectionContext {
+    policy: Option<Arc<dyn IpcSecurityPolicy>>,
+    authenticated: Option<IpcConnectionContext>,
     /// IPC configuration.
     config: IpcConfig,
     /// Registry for deserializing message types.
@@ -412,6 +419,11 @@ pub struct IpcListenerHandle {
 }
 
 impl IpcListenerHandle {
+    /// Revokes a connection and closes its socket, cancelling pending IPC work.
+    pub fn revoke_connection(&self, connection_id: usize) -> bool {
+        self.subscription_manager.revoke_connection(connection_id)
+    }
+
     /// Request the listener to stop immediately.
     ///
     /// This cancels the listener without waiting for in-flight requests to complete.
@@ -546,6 +558,39 @@ pub async fn run(
     actor_registry: Arc<DashMap<String, ActorHandle>>,
     cancel_token: CancellationToken,
 ) -> Result<IpcListenerHandle, IpcError> {
+    run_inner(config, type_registry, actor_registry, cancel_token, None).await
+}
+
+/// Starts an IPC listener with connection admission and operation authorization.
+///
+/// Admission runs independently per connection and is bounded by the configured
+/// read timeout; disabling that timeout also disables the admission timeout.
+/// # Errors
+/// Returns an error if the socket cannot be created or is already in use.
+pub async fn run_with_policy(
+    config: IpcConfig,
+    type_registry: Arc<IpcTypeRegistry>,
+    actor_registry: Arc<DashMap<String, ActorHandle>>,
+    cancel_token: CancellationToken,
+    policy: Arc<dyn IpcSecurityPolicy>,
+) -> Result<IpcListenerHandle, IpcError> {
+    run_inner(
+        config,
+        type_registry,
+        actor_registry,
+        cancel_token,
+        Some(policy),
+    )
+    .await
+}
+
+async fn run_inner(
+    config: IpcConfig,
+    type_registry: Arc<IpcTypeRegistry>,
+    actor_registry: Arc<DashMap<String, ActorHandle>>,
+    cancel_token: CancellationToken,
+    policy: Option<Arc<dyn IpcSecurityPolicy>>,
+) -> Result<IpcListenerHandle, IpcError> {
     let socket_path = config.socket_path();
     let stats = Arc::new(IpcListenerStats::with_max_connections(
         config.limits.max_connections,
@@ -622,6 +667,8 @@ pub async fn run(
 
     // Create connection context for the accept loop
     let context = ConnectionContext {
+        policy,
+        authenticated: None,
         config,
         type_registry,
         actor_registry,
@@ -706,6 +753,7 @@ async fn accept_loop(listener: UnixListener, ctx: ConnectionContext) {
                         let ctx_clone = ctx.clone();
 
                         tokio::spawn(async move {
+                            let _active = ActiveConnectionGuard(ctx_clone.stats.clone());
                             handle_connection(stream, conn_id, peer, ctx_clone).await;
 
                             // Release the permit when done
@@ -821,7 +869,7 @@ async fn run_writer_task(
                     break;
                 };
 
-                let result = match cmd {
+                let write = async { match cmd {
                     WriteCommand::Response { response, format } => {
                         write_response_with_format(&mut writer, &response, format).await
                     }
@@ -843,6 +891,11 @@ async fn run_writer_task(
                     WriteCommand::StreamFrame { frame, format } => {
                         write_stream_frame_with_format(&mut writer, &frame, format).await
                     }
+                }};
+                let result = tokio::select! {
+                    biased;
+                    () = cancel_token.cancelled() => break,
+                    result = write => result,
                 };
 
                 if let Err(e) = result {
@@ -854,6 +907,47 @@ async fn run_writer_task(
     }
 
     trace!(conn_id, "Writer task finished");
+}
+
+struct ActiveConnectionGuard(Arc<IpcListenerStats>);
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        self.0.connections_active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+struct RegisteredConnectionGuard {
+    manager: Arc<SubscriptionManager>,
+    connection_id: usize,
+    cancellation: CancellationToken,
+}
+impl Drop for RegisteredConnectionGuard {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.manager.unregister_connection(self.connection_id);
+    }
+}
+
+struct InFlightGuard<'a>(&'a IpcListenerStats);
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.decrement_in_flight();
+    }
+}
+
+fn authorize(ctx: &ConnectionContext, operation: IpcOperation<'_>) -> Result<(), IpcAccessDenied> {
+    match (&ctx.policy, &ctx.authenticated) {
+        (Some(policy), Some(context)) if !context.is_revoked() => {
+            policy.authorize(context, operation)?;
+            if context.is_revoked() {
+                Err(IpcAccessDenied::new("Connection has been revoked"))
+            } else {
+                Ok(())
+            }
+        }
+        (Some(_), _) => Err(IpcAccessDenied::new("Connection is not authorized")),
+        _ => Ok(()),
+    }
 }
 
 /// Result of handling a single request frame.
@@ -934,12 +1028,12 @@ async fn handle_request_frame(
 
     // Track in-flight request for graceful shutdown
     ctx.stats.increment_in_flight();
+    let _in_flight = InFlightGuard(&ctx.stats);
 
     // Parse envelope
     let envelope: IpcEnvelope = match format.deserialize(payload) {
         Ok(env) => env,
         Err(e) => {
-            ctx.stats.decrement_in_flight();
             let response = IpcResponse::error_with_message(
                 "unknown",
                 "SERIALIZATION_ERROR",
@@ -970,10 +1064,36 @@ async fn handle_request_frame(
         "Received request"
     );
 
+    if let Err(denied) = authorize(ctx, IpcOperation::Request(&envelope)) {
+        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+        if envelope.expects_stream {
+            let frame = IpcStreamFrame::error_with_code(
+                &envelope.correlation_id,
+                0,
+                IPC_ACCESS_DENIED_CODE,
+                denied.to_string(),
+            );
+            return send_stream_error(writer, frame, format).await;
+        }
+        let response = IpcResponse::error_with_message(
+            &envelope.correlation_id,
+            IPC_ACCESS_DENIED_CODE,
+            denied.to_string(),
+        );
+        return if writer
+            .send(WriteCommand::Response { response, format })
+            .await
+            .is_ok()
+        {
+            RequestResult::Continue
+        } else {
+            RequestResult::Break
+        };
+    }
+
     // Handle streaming requests differently
     if envelope.expects_stream {
         let result = process_stream_request(&envelope, format, ctx, writer).await;
-        ctx.stats.decrement_in_flight();
         return result;
     }
 
@@ -983,11 +1103,9 @@ async fn handle_request_frame(
         &ctx.type_registry,
         &ctx.actor_registry,
         &ctx.stats,
+        ctx.authenticated.as_ref(),
     )
     .await;
-
-    // Done processing - decrement in-flight counter
-    ctx.stats.decrement_in_flight();
 
     if writer
         .send(WriteCommand::Response { response, format })
@@ -1069,8 +1187,51 @@ async fn handle_connection(
     stream: UnixStream,
     conn_id: usize,
     peer: Option<PeerCredentials>,
-    ctx: ConnectionContext,
+    mut ctx: ConnectionContext,
 ) {
+    ctx.cancel_token = ctx.cancel_token.child_token();
+    if let Some(policy) = &ctx.policy {
+        let info = IpcConnectionInfo::new(conn_id, peer);
+        let admission = async {
+            match ctx.config.read_timeout() {
+                Some(timeout) => tokio::time::timeout(timeout, policy.admit(info))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(IpcAccessDenied::new("Connection admission timed out"))
+                    }),
+                None => policy.admit(info).await,
+            }
+        };
+        let admitted = tokio::select! {
+            biased;
+            () = ctx.cancel_token.cancelled() => Err(IpcAccessDenied::new("Listener stopped")),
+            result = admission => result,
+        };
+        match admitted {
+            Ok(identity) => {
+                ctx.authenticated = Some(IpcConnectionContext::new(
+                    info,
+                    identity,
+                    ctx.cancel_token.clone(),
+                ));
+            }
+            Err(denied) => {
+                ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                let mut stream = stream;
+                let response = IpcResponse::error_with_message(
+                    CONNECTION_REJECTED_CORRELATION_ID,
+                    IPC_ACCESS_DENIED_CODE,
+                    denied.to_string(),
+                );
+                tokio::select! {
+                    biased;
+                    () = ctx.cancel_token.cancelled() => {},
+                    _ = tokio::time::timeout(REJECTION_WRITE_TIMEOUT, write_response(&mut stream, &response)) => {},
+                }
+                return;
+            }
+        }
+    }
     let (mut reader, writer) = stream.into_split();
     let push_buffer_size = ctx.config.limits.push_buffer_size;
     let limits = ConnectionLimits {
@@ -1082,8 +1243,28 @@ async fn handle_connection(
 
     // Create push notification channel and register connection for subscriptions
     let (push_sender, push_receiver) = create_push_channel(conn_id, push_buffer_size);
-    ctx.subscription_manager
-        .register_connection(conn_id, push_sender, peer);
+    match (&ctx.authenticated, &ctx.policy) {
+        (Some(context), Some(policy)) => {
+            ctx.subscription_manager.register_authenticated_connection(
+                conn_id,
+                push_sender,
+                context.clone(),
+                policy.clone(),
+            );
+        }
+        _ => ctx.subscription_manager.register_connection_with_token(
+            conn_id,
+            push_sender,
+            peer,
+            ctx.cancel_token.clone(),
+        ),
+    }
+
+    let registration = RegisteredConnectionGuard {
+        manager: ctx.subscription_manager.clone(),
+        connection_id: conn_id,
+        cancellation: ctx.cancel_token.clone(),
+    };
 
     // Create writer command channel - eliminates the need for Mutex
     let (writer_tx, writer_rx) = mpsc::channel::<WriteCommand>(WRITER_CHANNEL_CAPACITY);
@@ -1125,7 +1306,7 @@ async fn handle_connection(
     .await;
 
     // Unregister connection from subscription manager (cleans up all subscriptions)
-    ctx.subscription_manager.unregister_connection(conn_id);
+    drop(registration);
 
     // Drop our sender to signal the writer task to finish
     drop(writer_tx);
@@ -1137,7 +1318,6 @@ async fn handle_connection(
     // Wait for writer task to finish (it will exit when channel closes)
     let _ = writer_task.await;
 
-    ctx.stats.connections_active.fetch_sub(1, Ordering::Relaxed);
     debug!(conn_id, "Connection handler finished");
 }
 
@@ -1192,9 +1372,12 @@ async fn run_connection_loop(
             } => {
                 match frame_result {
                     Ok((msg_type, format, payload)) => {
-                        if !process_frame(conn_id, msg_type, format, &payload, rate_limiter, ctx, writer_tx).await {
-                            break;
-                        }
+                        let keep_reading = tokio::select! {
+                            biased;
+                            () = ctx.cancel_token.cancelled() => false,
+                            result = process_frame(conn_id, msg_type, format, &payload, rate_limiter, ctx, writer_tx) => result,
+                        };
+                        if !keep_reading { break; }
                     }
                     Err(TimeoutOrFrame::Timeout) => {
                         // Only timeout non-subscriber connections
@@ -1252,7 +1435,12 @@ async fn run_push_forwarder(
                     let message_type = push.message_type.clone();
                     let notification_id = push.notification_id.clone();
 
-                    if writer.send(WriteCommand::Push(push)).await.is_err() {
+                    let sent = tokio::select! {
+                        biased;
+                        () = cancel_token.cancelled() => break,
+                        result = writer.send(WriteCommand::Push(push)) => result,
+                    };
+                    if sent.is_err() {
                         error!(conn_id, "Failed to send push notification: writer channel closed");
                         // Connection is broken, exit the forwarder
                         break;
@@ -1301,7 +1489,17 @@ async fn handle_pattern_frame(
             IpcPatternSubscriptionResponse::error("unknown", format!("Parse error: {error}"))
         }
         Ok((correlation_id, patterns)) => {
-            if rate_limiter.try_acquire() {
+            let operation = if msg_type == MSG_TYPE_SUBSCRIBE_PATTERNS {
+                IpcOperation::SubscribePatterns(&patterns)
+            } else {
+                IpcOperation::UnsubscribePatterns(&patterns)
+            };
+            if let Err(denied) = authorize(ctx, operation) {
+                IpcPatternSubscriptionResponse::error(
+                    correlation_id,
+                    format!("{IPC_ACCESS_DENIED_CODE}: {denied}"),
+                )
+            } else if rate_limiter.try_acquire() {
                 let result = if msg_type == MSG_TYPE_SUBSCRIBE_PATTERNS {
                     ctx.subscription_manager
                         .subscribe_patterns(conn_id, &patterns)
@@ -1369,6 +1567,18 @@ async fn handle_subscribe_frame(
         }
     };
 
+    if let Err(denied) = authorize(ctx, IpcOperation::Subscribe(&request.message_types)) {
+        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+        let response = IpcSubscriptionResponse::error(
+            &request.correlation_id,
+            format!("{IPC_ACCESS_DENIED_CODE}: {denied}"),
+        );
+        return writer
+            .send(WriteCommand::SubscriptionResponse { response, format })
+            .await
+            .is_ok();
+    }
+
     trace!(
         conn_id,
         correlation_id = %request.correlation_id,
@@ -1433,6 +1643,18 @@ async fn handle_unsubscribe_frame(
         }
     };
 
+    if let Err(denied) = authorize(ctx, IpcOperation::Unsubscribe(&request.message_types)) {
+        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+        let response = IpcSubscriptionResponse::error(
+            &request.correlation_id,
+            format!("{IPC_ACCESS_DENIED_CODE}: {denied}"),
+        );
+        return writer
+            .send(WriteCommand::SubscriptionResponse { response, format })
+            .await
+            .is_ok();
+    }
+
     trace!(
         conn_id,
         correlation_id = %request.correlation_id,
@@ -1496,6 +1718,18 @@ async fn handle_discover_frame(
             return true;
         }
     };
+
+    if let Err(denied) = authorize(ctx, IpcOperation::Discover) {
+        ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
+        let response = IpcDiscoverResponse::error(
+            &request.correlation_id,
+            format!("{IPC_ACCESS_DENIED_CODE}: {denied}"),
+        );
+        return writer
+            .send(WriteCommand::DiscoveryResponse { response, format })
+            .await
+            .is_ok();
+    }
 
     trace!(
         conn_id,
@@ -1613,6 +1847,7 @@ async fn process_envelope(
     type_registry: &Arc<IpcTypeRegistry>,
     actor_registry: &Arc<DashMap<String, ActorHandle>>,
     stats: &Arc<IpcListenerStats>,
+    authenticated: Option<&IpcConnectionContext>,
 ) -> IpcResponse {
     let correlation_id = &envelope.correlation_id;
 
@@ -1631,6 +1866,11 @@ async fn process_envelope(
             stats.errors.fetch_add(1, Ordering::Relaxed);
             return IpcResponse::error(correlation_id, &e);
         }
+    };
+
+    let message = match authenticated {
+        Some(context) => wrap_message(message, context.clone()),
+        None => message,
     };
 
     // Handle request-response vs fire-and-forget
@@ -1808,6 +2048,11 @@ async fn process_stream_request(
             ctx.stats.errors.fetch_add(1, Ordering::Relaxed);
             return send_stream_error(writer, frame, format).await;
         }
+    };
+
+    let message = match &ctx.authenticated {
+        Some(context) => wrap_message(message, context.clone()),
+        None => message,
     };
 
     // Create response channel and send message

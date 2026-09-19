@@ -1265,7 +1265,15 @@ fn record_connection_rejection(format: Format, payload: &[u8], rejection: &Conne
         return;
     };
 
-    let Some(error) = response.as_connection_rejection() else {
+    let error = if response.error_code.as_deref() == Some(super::security::IPC_ACCESS_DENIED_CODE) {
+        IpcError::ProtocolError(format!(
+            "{}: {}",
+            super::security::IPC_ACCESS_DENIED_CODE,
+            response.error.as_deref().unwrap_or("Connection denied")
+        ))
+    } else if let Some(error) = response.as_connection_rejection() {
+        error
+    } else {
         return;
     };
 

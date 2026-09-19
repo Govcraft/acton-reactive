@@ -89,15 +89,18 @@ pub(crate) mod traits;
 #[cfg(feature = "ipc")]
 pub mod ipc {
     pub use crate::common::ipc::{
-        socket_exists, socket_is_alive, start_listener, ActorInfo, ConfigSource, ConnectionId,
-        IpcClient, IpcClientConfig, IpcConfig, IpcDiscoverRequest, IpcDiscoverResponse,
-        IpcEnvelope, IpcError, IpcLimitsConfig, IpcListenerHandle, IpcListenerStats,
-        IpcPatternSubscribeRequest, IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest,
-        IpcPushNotification, IpcResponse, IpcStreamFrame, IpcSubscribeRequest,
+        socket_exists, socket_is_alive, start_listener, start_listener_with_policy, ActorInfo,
+        ConfigSource, ConnectionId, IpcAccessDenied, IpcAdmission, IpcClient, IpcClientConfig,
+        IpcConfig, IpcConnectionContext, IpcConnectionInfo, IpcDiscoverRequest,
+        IpcDiscoverResponse, IpcEnvelope, IpcError, IpcIdentity, IpcLimitsConfig,
+        IpcListenerHandle, IpcListenerStats, IpcOperation, IpcPatternSubscribeRequest,
+        IpcPatternSubscriptionResponse, IpcPatternUnsubscribeRequest, IpcPushNotification,
+        IpcResponse, IpcSecurityPolicy, IpcStreamFrame, IpcSubscribeRequest,
         IpcSubscriptionResponse, IpcTimeoutsConfig, IpcTypeRegistry, IpcUnsubscribeRequest,
         PatternSubscriptionError, PeerCredentials, ProtocolCapabilities, ProtocolVersionInfo,
         RateLimitConfig, ShutdownConfig, ShutdownResult, SocketConfig, SubscriptionManager,
         SubscriptionPattern, CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID,
+        IPC_ACCESS_DENIED_CODE,
     };
     pub use crate::common::IpcNameInUse;
 

@@ -26,8 +26,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
+use super::security::{IpcConnectionContext, IpcOperation, IpcSecurityPolicy};
 use super::types::IpcPushNotification;
 
 /// Unique identifier for an IPC connection.
@@ -204,7 +206,7 @@ pub struct SubscriptionStats {
     pub subscriptions_removed: AtomicUsize,
     /// Total push notifications sent.
     pub push_notifications_sent: AtomicUsize,
-    /// Total push notifications dropped (channel full or closed).
+    /// Total push notifications dropped (authorization denied, channel full or closed).
     pub push_notifications_dropped: AtomicUsize,
 }
 
@@ -236,6 +238,9 @@ impl SubscriptionStats {
 
 /// Information about a subscribed connection.
 struct ConnectionInfo {
+    incarnation: Arc<()>,
+    cancellation: CancellationToken,
+    security: Option<(IpcConnectionContext, Arc<dyn IpcSecurityPolicy>)>,
     /// Channel for sending push notifications to this connection.
     push_sender: PushSender,
     /// Set of message type names this connection is subscribed to.
@@ -244,6 +249,27 @@ struct ConnectionInfo {
     /// Credentials of the process behind this connection, when the platform
     /// reported them.
     peer: Option<PeerCredentials>,
+}
+
+struct DeliveryCandidate {
+    conn_id: ConnectionId,
+    incarnation: Arc<()>,
+    context: IpcConnectionContext,
+    policy: Arc<dyn IpcSecurityPolicy>,
+}
+
+impl ConnectionInfo {
+    fn subscription_count(&self) -> usize {
+        self.subscribed_types.len() + self.subscribed_patterns.len()
+    }
+
+    fn matches(&self, name: &str) -> bool {
+        self.subscribed_types.contains(name)
+            || self
+                .subscribed_patterns
+                .iter()
+                .any(|pattern| pattern.matches(name))
+    }
 }
 
 /// Manages IPC connection subscriptions for broker forwarding.
@@ -286,17 +312,16 @@ fn remove_index<K: Eq + std::hash::Hash>(
 }
 
 impl SubscriptionState {
-    fn remove_connection(&mut self, id: ConnectionId) -> usize {
-        let Some(info) = self.connections.remove(&id) else {
-            return 0;
-        };
+    fn remove_connection(&mut self, id: ConnectionId) -> Option<ConnectionInfo> {
+        let info = self.connections.remove(&id)?;
+        info.cancellation.cancel();
         for name in &info.subscribed_types {
             remove_index(&mut self.exact, name, id);
         }
         for pattern in &info.subscribed_patterns {
             remove_index(&mut self.patterns, pattern, id);
         }
-        info.subscribed_types.len() + info.subscribed_patterns.len()
+        Some(info)
     }
 }
 
@@ -339,29 +364,104 @@ impl SubscriptionManager {
     }
 
     /// Registers a connection and its kernel-reported peer credentials.
-    /// Replacing an existing connection removes all its subscriptions.
+    /// Replacing an existing connection cancels it and removes its subscriptions.
     pub fn register_connection(
         &self,
         conn_id: ConnectionId,
         push_sender: PushSender,
         peer: Option<PeerCredentials>,
     ) {
-        let mut state = self.state.write();
-        let removed = state.remove_connection(conn_id);
-        self.stats
-            .subscriptions_removed
-            .fetch_add(removed, Ordering::Relaxed);
-        state.connections.insert(
+        self.register_connection_with_token(conn_id, push_sender, peer, CancellationToken::new());
+    }
+
+    pub(crate) fn register_connection_with_token(
+        &self,
+        conn_id: ConnectionId,
+        push_sender: PushSender,
+        peer: Option<PeerCredentials>,
+        cancellation: CancellationToken,
+    ) {
+        self.insert_connection(
             conn_id,
             ConnectionInfo {
+                incarnation: Arc::new(()),
+                cancellation,
+                security: None,
                 push_sender,
                 peer,
                 subscribed_types: HashSet::new(),
                 subscribed_patterns: HashSet::new(),
             },
         );
+    }
+
+    pub(crate) fn register_authenticated_connection(
+        &self,
+        conn_id: ConnectionId,
+        push_sender: PushSender,
+        context: IpcConnectionContext,
+        policy: Arc<dyn IpcSecurityPolicy>,
+    ) {
+        self.insert_connection(
+            conn_id,
+            ConnectionInfo {
+                incarnation: Arc::new(()),
+                cancellation: context.cancellation_token().clone(),
+                peer: context.peer_credentials(),
+                security: Some((context, policy)),
+                push_sender,
+                subscribed_types: HashSet::new(),
+                subscribed_patterns: HashSet::new(),
+            },
+        );
+    }
+
+    fn insert_connection(&self, conn_id: ConnectionId, info: ConnectionInfo) {
+        let mut state = self.state.write();
+        let removed = state.remove_connection(conn_id);
+        self.stats.subscriptions_removed.fetch_add(
+            removed
+                .as_ref()
+                .map_or(0, ConnectionInfo::subscription_count),
+            Ordering::Relaxed,
+        );
+        state.connections.insert(conn_id, info);
         self.routes.write().clear();
         drop(state);
+        drop(removed);
+    }
+
+    /// Returns the admitted security context, if this is an authenticated connection.
+    /// A retained context observes revocation even after the connection is removed.
+    #[must_use]
+    pub fn connection_context(&self, conn_id: ConnectionId) -> Option<IpcConnectionContext> {
+        self.state
+            .read()
+            .connections
+            .get(&conn_id)
+            .and_then(|info| info.security.as_ref().map(|(context, _)| context.clone()))
+    }
+
+    /// Cancels a connection and removes all of its subscriptions.
+    ///
+    /// Returns whether the connection existed. Once this returns, no subsequent
+    /// notification can be enqueued for that connection incarnation. Notifications
+    /// already queued or written cannot be recalled. Listener tasks observe the
+    /// cancellation token and close the transport.
+    pub fn revoke_connection(&self, conn_id: ConnectionId) -> bool {
+        let mut state = self.state.write();
+        let existed = state.connections.contains_key(&conn_id);
+        let removed = state.remove_connection(conn_id);
+        self.stats.subscriptions_removed.fetch_add(
+            removed
+                .as_ref()
+                .map_or(0, ConnectionInfo::subscription_count),
+            Ordering::Relaxed,
+        );
+        self.routes.write().clear();
+        drop(state);
+        drop(removed);
+        existed
     }
 
     /// Returns kernel-reported credentials, or `None` for unknown connections.
@@ -385,11 +485,15 @@ impl SubscriptionManager {
     pub fn unregister_connection(&self, conn_id: ConnectionId) {
         let mut state = self.state.write();
         let removed = state.remove_connection(conn_id);
-        self.stats
-            .subscriptions_removed
-            .fetch_add(removed, Ordering::Relaxed);
+        self.stats.subscriptions_removed.fetch_add(
+            removed
+                .as_ref()
+                .map_or(0, ConnectionInfo::subscription_count),
+            Ordering::Relaxed,
+        );
         self.routes.write().clear();
         drop(state);
+        drop(removed);
     }
 
     /// Adds literal message type names and returns the current exact subscriptions.
@@ -603,33 +707,93 @@ impl SubscriptionManager {
 
     /// Forwards once to each connection matching an exact name or pattern.
     ///
-    /// Resolved recipient sets (including empty sets) are memoized for up to
-    /// 1024 names of at most 256 bytes, and invalidated atomically on mutation.
-    /// Full or closed queues drop notifications rather than blocking delivery.
+    /// Recipient sets are memoized for up to 1024 names of at most 256 bytes.
+    /// Authorization decisions are never cached: authenticated connections pass
+    /// `Deliver` authorization on every notification, outside all manager locks.
+    /// Before enqueueing, the manager rechecks the connection incarnation,
+    /// cancellation, and current subscriptions. Authorization denials and full or
+    /// closed queues count as dropped notifications; stale candidates are skipped.
+    /// A concurrent policy change does not retract a completed authorization;
+    /// use [`revoke_connection`](Self::revoke_connection) for a synchronized stop.
     pub fn forward_to_subscribers(&self, notification: &IpcPushNotification) {
         let state = self.state.read();
         let ids = self.recipients(&state, &notification.message_type);
-        for conn_id in ids.iter() {
-            if let Some(info) = state.connections.get(conn_id) {
-                match info.push_sender.try_send(notification.clone()) {
-                    Ok(()) => {
-                        self.stats
-                            .push_notifications_sent
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        self.stats
-                            .push_notifications_dropped
-                            .fetch_add(1, Ordering::Relaxed);
-                        warn!(conn_id, message_type = %notification.message_type, "Push channel full, dropping notification");
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        self.stats
-                            .push_notifications_dropped
-                            .fetch_add(1, Ordering::Relaxed);
-                        trace!(conn_id, "Push channel closed");
-                    }
+        let mut candidates = Vec::new();
+        for &conn_id in ids.iter() {
+            if let Some(info) = state.connections.get(&conn_id) {
+                if info.cancellation.is_cancelled() {
+                    continue;
                 }
+                if let Some((context, policy)) = &info.security {
+                    candidates.push(DeliveryCandidate {
+                        conn_id,
+                        incarnation: Arc::clone(&info.incarnation),
+                        context: context.clone(),
+                        policy: Arc::clone(policy),
+                    });
+                } else {
+                    self.send_notification(conn_id, &info.push_sender, notification);
+                }
+            }
+        }
+        drop(state);
+
+        for candidate in candidates {
+            if candidate
+                .policy
+                .authorize(&candidate.context, IpcOperation::Deliver(notification))
+                .is_err()
+            {
+                self.stats
+                    .push_notifications_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            let state = self.state.read();
+            let route_unchanged = self
+                .routes
+                .read()
+                .get(&notification.message_type)
+                .is_some_and(|current| Arc::ptr_eq(current, &ids));
+            if let Some(info) = state.connections.get(&candidate.conn_id) {
+                if Arc::ptr_eq(&info.incarnation, &candidate.incarnation)
+                    && info
+                        .security
+                        .as_ref()
+                        .is_some_and(|(context, _)| context.same_session(&candidate.context))
+                    && !info.cancellation.is_cancelled()
+                    && (route_unchanged || info.matches(&notification.message_type))
+                {
+                    self.send_notification(candidate.conn_id, &info.push_sender, notification);
+                }
+            }
+            drop(state);
+        }
+    }
+
+    fn send_notification(
+        &self,
+        conn_id: ConnectionId,
+        sender: &PushSender,
+        notification: &IpcPushNotification,
+    ) {
+        match sender.try_send(notification.clone()) {
+            Ok(()) => {
+                self.stats
+                    .push_notifications_sent
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.stats
+                    .push_notifications_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(conn_id, message_type = %notification.message_type, "Push channel full, dropping notification");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.stats
+                    .push_notifications_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+                trace!(conn_id, "Push channel closed");
             }
         }
     }
@@ -695,6 +859,8 @@ pub fn create_push_channel(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    static_assertions::assert_impl_all!(SubscriptionManager: std::panic::UnwindSafe);
 
     #[test]
     fn test_subscription_manager_new() {
@@ -1229,5 +1395,303 @@ mod tests {
             manager.stats().subscriptions_added(),
             manager.stats().subscriptions_removed()
         );
+    }
+
+    struct DeliveryPolicy<F>(F);
+
+    impl<F> IpcSecurityPolicy for DeliveryPolicy<F>
+    where
+        F: Fn(&IpcConnectionContext) -> Result<(), super::super::security::IpcAccessDenied>
+            + Send
+            + Sync
+            + std::panic::RefUnwindSafe
+            + 'static,
+    {
+        fn admit(
+            &self,
+            _connection: super::super::security::IpcConnectionInfo,
+        ) -> super::super::security::IpcAdmission<'_> {
+            Box::pin(async { Ok(super::super::security::IpcIdentity::new(())) })
+        }
+
+        fn authorize(
+            &self,
+            context: &IpcConnectionContext,
+            operation: IpcOperation<'_>,
+        ) -> Result<(), super::super::security::IpcAccessDenied> {
+            assert!(matches!(operation, IpcOperation::Deliver(_)));
+            (self.0)(context)
+        }
+    }
+
+    fn security_context(conn_id: ConnectionId) -> IpcConnectionContext {
+        use super::super::security::{IpcConnectionInfo, IpcIdentity};
+        IpcConnectionContext::new(
+            IpcConnectionInfo::new(conn_id, None),
+            IpcIdentity::new("test identity"),
+            CancellationToken::new(),
+        )
+    }
+
+    #[test]
+    fn cached_routes_never_cache_authorization_and_overlap_still_delivers_once() {
+        use std::sync::atomic::AtomicBool;
+        let manager = SubscriptionManager::new();
+        let (sender, mut receiver) = mpsc::channel(10);
+        let allowed = Arc::new(AtomicBool::new(true));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let policy_allowed = Arc::clone(&allowed);
+        let policy_calls = Arc::clone(&calls);
+        let policy = DeliveryPolicy(move |context: &IpcConnectionContext| {
+            assert_eq!(context.identity::<&str>(), Some(&"test identity"));
+            policy_calls.fetch_add(1, Ordering::SeqCst);
+            if policy_allowed.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(super::super::security::IpcAccessDenied::new(
+                    "permission changed",
+                ))
+            }
+        });
+        manager.register_authenticated_connection(1, sender, security_context(1), Arc::new(policy));
+        manager.subscribe(1, &["OrderCreated".into()]);
+        manager
+            .subscribe_patterns(1, &["*".into(), "Order*".into()])
+            .unwrap();
+        let event = notification("OrderCreated");
+        manager.forward_to_subscribers(&event);
+        receiver.try_recv().unwrap();
+        let cached = Arc::clone(manager.routes.read().get("OrderCreated").unwrap());
+        allowed.store(false, Ordering::SeqCst);
+        manager.forward_to_subscribers(&event);
+        assert!(receiver.try_recv().is_err());
+        allowed.store(true, Ordering::SeqCst);
+        manager.forward_to_subscribers(&event);
+        receiver.try_recv().unwrap();
+        assert!(receiver.try_recv().is_err());
+        assert!(Arc::ptr_eq(
+            &cached,
+            manager.routes.read().get("OrderCreated").unwrap()
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(manager.stats().push_notifications_sent(), 2);
+        assert_eq!(manager.stats().push_notifications_dropped(), 1);
+    }
+
+    #[test]
+    fn mutations_during_authorization_cannot_deliver_stale_candidates() {
+        use std::sync::Barrier;
+        for mutation in [
+            "revoke",
+            "disconnect",
+            "replace",
+            "unsubscribe",
+            "unsubscribe_patterns",
+        ] {
+            let manager = Arc::new(SubscriptionManager::new());
+            let entered = Arc::new(Barrier::new(2));
+            let resume = Arc::new(Barrier::new(2));
+            let policy_entered = Arc::clone(&entered);
+            let policy_resume = Arc::clone(&resume);
+            let policy = DeliveryPolicy(move |_context: &IpcConnectionContext| {
+                policy_entered.wait();
+                policy_resume.wait();
+                Ok(())
+            });
+            let (sender, mut receiver) = mpsc::channel(10);
+            let context = security_context(1);
+            manager.register_authenticated_connection(1, sender, context.clone(), Arc::new(policy));
+            if mutation == "unsubscribe_patterns" {
+                manager.subscribe_patterns(1, &["Event*".into()]).unwrap();
+            } else {
+                manager.subscribe(1, &["Event".into()]);
+            }
+            let (replacement_sender, mut replacement_receiver) = mpsc::channel(10);
+            std::thread::scope(|scope| {
+                scope.spawn(|| manager.forward_to_subscribers(&notification("Event")));
+                entered.wait();
+                match mutation {
+                    "revoke" => {
+                        assert!(manager.revoke_connection(1));
+                    }
+                    "disconnect" => manager.unregister_connection(1),
+                    "replace" => {
+                        manager.register_connection(1, replacement_sender, None);
+                        manager.subscribe(1, &["Event".into()]);
+                    }
+                    "unsubscribe" => {
+                        manager.unsubscribe(1, &["Event".into()]);
+                    }
+                    "unsubscribe_patterns" => {
+                        manager.unsubscribe_patterns(1, &[]).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                resume.wait();
+            });
+            assert!(receiver.try_recv().is_err(), "{mutation}");
+            assert!(replacement_receiver.try_recv().is_err(), "{mutation}");
+            assert_eq!(manager.stats().push_notifications_sent(), 0);
+            assert_eq!(
+                context.is_revoked(),
+                matches!(mutation, "revoke" | "disconnect" | "replace")
+            );
+        }
+    }
+
+    #[test]
+    fn policy_can_reenter_manager_and_remove_its_own_subscription() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let weak_manager = std::sync::Mutex::new(Arc::downgrade(&manager));
+        let policy = DeliveryPolicy(move |context: &IpcConnectionContext| {
+            let manager = weak_manager.lock().unwrap().upgrade().unwrap();
+            assert!(manager
+                .connection_context(context.connection_id())
+                .unwrap()
+                .same_session(context));
+            manager.unsubscribe(context.connection_id(), &[]);
+            Ok(())
+        });
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_authenticated_connection(1, sender, security_context(1), Arc::new(policy));
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        manager.forward_to_subscribers(&notification("Event"));
+        assert!(receiver.try_recv().is_err());
+        assert!(!manager.has_subscriptions(1));
+    }
+
+    #[test]
+    fn default_connections_can_be_revoked_and_cancel_their_transport_token() {
+        let manager = SubscriptionManager::new();
+        let token = CancellationToken::new();
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_connection_with_token(1, sender, None, token.clone());
+        manager.subscribe(1, &["Event".into()]);
+        manager.subscribe_patterns(1, &["*".into()]).unwrap();
+        assert!(manager.connection_context(1).is_none());
+        manager.forward_to_subscribers(&notification("Event"));
+        receiver.try_recv().unwrap();
+        assert!(manager.revoke_connection(1));
+        assert!(!manager.revoke_connection(1));
+        assert!(token.is_cancelled());
+        assert_eq!(manager.connection_count(), 0);
+        assert_eq!(manager.total_subscriptions(), 0);
+        assert_eq!(manager.stats().subscriptions_removed(), 2);
+        assert!(manager.routes.read().is_empty());
+        manager.forward_to_subscribers(&notification("Event"));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn replacement_and_unregister_cancel_only_the_previous_session() {
+        let manager = SubscriptionManager::new();
+        let old = security_context(1);
+        let (sender, _receiver) = mpsc::channel(10);
+        manager.register_authenticated_connection(
+            1,
+            sender,
+            old.clone(),
+            Arc::new(DeliveryPolicy(|_: &IpcConnectionContext| Ok(()))),
+        );
+        let retained = manager.connection_context(1).unwrap();
+        assert!(retained.same_session(&old));
+        let fresh = security_context(1);
+        let (sender, _receiver) = mpsc::channel(10);
+        manager.register_authenticated_connection(
+            1,
+            sender,
+            fresh.clone(),
+            Arc::new(DeliveryPolicy(|_: &IpcConnectionContext| Ok(()))),
+        );
+        assert!(old.is_revoked());
+        assert!(retained.is_revoked());
+        assert!(!fresh.is_revoked());
+        assert!(manager.connection_context(1).unwrap().same_session(&fresh));
+        manager.unregister_connection(1);
+        assert!(fresh.is_revoked());
+        assert!(manager.connection_context(1).is_none());
+    }
+    #[test]
+    fn unrelated_subscription_changes_during_authorization_preserve_valid_delivery() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let weak_manager = std::sync::Mutex::new(Arc::downgrade(&manager));
+        let policy = DeliveryPolicy(move |_context: &IpcConnectionContext| {
+            let manager = weak_manager.lock().unwrap().upgrade().unwrap();
+            manager.subscribe(2, &["Unrelated".into()]);
+            Ok(())
+        });
+        let (sender, mut receiver) = mpsc::channel(10);
+        manager.register_authenticated_connection(1, sender, security_context(1), Arc::new(policy));
+        let (sender, _other_receiver) = mpsc::channel(10);
+        manager.register_connection(2, sender, None);
+        manager.subscribe_patterns(1, &["Event*".into()]).unwrap();
+        manager.forward_to_subscribers(&notification("EventCreated"));
+        assert_eq!(receiver.try_recv().unwrap().message_type, "EventCreated");
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn removal_drops_application_identity_and_policy_outside_manager_locks() {
+        use super::super::security::{IpcConnectionInfo, IpcIdentity};
+        use std::sync::{Mutex, Weak};
+
+        struct DropObserver {
+            manager: Mutex<Weak<SubscriptionManager>>,
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl DropObserver {
+            fn observe(&self) {
+                assert_eq!(self.drops.load(Ordering::SeqCst), 0);
+            }
+        }
+
+        impl Drop for DropObserver {
+            fn drop(&mut self) {
+                if let Some(manager) = self.manager.lock().unwrap().upgrade() {
+                    manager.unsubscribe(1, &[]);
+                    self.drops.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+
+        for removal in ["replace", "unregister", "revoke"] {
+            let manager = Arc::new(SubscriptionManager::new());
+            let drops = Arc::new(AtomicUsize::new(0));
+            let identity = IpcIdentity::new(DropObserver {
+                manager: Mutex::new(Arc::downgrade(&manager)),
+                drops: Arc::clone(&drops),
+            });
+            let context = IpcConnectionContext::new(
+                IpcConnectionInfo::new(1, None),
+                identity,
+                CancellationToken::new(),
+            );
+            let observer = DropObserver {
+                manager: Mutex::new(Arc::downgrade(&manager)),
+                drops: Arc::clone(&drops),
+            };
+            let policy = DeliveryPolicy(move |_context: &IpcConnectionContext| {
+                observer.observe();
+                Ok(())
+            });
+            let (sender, _receiver) = mpsc::channel(10);
+            manager.register_authenticated_connection(1, sender, context, Arc::new(policy));
+            manager.subscribe_patterns(1, &["*".into()]).unwrap();
+            match removal {
+                "replace" => {
+                    let (sender, _receiver) = mpsc::channel(10);
+                    manager.register_connection(1, sender, None);
+                }
+                "unregister" => manager.unregister_connection(1),
+                "revoke" => {
+                    assert!(manager.revoke_connection(1));
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(drops.load(Ordering::SeqCst), 2, "{removal}");
+            assert_eq!(manager.total_subscriptions(), 0);
+            assert_eq!(manager.stats().subscriptions_removed(), 1);
+        }
     }
 }

@@ -79,10 +79,17 @@
 
 pub use config::IpcConfig;
 pub use listener::{
-    run as start_listener, socket_exists, socket_is_alive, IpcListenerHandle, IpcListenerStats,
-    ShutdownResult,
+    run as start_listener, run_with_policy as start_listener_with_policy, socket_exists,
+    socket_is_alive, IpcListenerHandle, IpcListenerStats, ShutdownResult,
 };
 pub use registry::IpcTypeRegistry;
+
+/// Admission, authorization, and trusted connection identity.
+pub mod security;
+pub use security::{
+    IpcAccessDenied, IpcAdmission, IpcConnectionContext, IpcConnectionInfo, IpcIdentity,
+    IpcOperation, IpcSecurityPolicy, IPC_ACCESS_DENIED_CODE,
+};
 
 // Subscription manager types - used by external clients for broker forwarding
 #[allow(unused_imports)]

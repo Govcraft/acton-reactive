@@ -342,6 +342,8 @@ Routing memoizes the deduplicated recipient set for each message name, including
 
 Delivery remains best effort. A broader subscription can fill the connection's push queue faster, and excess notifications are dropped. Removing a subscription prevents subsequent forwarding for that selector, but does not retract notifications already queued.
 
+Starting with 9.4.0, listeners using an [IPC security policy](/docs/advanced/ipc) authorize both the subscription request and each actual delivery. Cached recipient matches do not cache permission decisions. Existing listener entry points remain permissive.
+
 ### Architecture
 
 ```mermaid

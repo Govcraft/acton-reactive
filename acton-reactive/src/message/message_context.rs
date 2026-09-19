@@ -26,6 +26,9 @@ use crate::message::{MessageAddress, OutboundEnvelope};
 /// - `S`: The type of the message contained in the event.
 #[derive(Clone, Debug)]
 pub struct MessageContext<S> {
+    /// Trusted identity for incoming IPC only, never ambient actor state.
+    #[cfg(feature = "ipc")]
+    pub(crate) ipc_context: Option<crate::common::ipc::IpcConnectionContext>,
     /// The actual message payload being transmitted
     pub(crate) message: S,
     /// Contains routing information about where the message originated from
@@ -35,6 +38,16 @@ pub struct MessageContext<S> {
 }
 
 impl<S> MessageContext<S> {
+    /// Trusted connection context for a message admitted over IPC.
+    ///
+    /// Returns `None` for ordinary actor messages. Outbound sends, replies, and
+    /// broadcasts do not automatically inherit this context.
+    #[cfg(feature = "ipc")]
+    #[must_use]
+    pub const fn ipc_context(&self) -> Option<&crate::common::ipc::IpcConnectionContext> {
+        self.ipc_context.as_ref()
+    }
+
     /// Returns a clone of the original message envelope
     /// This envelope contains the routing information about the message's origin
     pub fn origin_envelope(&self) -> OutboundEnvelope {
@@ -66,3 +79,6 @@ impl<S> MessageContext<S> {
 // This static assertion ensures that MessageContext can be safely sent between threads
 // when the generic type parameter is u32. This is important for concurrent processing.
 assert_impl_all!(MessageContext<u32>: Send);
+
+// IPC identity must not remove the unwind-safety guarantees of existing contexts.
+assert_impl_all!(MessageContext<u32>: std::panic::UnwindSafe, std::panic::RefUnwindSafe);

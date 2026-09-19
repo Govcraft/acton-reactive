@@ -287,7 +287,48 @@ See the `examples/ipc_client_libraries/` directory for complete implementations,
 
 `PeerCredentials` carries the kernel-reported identity of the process behind a connection, read through `SubscriptionManager::peer_credentials()` and `peer_pid()`.
 
-**Prefer `uid()` and `gid()` for access-control decisions.** PIDs are recycled, so a check that reads a PID and then acts on it can be defeated by the original process exiting between the two steps. The user and group ids are fixed for the life of the connection. Treat `pid()` as a diagnostic: it is what lets a log line name the process that connected.
+**Use `uid()` and `gid()` to identify the operating-system user and group.** Distinguishing two primitives running as the same user requires an application identity. If you use a PID for that mapping, bind it to a live child process and revoke its sessions on exit; a stale numeric PID can be reused. Credentials describe the peer when the socket connection was established, so applications must also define what an inherited or transferred socket means for identity.
+
+### Opt-in IPC policies (9.4.0+)
+
+Start a listener with `ActorRuntime::start_ipc_listener_with_policy(config, policy)` to control admission and access. The policy is an `Arc<dyn IpcSecurityPolicy>` and must be `Send`, `Sync`, and `RefUnwindSafe`. The lower-level equivalent is `start_listener_with_policy`. Existing listener entry points retain their permissive behavior.
+
+An `IpcSecurityPolicy` implements two methods:
+
+| Method | Responsibility |
+| --- | --- |
+| `admit(connection) -> IpcAdmission<'_>` | Asynchronously map server-observed connection information to an `IpcIdentity`, or reject the connection |
+| `authorize(context, operation)` | Synchronously allow or deny an operation using the established identity and the requested data |
+
+`IpcAdmission` is a boxed, sendable future returning `Result<IpcIdentity, IpcAccessDenied>`. Admission runs independently for each accepted connection, before any frames are processed. It may consult an application actor or process registry. Pending admissions count toward `limits.max_connections`. The existing `[timeouts] read_timeout_ms` setting also bounds admission; its default is 60,000 milliseconds, and zero disables the deadline. Listener shutdown cancels pending admission.
+
+The policy receives `IpcConnectionInfo`, whose accessors expose the connection ID and optional kernel `PeerCredentials`. Reject missing credentials when your policy requires them. Return `IpcIdentity::new(value)` with server-established identity data. Identity values must be `Send`, `Sync`, and `RefUnwindSafe`; keep mutable authorization state in the policy. The framework does not serialize identities or read them from a client's claimed name, source, or PID.
+
+Typed handlers access that identity through `MessageContext::ipc_context()`:
+
+```rust
+let primitive_name = context
+    .ipc_context()
+    .and_then(|caller| caller.identity::<String>());
+```
+
+The identity type is whichever type your admission policy stored. It remains available through request/reply, streaming, fire-and-forget, and fallible handlers. Local messages and messages forwarded through ordinary actor sends have no IPC context automatically. Explicitly use the trusted identity when validating or constructing application-level event sources.
+
+### Authorize every route
+
+`IpcOperation::Request` exposes the requested actor, message type, payload, and reply/stream flags. Those fields remain untrusted input. Authorization runs before actor lookup and typed message deserialization. Other variants cover discovery, exact subscriptions, pattern subscriptions, and their unsubscribe operations. Subscription batches are authorized before mutation, so denial does not partially change subscriptions. Discovery authorization is all-or-nothing.
+
+`IpcOperation::Deliver` checks each actual outgoing notification, including notifications sent directly through `SubscriptionManager::forward_to_subscribers`. This matters when application event topics live inside an outer IPC message type, or when a wildcard matches names registered later. Authorizing a subscription alone does not authorize all of its deliveries.
+
+The recipient cache stores selector matches, not permission decisions. Delivery authorization runs again for each notification, even on a cache hit. Policy callbacks run outside subscription-manager locks and must be fast and nonblocking. A decision already in progress may complete while policy state changes; use connection revocation when you need to stop that session decisively.
+
+### Revoke a session
+
+Call `listener.revoke_connection(connection_id)` or `subscription_manager.revoke_connection(connection_id)` to cancel a session, remove its subscriptions, invalidate recipient routes, and close its socket. `connection_context(connection_id)` returns a clone of an admitted connection's trusted context; retained clones expose `is_revoked()` after removal.
+
+Revocation prevents further notification enqueueing and skips revoked IPC messages still awaiting actor dispatch. It interrupts connection reads, response waits, streams, and socket writes. It cannot undo handler work already executing or bytes already written to the socket. Reconnecting creates a new session and requires admission again.
+
+Applications own the policy: mapping live child processes to primitives, declared publish/subscribe capabilities, startup registration order, administrative clients, and descendant processes. Acton supplies the connection identity, enforcement hooks, and revocation mechanism.
 
 ### Connection limits
 

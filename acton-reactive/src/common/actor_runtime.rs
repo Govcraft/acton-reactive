@@ -524,6 +524,30 @@ impl ActorRuntime {
         Ok(handle)
     }
 
+    /// Starts IPC with application-defined admission and operation authorization.
+    ///
+    /// Existing listener methods remain unrestricted. The policy is shared by
+    /// admitted connections and broker delivery.
+    /// # Errors
+    /// Returns an error if the socket cannot be created or is already in use.
+    #[cfg(feature = "ipc")]
+    pub async fn start_ipc_listener_with_policy(
+        &self,
+        config: crate::common::ipc::IpcConfig,
+        policy: std::sync::Arc<dyn crate::common::ipc::IpcSecurityPolicy>,
+    ) -> Result<crate::common::ipc::IpcListenerHandle, crate::common::ipc::IpcError> {
+        let handle = crate::common::ipc::start_listener_with_policy(
+            config,
+            self.0.ipc_type_registry.clone(),
+            self.0.ipc_actor_registry.clone(),
+            self.0.cancellation_token.clone(),
+            policy,
+        )
+        .await?;
+        *self.0.ipc_subscription_manager.write() = Some(handle.subscription_manager().clone());
+        Ok(handle)
+    }
+
     /// Creates, configures, and starts a top-level actor using a provided configuration and setup function.
     ///
     /// This method combines actor creation (using `config`), custom asynchronous setup (`setup_fn`),

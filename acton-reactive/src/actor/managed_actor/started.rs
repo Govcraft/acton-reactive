@@ -55,17 +55,15 @@ mod panic_helpers {
 
     /// Extracts a human-readable message from a panic payload.
     pub(super) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
-        payload
-            .downcast_ref::<&str>()
-            .map_or_else(
-                || {
-                    payload.downcast_ref::<String>().map_or_else(
-                        || format!("Panic with payload type: {:?}", (**payload).type_id()),
-                        Clone::clone,
-                    )
-                },
-                |s| (*s).to_string(),
-            )
+        payload.downcast_ref::<&str>().map_or_else(
+            || {
+                payload.downcast_ref::<String>().map_or_else(
+                    || format!("Panic with payload type: {:?}", (**payload).type_id()),
+                    Clone::clone,
+                )
+            },
+            |s| (*s).to_string(),
+        )
     }
 
     /// Logs a panic that occurred in a handler.
@@ -128,8 +126,7 @@ macro_rules! run_lifecycle_hook {
         if let Some(ref hook) = $self.$hook {
             #[cfg(feature = "catch-handler-panics")]
             {
-                let hook_result =
-                    std::panic::catch_unwind(AssertUnwindSafe(|| hook($self)));
+                let hook_result = std::panic::catch_unwind(AssertUnwindSafe(|| hook($self)));
                 match hook_result {
                     Ok(future) => {
                         if let Err(ref panic_payload) =
@@ -216,14 +213,16 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         reactor: &ReactorItem<Actor>,
         envelope: &mut Envelope,
     ) {
-        let message_type_id = envelope.message.as_any().type_id();
+        let message_type_id = dispatch_message_type(envelope.message.as_ref());
 
         match reactor {
             ReactorItem::Mutable(fut) => {
-                self.dispatch_mutable_infallible(fut, envelope, message_type_id).await;
+                self.dispatch_mutable_infallible(fut, envelope, message_type_id)
+                    .await;
             }
             ReactorItem::MutableFallible(fut) => {
-                self.dispatch_mutable_fallible(fut, envelope, message_type_id).await;
+                self.dispatch_mutable_fallible(fut, envelope, message_type_id)
+                    .await;
             }
             ReactorItem::MutableSync(handler) => {
                 #[cfg(feature = "catch-handler-panics")]
@@ -246,7 +245,9 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     handler(self, envelope);
                 }
             }
-            ReactorItem::ReadOnly(_) | ReactorItem::ReadOnlyFallible(_) | ReactorItem::ReadOnlySync(_) => {
+            ReactorItem::ReadOnly(_)
+            | ReactorItem::ReadOnlyFallible(_)
+            | ReactorItem::ReadOnlySync(_) => {
                 tracing::warn!("Found read-only handler in mutable_reactors map");
             }
         }
@@ -320,7 +321,6 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         }
     }
 
-
     /// Handles an error from a fallible handler, invoking the error handler if registered.
     async fn handle_fallible_error(
         &mut self,
@@ -329,7 +329,10 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         error_type_id: TypeId,
         err: Box<dyn std::error::Error + Send + Sync>,
     ) {
-        if let Some(handler) = self.error_handler_map.remove(&(message_type_id, error_type_id)) {
+        if let Some(handler) = self
+            .error_handler_map
+            .remove(&(message_type_id, error_type_id))
+        {
             #[cfg(feature = "catch-handler-panics")]
             {
                 let result =
@@ -418,15 +421,14 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         read_only_futures: &FuturesUnordered<FutureBoxReadOnlyOutcome>,
     ) {
         let actor_id = self.id().clone();
-        let message_type_id = envelope.message.as_any().type_id();
+        let message_type_id = dispatch_message_type(envelope.message.as_ref());
 
         match reactor {
             ReactorItem::ReadOnly(fut) => {
                 #[cfg(feature = "catch-handler-panics")]
                 {
-                    let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        fut(self, envelope)
-                    }));
+                    let future_result =
+                        std::panic::catch_unwind(AssertUnwindSafe(|| fut(self, envelope)));
                     match future_result {
                         Ok(future) => {
                             read_only_futures.push(Box::pin(async move {
@@ -467,9 +469,8 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
             ReactorItem::ReadOnlyFallible(fut) => {
                 #[cfg(feature = "catch-handler-panics")]
                 {
-                    let future_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        fut(self, envelope)
-                    }));
+                    let future_result =
+                        std::panic::catch_unwind(AssertUnwindSafe(|| fut(self, envelope)));
                     match future_result {
                         Ok(future) => {
                             // Clone the envelope so the error handler retains the original
@@ -591,25 +592,27 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // the cleanup guard below, which keeps a panic there from swallowing the
         // parent notification.
         #[cfg(not(feature = "catch-handler-panics"))]
-        let termination_reason = match AssertUnwindSafe(
-            self.run_message_loop(&mutable_reactors, &read_only_reactors),
-        )
-        .catch_unwind()
-        .await
-        {
-            Ok(reason) => reason,
-            Err(panic_payload) => {
-                let panic_msg = extract_panic_message(&panic_payload);
-                error!(
-                    actor_id = %self.id(),
-                    panic_message = %panic_msg,
-                    "Actor terminated due to panic in message handler"
-                );
-                TerminationReason::Panic(panic_msg)
-            }
-        };
+        let termination_reason =
+            match AssertUnwindSafe(self.run_message_loop(&mutable_reactors, &read_only_reactors))
+                .catch_unwind()
+                .await
+            {
+                Ok(reason) => reason,
+                Err(panic_payload) => {
+                    let panic_msg = extract_panic_message(&panic_payload);
+                    error!(
+                        actor_id = %self.id(),
+                        panic_message = %panic_msg,
+                        "Actor terminated due to panic in message handler"
+                    );
+                    TerminationReason::Panic(panic_msg)
+                }
+            };
 
-        trace!("Message loop finished for actor: {}. Initiating final termination.", self.id());
+        trace!(
+            "Message loop finished for actor: {}. Initiating final termination.",
+            self.id()
+        );
 
         // The cleanup runs user code (`after_stop`) against whatever state the
         // terminated actor was left in — after a caught handler panic, that
@@ -647,11 +650,8 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // Notify parent of termination if we have a parent
         // We extract everything we need before the await to avoid holding &self across await
         if let Some(parent) = &self.parent {
-            let notification = ChildTerminated::new(
-                self.id.clone(),
-                termination_reason,
-                self.restart_policy,
-            );
+            let notification =
+                ChildTerminated::new(self.id.clone(), termination_reason, self.restart_policy);
 
             trace!(
                 "Notifying parent {} of child {} termination: {:?}",
@@ -743,34 +743,41 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     {
                         (
                             Envelope::new(broker_req.message.clone(), incoming_envelope.reply_to.clone(), incoming_envelope.recipient.clone()),
-                            broker_req.message.as_any().type_id()
+                            dispatch_message_type(broker_req.message.as_ref())
                         )
                     } else {
-                        let type_id = incoming_envelope.message.as_any().type_id();
+                        let type_id = dispatch_message_type(incoming_envelope.message.as_ref());
                         (incoming_envelope, type_id)
                     };
+
+                    #[cfg(feature = "ipc")]
+                    if crate::common::ipc::security::message_context(envelope.message.as_ref())
+                        .is_some_and(crate::common::ipc::IpcConnectionContext::is_revoked)
+                    {
+                        continue;
+                    }
 
                     // Supervision bookkeeping runs ahead of handler dispatch and is
                     // never user-dispatchable. Compared by TypeId against the value
                     // already computed above, so the hot path costs integer compares
                     // rather than a downcast per message.
                     if type_id == TypeId::of::<RegisterSupervisedChild>() {
-                        if let Some(registration) = envelope.message.as_any().downcast_ref::<RegisterSupervisedChild>() {
+                        if let Some(registration) = dispatch_message_payload(envelope.message.as_ref()).as_any().downcast_ref::<RegisterSupervisedChild>() {
                             self.register_supervised_child(registration);
                         }
                         continue;
                     } else if type_id == TypeId::of::<SupervisedChildStarted>() {
-                        if let Some(started) = envelope.message.as_any().downcast_ref::<SupervisedChildStarted>() {
+                        if let Some(started) = dispatch_message_payload(envelope.message.as_ref()).as_any().downcast_ref::<SupervisedChildStarted>() {
                             self.record_started_child(started);
                         }
                         continue;
                     } else if type_id == TypeId::of::<UnregisterSupervisedChild>() {
-                        if let Some(release) = envelope.message.as_any().downcast_ref::<UnregisterSupervisedChild>() {
+                        if let Some(release) = dispatch_message_payload(envelope.message.as_ref()).as_any().downcast_ref::<UnregisterSupervisedChild>() {
                             self.unregister_supervised_child(release);
                         }
                         continue;
                     } else if type_id == TypeId::of::<RestartDue>() {
-                        if let Some(due) = envelope.message.as_any().downcast_ref::<RestartDue>() {
+                        if let Some(due) = dispatch_message_payload(envelope.message.as_ref()).as_any().downcast_ref::<RestartDue>() {
                             self.record_restart_due(due);
                         }
                         continue;
@@ -790,7 +797,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     // its supervisor sees the decision already recorded rather
                     // than a half-updated registry.
                     if type_id == TypeId::of::<ChildTerminated>() {
-                        if let Some(notice) = envelope.message.as_any().downcast_ref::<ChildTerminated>() {
+                        if let Some(notice) = dispatch_message_payload(envelope.message.as_ref()).as_any().downcast_ref::<ChildTerminated>() {
                             self.record_child_terminated(notice);
                         }
                     }
@@ -799,6 +806,12 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                     if let Some(reactor) = mutable_reactors.get(&type_id) {
                         self.flush_read_only_handlers(&mut read_only_futures).await;
                         last_flush_time = Instant::now();
+                        #[cfg(feature = "ipc")]
+                        if crate::common::ipc::security::message_context(envelope.message.as_ref())
+                            .is_some_and(crate::common::ipc::IpcConnectionContext::is_revoked)
+                        {
+                            continue;
+                        }
                         self.dispatch_mutable_handler(reactor, &mut envelope).await;
                     } else if let Some(reactor) = read_only_reactors.get(&type_id) {
                         self.enqueue_read_only_handler(reactor, &mut envelope, &read_only_futures);
@@ -806,7 +819,7 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
                             self.flush_read_only_handlers(&mut read_only_futures).await;
                             last_flush_time = Instant::now();
                         }
-                    } else if let Some(stop_reason) = graceful_stop_reason(type_id, envelope.message.as_any()) {
+                    } else if let Some(stop_reason) = graceful_stop_reason(type_id, dispatch_message_payload(envelope.message.as_ref()).as_any()) {
                         // Both stop signals shut down identically; they differ
                         // only in the reason recorded. `CascadeTerminate` means
                         // the supervisor above is going away, which must never
@@ -878,7 +891,10 @@ impl<Actor: Default + Send + Debug + 'static> ManagedActor<Started, Actor> {
         // are no longer sent to its (now closing) inbox. Skipped when no live broker
         // is reachable (e.g. the broker actor itself, or the broker already stopped).
         if !self.broker.outbox.is_closed() {
-            trace!("Unsubscribing actor {} from all broker subscriptions.", self.id());
+            trace!(
+                "Unsubscribing actor {} from all broker subscriptions.",
+                self.id()
+            );
             let unsubscription = RemoveAllSubscriptions {
                 subscriber_id: self.id.clone(),
             };
@@ -1110,6 +1126,20 @@ async fn terminate_children(children: Vec<crate::common::ActorHandle>, actor_id:
     }
 
     trace!("All children stopped for actor: {}.", actor_id);
+}
+
+/// Returns the user's message type while retaining private IPC context in the envelope.
+fn dispatch_message_type(message: &dyn crate::traits::ActonMessage) -> TypeId {
+    dispatch_message_payload(message).as_any().type_id()
+}
+
+/// Borrows the user payload without discarding trusted routing context.
+fn dispatch_message_payload(
+    message: &dyn crate::traits::ActonMessage,
+) -> &dyn crate::traits::ActonMessage {
+    #[cfg(feature = "ipc")]
+    let message = crate::common::ipc::security::message_payload(message);
+    message
 }
 
 #[cfg(test)]
