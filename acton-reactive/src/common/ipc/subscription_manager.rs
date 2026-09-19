@@ -1648,7 +1648,8 @@ mod tests {
 
         impl Drop for DropObserver {
             fn drop(&mut self) {
-                if let Some(manager) = self.manager.lock().unwrap().upgrade() {
+                let manager = self.manager.lock().unwrap().upgrade();
+                if let Some(manager) = manager {
                     manager.unsubscribe(1, &[]);
                     self.drops.fetch_add(1, Ordering::SeqCst);
                 }
