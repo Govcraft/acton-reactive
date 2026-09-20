@@ -8,7 +8,7 @@ struct SubscriptionMetrics<'a> {
     stats: &'a SubscriptionStats,
 }
 
-fn subscription_stats(manager: &SubscriptionManager) -> &SubscriptionStats {
+const fn subscription_stats(manager: &SubscriptionManager) -> &SubscriptionStats {
     manager.stats()
 }
 
