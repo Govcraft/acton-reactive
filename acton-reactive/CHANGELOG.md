@@ -5,6 +5,14 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.4.1] - 2026-09-19
+
+### Fixed
+
+- Re-export `SubscriptionStats` from `acton_reactive::ipc`, so applications can
+  name the type returned by `SubscriptionManager::stats()` in function signatures
+  and borrowed struct fields. Fixes #22. No runtime or wire-protocol changes.
+
 ## [9.4.0] - 2026-09-19
 
 Adds opt-in IPC admission, trusted caller context, authorization, and revocation.

@@ -99,8 +99,8 @@ pub mod ipc {
         IpcSubscriptionResponse, IpcTimeoutsConfig, IpcTypeRegistry, IpcUnsubscribeRequest,
         PatternSubscriptionError, PeerCredentials, ProtocolCapabilities, ProtocolVersionInfo,
         RateLimitConfig, ShutdownConfig, ShutdownResult, SocketConfig, SubscriptionManager,
-        SubscriptionPattern, CONNECTION_LIMIT_REACHED_CODE, CONNECTION_REJECTED_CORRELATION_ID,
-        IPC_ACCESS_DENIED_CODE,
+        SubscriptionPattern, SubscriptionStats, CONNECTION_LIMIT_REACHED_CODE,
+        CONNECTION_REJECTED_CORRELATION_ID, IPC_ACCESS_DENIED_CODE,
     };
     pub use crate::common::IpcNameInUse;
 
