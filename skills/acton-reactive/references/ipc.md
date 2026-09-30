@@ -1,7 +1,7 @@
 # Cross-process actors (the `ipc` feature)
 
 ```toml
-acton-reactive = { version = "9", features = ["ipc"] }
+acton-reactive = { version = "10", features = ["ipc"] }
 # or "ipc-messagepack" for compact binary framing (~30-50% smaller)
 ```
 

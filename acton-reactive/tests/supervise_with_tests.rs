@@ -230,8 +230,7 @@ async fn supervising_through_a_stopped_parent_resolves_with_an_error() -> anyhow
     assert!(
         matches!(
             error,
-            SupervisionError::SupervisorStopped { .. }
-                | SupervisionError::RegistrationLost { .. }
+            SupervisionError::SupervisorStopped { .. } | SupervisionError::RegistrationLost { .. }
         ),
         "unexpected error: {error}"
     );
@@ -350,8 +349,8 @@ async fn a_handler_can_put_a_child_under_its_own_actors_supervision() -> anyhow:
 /// Nothing is built for the rejected call, which is what registering before
 /// spawning buys: the collision is known the moment the name is offered.
 #[acton_test]
-async fn a_duplicate_is_rejected_inside_the_handler_before_anything_is_built(
-) -> anyhow::Result<()> {
+async fn a_duplicate_is_rejected_inside_the_handler_before_anything_is_built() -> anyhow::Result<()>
+{
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let applications = Arc::new(AtomicUsize::new(0));
     let (registered, mut outcomes) = registration_channel();
@@ -363,9 +362,8 @@ async fn a_duplicate_is_rejected_inside_the_handler_before_anything_is_built(
         // Twice, in one handler, with one name. Deterministic child identity
         // makes the second a real collision.
         for _ in 0..2 {
-            let config =
-                ActorConfig::for_supervised_child(name, actor.handle().clone(), None)
-                    .expect("a name plus a live parent is a valid child configuration");
+            let config = ActorConfig::for_supervised_child(name, actor.handle().clone(), None)
+                .expect("a name plus a live parent is a valid child configuration");
             let _ = registered.send(actor.supervise_deferred(config, blueprint.clone()));
         }
         Reply::ready()
@@ -534,8 +532,7 @@ async fn a_supervisor_keeps_taking_messages_while_a_child_starts() -> anyhow::Re
 /// to give it to, the child would run forever with nothing able to reach it —
 /// worse than the stall this whole step removes.
 #[acton_test]
-async fn a_supervisor_that_stops_mid_start_stops_the_child_it_started(
-) -> anyhow::Result<()> {
+async fn a_supervisor_that_stops_mid_start_stops_the_child_it_started() -> anyhow::Result<()> {
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let stopped = Arc::new(AtomicBool::new(false));
     let (registered, mut outcomes) = registration_channel();
@@ -594,8 +591,8 @@ async fn a_supervisor_that_stops_mid_start_stops_the_child_it_started(
 /// supervisor is gone; the terminal status with a reason on it exists only
 /// because the supervisor settled the record on its way down.
 #[acton_test]
-async fn a_start_in_flight_when_the_supervisor_stops_is_settled_not_abandoned(
-) -> anyhow::Result<()> {
+async fn a_start_in_flight_when_the_supervisor_stops_is_settled_not_abandoned() -> anyhow::Result<()>
+{
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
     let stopped = Arc::new(AtomicBool::new(false));
     let (registered, mut outcomes) = registration_channel();

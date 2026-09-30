@@ -70,9 +70,7 @@ async fn test_creating_actors() -> anyhow::Result<()> {
             actor.model.count += 1;
             Reply::ready()
         })
-        .act_on::<GetCount>(|_actor, _ctx| {
-            Reply::ready()
-        });
+        .act_on::<GetCount>(|_actor, _ctx| Reply::ready());
 
     let handle = counter.start().await;
 

@@ -166,7 +166,7 @@ impl Reply {
     #[inline]
     pub fn try_pending<F, T, E>(future: F) -> Pin<Box<F>>
     where
-        F: Future<Output = Result<T, E>> + Send + Sync + 'static,
+        F: Future<Output = Result<T, E>> + Send + 'static,
         T: ActonMessageReply + 'static,
         E: Error + Send + Sync + 'static,
     {

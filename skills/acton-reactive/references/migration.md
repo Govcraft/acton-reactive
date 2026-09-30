@@ -1,3 +1,19 @@
+# Migrating to 10.0
+
+From 9.x:
+
+- Handler futures need `Send + 'static`, not `Sync`. Remove `Sync` from explicit
+  boxed handler return signatures to match the changed callback type. Inline
+  `Reply::pending` handlers normally need no changes. Closure and message bounds
+  are unchanged.
+- `IpcTimeoutsConfig` gains `admission: u64`. Update full literals and patterns.
+  TOML uses `admission_timeout_ms`, default 60000; zero disables admission only.
+  `read_timeout_ms` now controls established idle connections only. Explicitly
+  set admission to preserve a customized 9.x read-timeout admission deadline.
+- Runtime clones share their root registry. `shutdown_all` reaches actors
+  registered through any clone; use a separate runtime for an independent
+  lifecycle.
+
 # Migrating from 8.x to 9.0
 
 ## Start here: the changes no compiler will catch

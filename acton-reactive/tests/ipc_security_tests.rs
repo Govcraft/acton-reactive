@@ -418,7 +418,8 @@ async fn admission_timeout_releases_connection_capacity() {
     let socket = dir.path().join("ipc.sock");
     let mut config = IpcConfig::default();
     config.socket.path = Some(socket.clone());
-    config.timeouts.read = 30;
+    config.timeouts.admission = 30;
+    config.timeouts.read = 0;
     config.limits.max_connections = 1;
     let policy = Arc::new(SlowAdmission {
         entered: Arc::new(Notify::new()),
@@ -517,4 +518,110 @@ async fn policy_panic_closes_session_and_cleans_subscriptions_and_statistics() {
     assert_eq!(handle.stats.connections_active(), 0);
     assert_eq!(handle.stats.in_flight_requests(), 0);
     handle.stop();
+}
+
+#[tokio::test]
+async fn unlimited_admission_does_not_disable_idle_read_timeout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("ipc.sock");
+    let mut config = IpcConfig::default();
+    config.socket.path = Some(socket.clone());
+    config.timeouts.admission = 0;
+    config.timeouts.read = 50;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let handle = start_listener_with_policy(
+        config,
+        Arc::new(IpcTypeRegistry::new()),
+        Arc::new(DashMap::new()),
+        CancellationToken::new(),
+        Arc::new(SlowAdmission {
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+    )
+    .await
+    .expect("listener");
+    let mut stream = UnixStream::connect(&socket).await.expect("connect");
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .expect("admission entered");
+    // Admission must remain pending beyond the configured idle-read deadline.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    release.notify_one();
+    let discovered = send(
+        &mut stream,
+        Format::Json,
+        MSG_TYPE_DISCOVER,
+        &json!({"correlation_id":"admitted","include_actors":true,"include_message_types":true}),
+    )
+    .await;
+    assert_eq!(discovered["success"], true);
+    assert!(tokio::time::timeout(
+        Duration::from_secs(2),
+        read_frame(&mut stream, MAX_FRAME_SIZE)
+    )
+    .await
+    .expect("idle deadline")
+    .is_err());
+    handle.stop();
+}
+
+#[tokio::test]
+async fn admitted_publish_only_connection_survives_admission_deadline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("ipc.sock");
+    let mut runtime = ActonApp::launch_async().await;
+    runtime
+        .ipc_registry()
+        .register::<IdentityProbe>("IdentityProbe");
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let mut actor = runtime.new_actor::<ProbeState>();
+    actor.act_on::<IdentityProbe>(move |_, context| {
+        seen_tx
+            .send(context.message().identity.clone())
+            .expect("observer");
+        Reply::ready()
+    });
+    runtime
+        .ipc_expose("probe", actor.start().await)
+        .expect("expose");
+    let mut config = IpcConfig::default();
+    config.socket.path = Some(socket.clone());
+    config.timeouts.admission = 50;
+    config.timeouts.read = 0;
+    let listener = runtime
+        .start_ipc_listener_with_policy(
+            config,
+            Arc::new(Policy {
+                reject_admission: false,
+                deny_operations: false,
+            }),
+        )
+        .await
+        .expect("listener");
+    let mut stream = UnixStream::connect(&socket).await.expect("connect");
+    for identity in ["before", "after"] {
+        let envelope = IpcEnvelope::new("probe", "IdentityProbe", json!({"identity":identity}));
+        let received = send(
+            &mut stream,
+            Format::Json,
+            MSG_TYPE_REQUEST,
+            &serde_json::to_value(envelope).expect("envelope"),
+        )
+        .await;
+        assert!(received["error"].is_null());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), seen_rx.recv())
+                .await
+                .expect("dispatch deadline")
+                .expect("message"),
+            identity
+        );
+        if identity == "before" {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+    listener.stop();
+    runtime.shutdown_all().await.expect("shutdown");
 }

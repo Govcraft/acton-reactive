@@ -180,8 +180,12 @@ mod tests {
 
     #[test]
     fn supervision_escalated_carries_the_final_stats_and_reason() {
-        let event =
-            SupervisionEscalated::new(supervisor(), child(), stats(), TerminationReason::InboxClosed);
+        let event = SupervisionEscalated::new(
+            supervisor(),
+            child(),
+            stats(),
+            TerminationReason::InboxClosed,
+        );
 
         assert_eq!(event.stats.restarts_in_window, 5);
         assert_eq!(event.stats.max_restarts, 5);

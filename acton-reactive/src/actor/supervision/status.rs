@@ -334,22 +334,20 @@ impl SupervisedChild {
     }
 
     /// The handle from a status that reports a running child, or why not.
-    fn running_handle(
-        &self,
-        status: &SupervisionStatus,
-    ) -> Result<ActorHandle, SupervisionError> {
+    fn running_handle(&self, status: &SupervisionStatus) -> Result<ActorHandle, SupervisionError> {
         if status.state() == SupervisionState::Running {
             if let Some(handle) = status.handle() {
                 return Ok(handle.clone());
             }
         }
 
-        Err(status.failure().cloned().unwrap_or_else(|| {
-            SupervisionError::ChildNotRunning {
+        Err(status
+            .failure()
+            .cloned()
+            .unwrap_or_else(|| SupervisionError::ChildNotRunning {
                 child: self.ern.clone(),
                 state: status.state(),
-            }
-        }))
+            }))
     }
 }
 
@@ -406,7 +404,10 @@ mod tests {
     fn every_state_displays_in_snake_case() {
         assert_eq!(SupervisionState::Starting.to_string(), "starting");
         assert_eq!(SupervisionState::Running.to_string(), "running");
-        assert_eq!(SupervisionState::RestartPending.to_string(), "restart_pending");
+        assert_eq!(
+            SupervisionState::RestartPending.to_string(),
+            "restart_pending"
+        );
         assert_eq!(SupervisionState::Restarting.to_string(), "restarting");
         assert_eq!(SupervisionState::Down.to_string(), "down");
         assert_eq!(SupervisionState::Escalated.to_string(), "escalated");
@@ -432,9 +433,7 @@ mod tests {
 
     // ---- SupervisedChild --------------------------------------------------
 
-    fn supervised(
-        child: &Ern,
-    ) -> (SupervisedChild, watch::Sender<SupervisionStatus>) {
+    fn supervised(child: &Ern) -> (SupervisedChild, watch::Sender<SupervisionStatus>) {
         let supervisor = Ern::with_root("pool").expect("'pool' is a valid Ern root");
         let (sender, receiver) = watch::channel(SupervisionStatus::new(
             child.clone(),
@@ -466,7 +465,10 @@ mod tests {
         let (reference, _sender) = supervised(&child);
 
         assert_eq!(reference.ern(), &child);
-        assert_eq!(reference.supervisor().to_string(), reference.supervisor().to_string());
+        assert_eq!(
+            reference.supervisor().to_string(),
+            reference.supervisor().to_string()
+        );
         assert!(reference.current().is_none(), "not running yet");
         assert_eq!(reference.status().state(), SupervisionState::Starting);
     }
@@ -571,13 +573,11 @@ mod tests {
             .with_failure(reason.clone()),
         );
 
-        let error = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            reference.wait_running(),
-        )
-        .await
-        .expect("a terminal state must end the wait")
-        .expect_err("the child never came up");
+        let error =
+            tokio::time::timeout(std::time::Duration::from_secs(5), reference.wait_running())
+                .await
+                .expect("a terminal state must end the wait")
+                .expect_err("the child never came up");
 
         assert_eq!(error, reason);
     }
@@ -634,13 +634,11 @@ mod tests {
             })
         };
 
-        let handle = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            reference.wait_running(),
-        )
-        .await
-        .expect("the wait must not hang")
-        .expect("the child came back");
+        let handle =
+            tokio::time::timeout(std::time::Duration::from_secs(5), reference.wait_running())
+                .await
+                .expect("the wait must not hang")
+                .expect("the child came back");
 
         assert_eq!(handle.id(), child);
         publisher.await.expect("publisher task completes");
@@ -654,18 +652,13 @@ mod tests {
         let (mut reference, sender) = supervised(&child);
         drop(sender);
 
-        let error = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            reference.wait_running(),
-        )
-        .await
-        .expect("the wait must not hang once the channel closes")
-        .expect_err("the supervisor is gone");
+        let error =
+            tokio::time::timeout(std::time::Duration::from_secs(5), reference.wait_running())
+                .await
+                .expect("the wait must not hang once the channel closes")
+                .expect_err("the supervisor is gone");
 
-        assert!(matches!(
-            error,
-            SupervisionError::SupervisorStopped { .. }
-        ));
+        assert!(matches!(error, SupervisionError::SupervisorStopped { .. }));
     }
 
     #[test]

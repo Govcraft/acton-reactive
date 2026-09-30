@@ -295,8 +295,16 @@ async fn test_multiple_actors() -> anyhow::Result<()> {
 
     // Send to specific workers
     for (i, handle) in &handles {
-        handle.send(Task { id: u32::try_from(*i).unwrap() }).await;
-        handle.send(Task { id: u32::try_from(*i).unwrap() + 10 }).await;
+        handle
+            .send(Task {
+                id: u32::try_from(*i).unwrap(),
+            })
+            .await;
+        handle
+            .send(Task {
+                id: u32::try_from(*i).unwrap() + 10,
+            })
+            .await;
     }
 
     runtime.shutdown_all().await?;
@@ -371,7 +379,10 @@ async fn test_focused_actor_state() -> anyhow::Result<()> {
 
     processor
         .mutate_on::<AddOrder>(|actor, ctx| {
-            actor.model.pending_orders.push(ctx.message().order_id.clone());
+            actor
+                .model
+                .pending_orders
+                .push(ctx.message().order_id.clone());
             Reply::ready()
         })
         .mutate_on::<StartProcessing>(|actor, _ctx| {

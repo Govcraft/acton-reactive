@@ -129,7 +129,9 @@ impl RateLimiter {
         self.last_update = now;
 
         // Add tokens based on elapsed time
-        self.tokens = elapsed.mul_add(self.refill_rate, self.tokens).min(self.capacity);
+        self.tokens = elapsed
+            .mul_add(self.refill_rate, self.tokens)
+            .min(self.capacity);
     }
 }
 
@@ -166,7 +168,10 @@ mod tests {
 
         // Should allow unlimited requests when disabled
         for _ in 0..100 {
-            assert!(limiter.try_acquire(), "Should allow all requests when disabled");
+            assert!(
+                limiter.try_acquire(),
+                "Should allow all requests when disabled"
+            );
         }
     }
 

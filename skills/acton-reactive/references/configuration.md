@@ -143,6 +143,28 @@ Per-application wins. The shared tier is for things that are genuinely
 machine-wide, like a socket directory convention. Put the socket path outside
 `/tmp` for anything that should outlive a login session.
 
+### Independent IPC deadlines in 10.x
+
+```toml
+# ipc.toml, default values in milliseconds
+[timeouts]
+admission_timeout_ms = 60000
+request_timeout_ms = 30000
+read_timeout_ms = 60000
+write_timeout_ms = 30000
+subscription_read_timeout_ms = 0
+```
+
+Policy admission uses `admission_timeout_ms`. After admission, connections
+without subscriptions use `read_timeout_ms`, and subscribers use
+`subscription_read_timeout_ms`. Zero independently disables any of those three
+deadlines. For a publish-only source that may remain idle indefinitely, set
+`read_timeout_ms = 0` while keeping a finite admission timeout. This does not
+add reconnection or delivery acknowledgement to a client.
+
+In 9.x the read timeout also bounded admission. To preserve a customized
+admission deadline when upgrading, set the new admission field explicitly.
+
 ## What to tell users of your program
 
 If your program ships with tuned defaults, say so in its README: which file it

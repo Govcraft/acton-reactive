@@ -66,7 +66,7 @@ For a production workload with well-tested handlers, you can turn it off:
 
 ```toml
 [dependencies]
-acton-reactive = { version = "9", default-features = false }
+acton-reactive = { version = "10", default-features = false }
 ```
 
 {% callout type="warning" title="Know what you're trading" %}

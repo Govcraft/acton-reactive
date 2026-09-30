@@ -126,8 +126,7 @@ fn actor_creation_batch(bencher: Bencher<'_, '_>, count: usize) {
 
             let mut handles = Vec::with_capacity(count);
             for i in 0..count {
-                let actor =
-                    runtime.new_actor_with_name::<CounterActor>(format!("bench_actor_{i}"));
+                let actor = runtime.new_actor_with_name::<CounterActor>(format!("bench_actor_{i}"));
                 handles.push(actor.start().await);
             }
 
@@ -266,8 +265,7 @@ fn send_to_handler_latency(bencher: Bencher<'_, '_>) {
         let notify = Arc::new(tokio::sync::Notify::new());
         let notify_clone = notify.clone();
 
-        let mut actor =
-            runtime.new_actor_with_name::<CounterActor>("latency_actor".to_string());
+        let mut actor = runtime.new_actor_with_name::<CounterActor>("latency_actor".to_string());
 
         actor.mutate_on_sync::<Increment>(move |_actor, _event| {
             notify_clone.notify_one();
@@ -335,8 +333,7 @@ fn ping_pong_single(bencher: Bencher<'_, '_>) {
             let requester_handle = requester.start().await;
 
             // Send ping
-            let envelope =
-                requester_handle.create_envelope(Some(responder_handle.reply_address()));
+            let envelope = requester_handle.create_envelope(Some(responder_handle.reply_address()));
             envelope.send(Ping).await;
 
             // Wait for pong
@@ -396,8 +393,7 @@ fn ping_pong_sustained(bencher: Bencher<'_, '_>, exchange_count: usize) {
             let requester_handle = requester.start().await;
 
             // Send pings and wait for pongs
-            let envelope =
-                requester_handle.create_envelope(Some(responder_handle.reply_address()));
+            let envelope = requester_handle.create_envelope(Some(responder_handle.reply_address()));
 
             for _ in 0..exchange_count {
                 envelope.send(Ping).await;

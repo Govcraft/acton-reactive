@@ -295,9 +295,14 @@ fn print_items(stdout: &mut Stdout, state: &DisplayState) -> anyhow::Result<()> 
                 let total_price = item.total_price.unwrap();
                 format!(
                     "{}({}) @ {} {} {:>5}",
-                    RGB(COLOR_LIGHT_BLUE.0, COLOR_LIGHT_BLUE.1, COLOR_LIGHT_BLUE.2).paint(&item.name),
-                    RGB(COLOR_MEDIUM_BLUE.0, COLOR_MEDIUM_BLUE.1, COLOR_MEDIUM_BLUE.2)
-                        .paint(item.quantity.to_string()),
+                    RGB(COLOR_LIGHT_BLUE.0, COLOR_LIGHT_BLUE.1, COLOR_LIGHT_BLUE.2)
+                        .paint(&item.name),
+                    RGB(
+                        COLOR_MEDIUM_BLUE.0,
+                        COLOR_MEDIUM_BLUE.1,
+                        COLOR_MEDIUM_BLUE.2
+                    )
+                    .paint(item.quantity.to_string()),
                     format_money(unit_price),
                     RGB(COLOR_DARK_GREY.0, COLOR_DARK_GREY.1, COLOR_DARK_GREY.2).paint("│"),
                     RGB(COLOR_GREEN.0, COLOR_GREEN.1, COLOR_GREEN.2)
@@ -405,12 +410,7 @@ fn print_totals(stdout: &mut Stdout, state: &DisplayState) -> anyhow::Result<()>
     let subtotal_plain = format!("{:<11}{}", SUBTOTAL_LABEL, format_money(subtotal));
     let tax_plain = format!("{:<11}{}", TAX_LABEL, format_money(tax));
     let total_due_plain = if all_loaded {
-        format!(
-            "{:<11}{} {}",
-            DUE_LABEL,
-            format_money(total_due),
-            CHECKMARK
-        )
+        format!("{:<11}{} {}", DUE_LABEL, format_money(total_due), CHECKMARK)
     } else {
         format!("{:<11}{}", DUE_LABEL, format_money(total_due))
     };
@@ -519,8 +519,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _corr_id = send_subscribe(&mut writer, message_types).await?;
 
     // Wait for subscription response
-    let (msg_type, _format, payload) =
-        timeout(Duration::from_secs(5), read_frame(&mut reader, MAX_FRAME_SIZE)).await??;
+    let (msg_type, _format, payload) = timeout(
+        Duration::from_secs(5),
+        read_frame(&mut reader, MAX_FRAME_SIZE),
+    )
+    .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -552,7 +555,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main loop: receive and process messages
     loop {
-        match timeout(Duration::from_mins(1), read_frame(&mut reader, MAX_FRAME_SIZE)).await {
+        match timeout(
+            Duration::from_mins(1),
+            read_frame(&mut reader, MAX_FRAME_SIZE),
+        )
+        .await
+        {
             Ok(Ok((msg_type, _format, payload))) => {
                 if msg_type == MSG_TYPE_PUSH {
                     let notification: IpcPushNotification = serde_json::from_slice(&payload)?;

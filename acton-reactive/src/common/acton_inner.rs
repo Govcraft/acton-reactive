@@ -14,6 +14,8 @@
  * limitations under that License.
  */
 
+use std::sync::Arc;
+
 use acton_ern::Ern;
 use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
@@ -24,8 +26,6 @@ use crate::common::{ActonConfig, ActorHandle, BrokerRef};
 use crate::common::ipc::{IpcTypeRegistry, SubscriptionManager};
 #[cfg(feature = "ipc")]
 use parking_lot::RwLock;
-#[cfg(feature = "ipc")]
-use std::sync::Arc;
 
 /// Internal state structure for the Acton runtime.
 ///
@@ -37,7 +37,8 @@ pub struct ActonInner {
     pub(crate) broker: BrokerRef,
 
     /// Registry of top-level (root) actors, keyed by their ERN.
-    pub(crate) roots: DashMap<Ern, ActorHandle>,
+    /// Shared by every runtime clone, including runtimes held by actors.
+    pub(crate) roots: Arc<DashMap<Ern, ActorHandle>>,
 
     /// Token for coordinating graceful shutdown across all actors.
     pub(crate) cancellation_token: CancellationToken,
@@ -75,7 +76,7 @@ impl Default for ActonInner {
     fn default() -> Self {
         Self {
             broker: ActorHandle::default(),
-            roots: DashMap::default(),
+            roots: Arc::new(DashMap::default()),
             cancellation_token: CancellationToken::new(),
             config: ActonConfig::default(),
             #[cfg(feature = "ipc")]

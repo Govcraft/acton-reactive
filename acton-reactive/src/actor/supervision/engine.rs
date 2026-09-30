@@ -229,10 +229,11 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// limiter for all its children would let one noisy child eat a sibling's
     /// allowance and escalate a child that had never failed.
     fn resolve_limiter(&self, child: Option<&RestartLimiterConfig>) -> RestartLimiter {
-        child.or(self.restart_limiter_config.as_ref()).map_or_else(
-            RestartLimiter::default,
-            |config| RestartLimiter::new(config.clone()),
-        )
+        child
+            .or(self.restart_limiter_config.as_ref())
+            .map_or_else(RestartLimiter::default, |config| {
+                RestartLimiter::new(config.clone())
+            })
     }
 
     /// Records a child this actor should look after.
@@ -367,7 +368,10 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// registry either until its start task's report is processed, which may
     /// never happen. Reading fewer views drops one of those children on the
     /// floor.
-    pub(crate) fn shutdown_child_handles(&self, late_arrivals: Vec<ActorHandle>) -> Vec<ActorHandle> {
+    pub(crate) fn shutdown_child_handles(
+        &self,
+        late_arrivals: Vec<ActorHandle>,
+    ) -> Vec<ActorHandle> {
         let mut seen = std::collections::HashSet::new();
         let mut handles = Vec::new();
 
@@ -431,13 +435,14 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
         C: Default + Send + Debug + 'static,
     {
         let blueprint: Arc<ChildBlueprint<C>> = Arc::new(configure);
-        let spawner: Arc<dyn ChildSpawner> =
-            Arc::new(TypedSpawner::new(config.clone(), blueprint));
+        let spawner: Arc<dyn ChildSpawner> = Arc::new(TypedSpawner::new(config.clone(), blueprint));
 
         let child_id = config.id();
         let restart_policy = spawner.restart_policy();
         let limiter = self.resolve_limiter(config.restart_limiter_config());
-        let handle = spawner.spawn(self.runtime.clone(), self.handle.clone()).await?;
+        let handle = spawner
+            .spawn(self.runtime.clone(), self.handle.clone())
+            .await?;
         let (status, receiver) = status_channel(&child_id, Some(handle.clone()));
 
         let slot = NewSlot {
@@ -790,7 +795,11 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     ///
     /// Delivery goes onto its own task because sending is `async` and this runs
     /// on the message loop. Nothing waits on the answer.
-    fn notify_parent_of_escalation(&self, child: &acton_ern::Ern, stats: crate::actor::RestartStats) {
+    fn notify_parent_of_escalation(
+        &self,
+        child: &acton_ern::Ern,
+        stats: crate::actor::RestartStats,
+    ) {
         let Some(parent) = self.parent.clone() else {
             trace!(
                 "Actor {} has no parent to tell that it gave up on child {}",
@@ -1286,7 +1295,10 @@ impl<Model: Default + Send + Debug + 'static> ManagedActor<Started, Model> {
     /// # Errors
     ///
     /// [`SupervisionError::UnknownChild`] if this actor does not supervise it.
-    pub(crate) async fn unsupervise(&mut self, child: &acton_ern::Ern) -> Result<(), SupervisionError> {
+    pub(crate) async fn unsupervise(
+        &mut self,
+        child: &acton_ern::Ern,
+    ) -> Result<(), SupervisionError> {
         let retired = self.supervision.retire(child);
         match retired {
             Ok(Some(handle)) => {
@@ -1342,9 +1354,7 @@ mod tests {
             _parent: ActorHandle,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>>
-                    + Send
-                    + '_,
+                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>> + Send + '_,
             >,
         > {
             self.attempts.fetch_add(1, Ordering::SeqCst);
@@ -1382,9 +1392,7 @@ mod tests {
             _parent: ActorHandle,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>>
-                    + Send
-                    + '_,
+                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>> + Send + '_,
             >,
         > {
             Box::pin(std::future::pending())
@@ -2071,10 +2079,9 @@ mod tests {
         // A child on its way back has to reach `AwaitingBackoff`, because that
         // is the only state `queue_restart` will accept a restart from — land
         // it anywhere else and the group's own restart is refused as stale.
-        for (then_restart, expected) in [
-            (true, SlotState::AwaitingBackoff),
-            (false, SlotState::Down),
-        ] {
+        for (then_restart, expected) in
+            [(true, SlotState::AwaitingBackoff), (false, SlotState::Down)]
+        {
             let mut runtime = ActonApp::launch_async().await;
             let mut actor = supervisor(&mut runtime);
             let (child, _receiver) = adopt_legacy_child(&mut actor, "sibling");

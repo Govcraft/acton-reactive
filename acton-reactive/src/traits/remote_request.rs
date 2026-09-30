@@ -19,8 +19,8 @@
 //!
 //! [`RemoteActorRef::ask`]: crate::common::ipc::RemoteActorRef::ask
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::traits::Request;
 

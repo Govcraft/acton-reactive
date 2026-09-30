@@ -177,13 +177,20 @@ pub struct IpcLimitsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IpcTimeoutsConfig {
+    /// Security policy admission timeout in milliseconds.
+    ///
+    /// Defaults to 60,000. Zero disables only the admission timeout.
+    /// Established connections use `read` or `subscription_read` independently.
+    #[serde(rename = "admission_timeout_ms")]
+    pub admission: u64,
+
     /// Request timeout in milliseconds.
     #[serde(rename = "request_timeout_ms")]
     pub request: u64,
 
     /// Connection read timeout in milliseconds.
     ///
-    /// This also bounds security policy admission; zero disables both timeouts.
+    /// Zero disables only this idle timeout; policy admission uses `admission`.
     /// This applies to connections that do not have active subscriptions.
     /// Connections with subscriptions use `subscription_read` instead.
     #[serde(rename = "read_timeout_ms")]
@@ -262,6 +269,7 @@ impl Default for IpcLimitsConfig {
 impl Default for IpcTimeoutsConfig {
     fn default() -> Self {
         Self {
+            admission: 60_000,
             request: 30_000,
             read: 60_000,
             write: 30_000,
@@ -449,6 +457,19 @@ impl IpcConfig {
     #[must_use]
     pub const fn request_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeouts.request)
+    }
+
+    /// Get the security policy admission timeout.
+    ///
+    /// Returns `None` when admission timeouts are disabled with zero.
+    /// This deadline does not apply after the connection is admitted.
+    #[must_use]
+    pub const fn admission_timeout(&self) -> Option<std::time::Duration> {
+        if self.timeouts.admission == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_millis(self.timeouts.admission))
+        }
     }
 
     /// Get the read timeout as an `Option<Duration>`.

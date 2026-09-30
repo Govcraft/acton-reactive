@@ -72,3 +72,50 @@ fn nested_fields_are_replaceable_with_named_types() {
     assert_eq!(config.rate_limit.requests_per_second, 250);
     assert_eq!(config.shutdown.drain_timeout, 750);
 }
+
+/// Old configuration files receive the independent default admission deadline.
+#[test]
+fn admission_timeout_defaults_and_serialization_are_independent() {
+    let config: IpcConfig =
+        toml::from_str("[timeouts]\nread_timeout_ms = 0").expect("legacy config");
+    assert_eq!(
+        config.admission_timeout(),
+        Some(std::time::Duration::from_secs(60))
+    );
+    assert_eq!(config.read_timeout(), None);
+    assert_eq!(config.subscription_read_timeout(), None);
+    let defaults = IpcConfig::default();
+    assert_eq!(
+        defaults.read_timeout(),
+        Some(std::time::Duration::from_secs(60))
+    );
+    assert_eq!(
+        defaults.admission_timeout(),
+        Some(std::time::Duration::from_secs(60))
+    );
+    let serialized = toml::to_string(&config).expect("serialize");
+    assert!(serialized.contains("admission_timeout_ms = 60000"));
+    let restored: IpcConfig = toml::from_str(&serialized).expect("roundtrip");
+    assert_eq!(restored.admission_timeout(), config.admission_timeout());
+    assert_eq!(restored.read_timeout(), None);
+}
+
+#[test]
+fn disabling_admission_preserves_idle_and_subscription_timeouts() {
+    let config: IpcConfig = toml::from_str(
+        "[timeouts]\nadmission_timeout_ms = 0\nread_timeout_ms = 42\nsubscription_read_timeout_ms = 75",
+    ).expect("independent config");
+    assert_eq!(config.admission_timeout(), None);
+    assert_eq!(
+        config.read_timeout(),
+        Some(std::time::Duration::from_millis(42))
+    );
+    assert_eq!(
+        config.subscription_read_timeout(),
+        Some(std::time::Duration::from_millis(75))
+    );
+    let encoded = serde_json::to_value(&config).expect("serialize zero");
+    assert_eq!(encoded["timeouts"]["admission_timeout_ms"], 0);
+    let restored: IpcConfig = serde_json::from_value(encoded).expect("deserialize zero");
+    assert_eq!(restored.admission_timeout(), None);
+}

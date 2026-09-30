@@ -1,6 +1,6 @@
 ---
 name: acton-reactive
-description: Design and write idiomatic acton-reactive (9.x) actor systems in Rust. Use this whenever you are writing, reviewing, or planning code that uses acton-reactive, and also whenever a Rust async design starts reaching for Arc<Mutex<T>>, RwLock, shared mutable state across tasks, hand-rolled worker pools, retry/restart loops, or an orchestrator function that drives other tasks. Use it before writing the first actor, not after, because the expensive mistakes are architectural. Also use it when the user mentions actors, message passing, event-driven or reactive architecture, supervision, pub/sub brokers, or asks why their async Rust deadlocks.
+description: Design and write idiomatic acton-reactive (10.x) actor systems in Rust. Use this whenever you are writing, reviewing, or planning code that uses acton-reactive, and also whenever a Rust async design starts reaching for Arc<Mutex<T>>, RwLock, shared mutable state across tasks, hand-rolled worker pools, retry/restart loops, or an orchestrator function that drives other tasks. Use it before writing the first actor, not after, because the expensive mistakes are architectural. Also use it when the user mentions actors, message passing, event-driven or reactive architecture, supervision, pub/sub brokers, or asks why their async Rust deadlocks.
 ---
 
 # Writing acton-reactive that is actually reactive
@@ -14,7 +14,7 @@ If you have limited attention, spend it on **Part 1**. The API is easy to look
 up and hard to get wrong once the shape is right; the shape is easy to get
 wrong and expensive to fix.
 
-Version: this describes **acton-reactive 9.x**. If the project pins 8.x, read
+Version: this describes **acton-reactive 10.x**. If the project pins 8.x or 9.x, read
 `references/migration.md` first, because several things changed silently.
 
 ---

@@ -38,15 +38,17 @@
 
 // Re-export key types for easier access within the crate and potentially the prelude.
 pub use actor_config::{ActorConfig, MAX_SUPERVISION_DEPTH};
+pub use managed_actor::started::Started; // Note: `Started` is defined within a submodule
 pub use managed_actor::Idle;
 pub use managed_actor::ManagedActor;
-pub use managed_actor::started::Started; // Note: `Started` is defined within a submodule
-pub use restart_limiter::{RestartLimiter, RestartLimiterConfig, RestartLimitExceeded, RestartStats};
+pub use restart_limiter::{
+    RestartLimitExceeded, RestartLimiter, RestartLimiterConfig, RestartStats,
+};
 pub use restart_policy::{RestartPolicy, TerminationReason};
 pub use supervision::status_channel;
 pub use supervision::{
-    BackoffDelay, ChildIndex, ChildRestarted, ChildBlueprint, ChildSpawner, ChildSupervised, Escalation,
-    RestartGeneration, SupervisedChild, SupervisionDecision, SupervisionError,
+    BackoffDelay, ChildBlueprint, ChildIndex, ChildRestarted, ChildSpawner, ChildSupervised,
+    Escalation, RestartGeneration, SupervisedChild, SupervisionDecision, SupervisionError,
     SupervisionEscalated, SupervisionState, SupervisionStatus, SupervisionStrategy, TypedSpawner,
 };
 

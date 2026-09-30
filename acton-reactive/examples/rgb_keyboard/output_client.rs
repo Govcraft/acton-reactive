@@ -173,8 +173,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _corr_id = send_subscribe(&mut writer, vec!["ColoredCharacter".to_string()]).await?;
 
     // Wait for subscription response
-    let (msg_type, _format, payload) =
-        timeout(Duration::from_secs(5), read_frame(&mut reader, MAX_FRAME_SIZE)).await??;
+    let (msg_type, _format, payload) = timeout(
+        Duration::from_secs(5),
+        read_frame(&mut reader, MAX_FRAME_SIZE),
+    )
+    .await??;
 
     if msg_type == MSG_TYPE_RESPONSE {
         let response: IpcSubscriptionResponse = serde_json::from_slice(&payload)?;
@@ -206,7 +209,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main loop: receive and display colored characters
     loop {
-        match timeout(Duration::from_mins(1), read_frame(&mut reader, MAX_FRAME_SIZE)).await {
+        match timeout(
+            Duration::from_mins(1),
+            read_frame(&mut reader, MAX_FRAME_SIZE),
+        )
+        .await
+        {
             Ok(Ok((msg_type, _format, payload))) => {
                 if msg_type == MSG_TYPE_PUSH {
                     let notification: IpcPushNotification = serde_json::from_slice(&payload)?;

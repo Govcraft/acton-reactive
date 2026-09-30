@@ -224,16 +224,16 @@ impl RestartLimiter {
         // Calculate exponential backoff
         #[allow(clippy::cast_precision_loss)]
         let backoff_ms = self.config.initial_backoff_ms as f64
-            * self.config.backoff_multiplier.powi(
-                i32::try_from(self.consecutive_restarts).unwrap_or(i32::MAX),
-            );
+            * self
+                .config
+                .backoff_multiplier
+                .powi(i32::try_from(self.consecutive_restarts).unwrap_or(i32::MAX));
         #[allow(
             clippy::cast_sign_loss,
             clippy::cast_possible_truncation,
             clippy::cast_precision_loss
         )]
-        let capped_backoff_ms =
-            (backoff_ms.min(self.config.max_backoff_ms as f64).max(0.0)) as u64;
+        let capped_backoff_ms = (backoff_ms.min(self.config.max_backoff_ms as f64).max(0.0)) as u64;
 
         self.consecutive_restarts += 1;
 
@@ -295,16 +295,16 @@ impl RestartLimiter {
     pub fn peek_backoff(&self) -> Duration {
         #[allow(clippy::cast_precision_loss)]
         let backoff_ms = self.config.initial_backoff_ms as f64
-            * self.config.backoff_multiplier.powi(
-                i32::try_from(self.consecutive_restarts).unwrap_or(i32::MAX),
-            );
+            * self
+                .config
+                .backoff_multiplier
+                .powi(i32::try_from(self.consecutive_restarts).unwrap_or(i32::MAX));
         #[allow(
             clippy::cast_sign_loss,
             clippy::cast_possible_truncation,
             clippy::cast_precision_loss
         )]
-        let capped_backoff_ms =
-            (backoff_ms.min(self.config.max_backoff_ms as f64).max(0.0)) as u64;
+        let capped_backoff_ms = (backoff_ms.min(self.config.max_backoff_ms as f64).max(0.0)) as u64;
 
         Duration::from_millis(capped_backoff_ms)
     }

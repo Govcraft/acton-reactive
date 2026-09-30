@@ -1,4 +1,4 @@
-# API reference (acton-reactive 9.x)
+# API reference (acton-reactive 10.x)
 
 Exact surface, verified against source. Everything here comes from
 `acton_reactive::prelude::*` unless noted.
@@ -18,7 +18,7 @@ Exact surface, verified against source. Everything here comes from
 
 ```toml
 [dependencies]
-acton-reactive = "9"
+acton-reactive = "10"
 ```
 
 Features: `catch-handler-panics` (default, wraps handler dispatch in
@@ -82,6 +82,13 @@ builder.handle().subscribe::<SomeBroadcast>().await;
 ```
 
 ## Handlers
+
+In 10.x, boxed handler futures require `Send + 'static`, without `Sync`.
+Closures and messages keep their existing `Send + Sync` bounds. Await Send-only
+I/O directly in `Reply::pending`; `mutate_on` waits for completion before the
+next mailbox message. Runtime clones share the root registry, so shutdown from
+any clone reaches every registered root.
+
 
 ```rust
 pub fn mutate_on<M>(

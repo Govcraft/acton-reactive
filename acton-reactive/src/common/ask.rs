@@ -275,9 +275,7 @@ impl From<MessageError> for AskError {
 /// and is it the answer the request asked for — can be tested by calling a function and
 /// comparing a value, with no runtime and no actors. `None` stands for "the reply
 /// channel closed", which is how the no-hang guarantee reports itself.
-pub fn classify_reply<R>(
-    reply: Option<Arc<dyn ActonMessage + Send + Sync>>,
-) -> Result<R, AskError>
+pub fn classify_reply<R>(reply: Option<Arc<dyn ActonMessage + Send + Sync>>) -> Result<R, AskError>
 where
     R: ActonMessage + Clone,
 {

@@ -35,9 +35,7 @@ use tokio::time::Duration;
 
 /// Polls the captured notification slot until it is set, failing after a
 /// generous deadline so the tests stay deterministic on loaded runners.
-async fn await_notification(
-    captured: &Arc<Mutex<Option<ChildTerminated>>>,
-) -> ChildTerminated {
+async fn await_notification(captured: &Arc<Mutex<Option<ChildTerminated>>>) -> ChildTerminated {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let current = captured

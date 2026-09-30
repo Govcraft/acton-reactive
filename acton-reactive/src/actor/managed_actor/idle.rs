@@ -102,7 +102,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// *   `message_processor`: An asynchronous closure that takes the actor (`&mut ManagedActor<Started, State>`)
     ///     and the message context (`&mut MessageContext<M>`) and returns a pinned, boxed
-    ///     `Future` that is `Send + Sync + 'static` and resolves to `()`. Produce one with
+    ///     `Future` that is `Send + 'static` and resolves to `()`. Produce one with
     ///     `Box::pin(async move { .. })`, or with [`Reply::ready`](crate::common::Reply::ready)
     ///     when the handler has no asynchronous work left to do. This closure contains the
     ///     logic for handling messages of type `M`.
@@ -377,7 +377,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// *   `message_processor`: An asynchronous closure that takes the actor (`&ManagedActor<Started, State>`)
     ///     and the message context (`&mut MessageContext<M>`) and returns a pinned, boxed
-    ///     `Future` that is `Send + Sync + 'static` and resolves to `()`. Produce one with
+    ///     `Future` that is `Send + 'static` and resolves to `()`. Produce one with
     ///     `Box::pin(async move { .. })`, or with [`Reply::ready`](crate::common::Reply::ready)
     ///     when the handler has no asynchronous work left to do. This closure contains the
     ///     logic for handling messages of type `M`.
@@ -566,7 +566,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     ///
     /// *   `message_processor`: An asynchronous closure that takes the actor (`&ManagedActor<Started, State>`)
     ///     and the message context (`&mut MessageContext<M>`) and returns a pinned, boxed
-    ///     `Future` that is `Send + Sync + 'static` and resolves to `Result<T, E>`. Produce
+    ///     `Future` that is `Send + 'static` and resolves to `Result<T, E>`. Produce
     ///     one with `Box::pin(async move { .. })`. This closure contains the logic for
     ///     handling messages of type `M`.
     ///
@@ -579,9 +579,9 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         message_processor: impl for<'a> Fn(
                 &'a ManagedActor<Started, State>,
                 &'a mut MessageContext<M>,
-            ) -> std::pin::Pin<
-                Box<dyn Future<Output = Result<T, E>> + Send + Sync + 'static>,
-            > + Send
+            )
+                -> std::pin::Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'static>>
+            + Send
             + Sync
             + 'static,
     ) -> &mut Self
@@ -662,9 +662,9 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
         message_processor: impl for<'a> Fn(
                 &'a mut ManagedActor<Started, State>,
                 &'a mut MessageContext<M>,
-            ) -> std::pin::Pin<
-                Box<dyn Future<Output = Result<T, E>> + Send + Sync + 'static>,
-            > + Send
+            )
+                -> std::pin::Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'static>>
+            + Send
             + Sync
             + 'static,
     ) -> &mut Self
@@ -755,7 +755,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     pub fn after_start<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.after_start = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
@@ -777,7 +777,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     pub fn before_start<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.before_start = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
@@ -799,7 +799,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     pub fn after_stop<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.after_stop = Some(Box::new(move |actor| Box::pin(f(actor))));
         self
@@ -821,7 +821,7 @@ impl<State: Default + Send + Debug + 'static> ManagedActor<Idle, State> {
     pub fn before_stop<F, Fut>(&mut self, f: F) -> &mut Self
     where
         F: for<'b> Fn(&'b ManagedActor<Started, State>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.before_stop = Some(Box::new(move |actor| Box::pin(f(actor))));
         self

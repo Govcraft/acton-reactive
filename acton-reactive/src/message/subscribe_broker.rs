@@ -17,7 +17,7 @@
 use std::any::TypeId;
 use std::fmt::Debug;
 
-use acton_ern::{Ern};
+use acton_ern::Ern;
 
 use crate::common::ActorHandle;
 

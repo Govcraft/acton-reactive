@@ -40,16 +40,16 @@
 pub use acton::ActonApp;
 pub use actor_handle::ActorHandle;
 pub use actor_reply::Reply;
-pub use ask::{AskError, DEFAULT_ASK_TIMEOUT};
-pub use clock::{Clock, ManualClock, SystemClock, Timer};
-pub use scheduled_send::{
-    Cadence, FireAt, Interval, ScheduledSend, ScheduledSendOutcome, ZeroInterval,
-};
 pub use actor_runtime::ActorRuntime;
 #[cfg(feature = "ipc")]
 pub use actor_runtime::IpcNameInUse;
+pub use ask::{AskError, DEFAULT_ASK_TIMEOUT};
 pub use broker::Broker;
+pub use clock::{Clock, ManualClock, SystemClock, Timer};
 pub use config::ActonConfig;
+pub use scheduled_send::{
+    Cadence, FireAt, Interval, ScheduledSend, ScheduledSendOutcome, ZeroInterval,
+};
 
 // --- Crate-Internal Re-exports ---
 pub use crate::message::{Envelope, MessageError, OutboundEnvelope};
@@ -68,22 +68,22 @@ mod acton_inner;
 mod actor_handle;
 /// Defines the `Reply` utility.
 mod actor_reply;
-/// Defines request/reply support: [`AskError`] and the machinery behind `ask`.
-pub mod ask;
-/// Defines the [`Clock`] seam that scheduled sends measure time against.
-pub mod clock;
-/// Defines scheduled sends: the machinery behind `send_after`, `send_at`, and
-/// `send_every`.
-pub mod scheduled_send;
 /// Defines the `ActorRuntime` for managing the system.
 mod actor_runtime;
+/// Defines request/reply support: [`AskError`] and the machinery behind `ask`.
+pub mod ask;
 /// Defines the `Broker` implementation.
 mod broker;
+/// Defines the [`Clock`] seam that scheduled sends measure time against.
+pub mod clock;
 /// Defines the configuration system for the Acton framework.
 pub mod config;
 /// Locates configuration files on the host platform (XDG on Unix, `%APPDATA%`
 /// elsewhere).
 mod config_paths;
+/// Defines scheduled sends: the machinery behind `send_after`, `send_at`, and
+/// `send_every`.
+pub mod scheduled_send;
 
 /// IPC (Inter-Process Communication) support for external process messaging.
 ///

@@ -303,14 +303,8 @@ async fn test_filtering_broadcasts() -> anyhow::Result<()> {
     let broker = runtime.broker();
 
     let mut subscriber = runtime.new_actor::<FilteredSubscriber>();
-    subscriber
-        .model
-        .watched_symbols
-        .insert("ACME".to_string());
-    subscriber
-        .model
-        .watched_symbols
-        .insert("TECH".to_string());
+    subscriber.model.watched_symbols.insert("ACME".to_string());
+    subscriber.model.watched_symbols.insert("TECH".to_string());
 
     subscriber
         .mutate_on::<PriceUpdate>(|actor, ctx| {
@@ -415,8 +409,7 @@ async fn test_event_bus_pattern() -> anyhow::Result<()> {
             Reply::ready()
         })
         .after_stop(move |actor| {
-            *analytics_clone.lock().unwrap() =
-                (actor.model.login_count, actor.model.order_count);
+            *analytics_clone.lock().unwrap() = (actor.model.login_count, actor.model.order_count);
             Reply::ready()
         });
 

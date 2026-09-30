@@ -152,9 +152,12 @@ async fn a_permanent_child_that_dies_is_brought_back_by_the_framework() -> anyho
     // stop a usable stand-in for a crash here.
     first.stop().await?;
 
-    let second = tokio::time::timeout(PATIENCE, child.wait_generation(RestartGeneration::FIRST.next()))
-        .await
-        .expect("the framework must bring a Permanent child back")?;
+    let second = tokio::time::timeout(
+        PATIENCE,
+        child.wait_generation(RestartGeneration::FIRST.next()),
+    )
+    .await
+    .expect("the framework must bring a Permanent child back")?;
 
     assert_eq!(
         builds.load(Ordering::SeqCst),
@@ -232,17 +235,20 @@ async fn a_supervisor_keeps_taking_messages_while_a_child_is_backing_off() -> an
     );
 
     // Then the restart still happens.
-    tokio::time::timeout(PATIENCE, child.wait_generation(RestartGeneration::FIRST.next()))
-        .await
-        .expect("the armed timer must still fire")?;
+    tokio::time::timeout(
+        PATIENCE,
+        child.wait_generation(RestartGeneration::FIRST.next()),
+    )
+    .await
+    .expect("the armed timer must still fire")?;
 
     runtime.shutdown_all().await?;
     Ok(())
 }
 
 #[acton_test]
-async fn a_child_that_exhausts_its_allowance_is_escalated_rather_than_left_pending()
--> anyhow::Result<()> {
+async fn a_child_that_exhausts_its_allowance_is_escalated_rather_than_left_pending(
+) -> anyhow::Result<()> {
     // **Fails by hanging** if `Escalate` is not handled: the slot stays in
     // `AwaitingBackoff` for a restart that will never be arranged, and every
     // caller waiting on this child waits on a status that cannot change again.
@@ -384,9 +390,12 @@ async fn a_user_handler_for_child_terminated_still_runs() -> anyhow::Result<()> 
     first.stop().await?;
 
     // The engine restarted it...
-    tokio::time::timeout(PATIENCE, child.wait_generation(RestartGeneration::FIRST.next()))
-        .await
-        .expect("the framework must still restart the child")?;
+    tokio::time::timeout(
+        PATIENCE,
+        child.wait_generation(RestartGeneration::FIRST.next()),
+    )
+    .await
+    .expect("the framework must still restart the child")?;
     // ...and the user's handler saw the same notification.
     assert_eq!(
         noticed.load(Ordering::SeqCst),
@@ -399,8 +408,8 @@ async fn a_user_handler_for_child_terminated_still_runs() -> anyhow::Result<()> 
 }
 
 #[acton_test]
-async fn a_supervisor_stopping_mid_backoff_settles_the_child_it_will_not_restart()
--> anyhow::Result<()> {
+async fn a_supervisor_stopping_mid_backoff_settles_the_child_it_will_not_restart(
+) -> anyhow::Result<()> {
     // A caller blocked on a restart that can no longer happen must be told, not
     // left on `RestartPending`.
     //
@@ -434,9 +443,10 @@ async fn a_supervisor_stopping_mid_backoff_settles_the_child_it_will_not_restart
         .expect("the first start must land")?;
     first.stop().await?;
 
-    tokio::time::timeout(PATIENCE, child.wait_for(|s| {
-        s.state() == SupervisionState::RestartPending
-    }))
+    tokio::time::timeout(
+        PATIENCE,
+        child.wait_for(|s| s.state() == SupervisionState::RestartPending),
+    )
     .await
     .expect("the child must be waiting out its backoff")?;
 

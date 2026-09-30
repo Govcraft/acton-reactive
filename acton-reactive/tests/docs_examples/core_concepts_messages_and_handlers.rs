@@ -264,10 +264,7 @@ async fn test_working_with_message_data() -> anyhow::Result<()> {
             Reply::ready()
         })
         .after_stop(move |actor| {
-            items_clone
-                .lock()
-                .unwrap()
-                .clone_from(&actor.model.items);
+            items_clone.lock().unwrap().clone_from(&actor.model.items);
             Reply::ready()
         });
 

@@ -225,7 +225,10 @@ impl<'client> RemoteActorRef<'client> {
             timeout_millis(timeout),
         );
 
-        trace!(actor = self.target, "Asking remote actor and awaiting its reply");
+        trace!(
+            actor = self.target,
+            "Asking remote actor and awaiting its reply"
+        );
 
         match self.client.request_with_timeout(envelope, timeout).await {
             Ok(response) => classify_remote_response::<R::Response>(response, timeout),
@@ -249,10 +252,7 @@ fn timeout_millis(timeout: Duration) -> u64 {
 /// [`classify_reply`](crate::common::ask::classify_reply) is: the interesting judgement —
 /// did an answer arrive, is it the answer the request asked for, and if not whose fault is
 /// it — becomes a function call and a value comparison, with no socket and no runtime.
-pub fn classify_remote_response<R>(
-    response: IpcResponse,
-    timeout: Duration,
-) -> Result<R, AskError>
+pub fn classify_remote_response<R>(response: IpcResponse, timeout: Duration) -> Result<R, AskError>
 where
     R: DeserializeOwned,
 {
@@ -423,7 +423,12 @@ mod tests {
     fn a_peer_side_deadline_is_a_timeout_not_a_refusal() {
         let response =
             IpcResponse::error_with_message("c1", "TIMEOUT", "Request timed out after 5000 ms");
-        assert_eq!(ask(response), Err(AskError::TimedOut { after: TEST_TIMEOUT }));
+        assert_eq!(
+            ask(response),
+            Err(AskError::TimedOut {
+                after: TEST_TIMEOUT
+            })
+        );
     }
 
     /// The one case the overloaded `IO_ERROR` code cannot distinguish on its own. A
@@ -431,17 +436,13 @@ mod tests {
     /// transport failure would tell the caller delivery was uncertain when it was not.
     #[test]
     fn a_silent_handler_is_no_reply_rather_than_a_transport_failure() {
-        let response = IpcResponse::error(
-            "c1",
-            &IpcError::IoError(NO_REPLY_MESSAGE.to_owned()),
-        );
+        let response = IpcResponse::error("c1", &IpcError::IoError(NO_REPLY_MESSAGE.to_owned()));
         assert_eq!(ask(response), Err(AskError::NoReply));
     }
 
     #[test]
     fn a_genuine_io_failure_remains_a_transport_failure() {
-        let response =
-            IpcResponse::error("c1", &IpcError::IoError("broken pipe".to_owned()));
+        let response = IpcResponse::error("c1", &IpcError::IoError("broken pipe".to_owned()));
 
         match ask(response) {
             Err(AskError::TransportFailed { detail }) => {
@@ -458,8 +459,7 @@ mod tests {
     /// mistyped actor name from an unregistered message type.
     #[test]
     fn a_refusal_before_dispatch_keeps_the_peers_code() {
-        let response =
-            IpcResponse::error("c1", &IpcError::ActorNotFound("counter".to_owned()));
+        let response = IpcResponse::error("c1", &IpcError::ActorNotFound("counter".to_owned()));
 
         match ask(response) {
             Err(AskError::PeerRejected { code, detail }) => {
@@ -493,7 +493,9 @@ mod tests {
     fn a_client_side_deadline_maps_to_the_timeout_error() {
         assert_eq!(
             classify_ipc_error(&IpcError::Timeout, TEST_TIMEOUT),
-            AskError::TimedOut { after: TEST_TIMEOUT }
+            AskError::TimedOut {
+                after: TEST_TIMEOUT
+            }
         );
     }
 
@@ -540,7 +542,10 @@ mod tests {
     #[test]
     fn a_request_that_cannot_be_serialized_is_undeliverable() {
         assert_eq!(
-            classify_ipc_error(&IpcError::SerializationError("nan".to_owned()), TEST_TIMEOUT),
+            classify_ipc_error(
+                &IpcError::SerializationError("nan".to_owned()),
+                TEST_TIMEOUT
+            ),
             AskError::Undeliverable
         );
     }

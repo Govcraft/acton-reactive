@@ -171,8 +171,8 @@ Builds the future a handler must return.
 | `Reply::try_ok(value)` | `try_mutate_on`, `try_act_on` | Immediate success |
 | `Reply::try_err(error)` | `try_mutate_on`, `try_act_on` | Immediate failure |
 
-{% callout type="warning" title="Handler futures must be Send + Sync" %}
-`Reply::pending` produces a `Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>`. The `Sync` bound catches people out: anything held across an `.await` inside the block must be `Sync`, not merely `Send`. For work whose future isn't `Sync` (many HTTP and DB clients), `tokio::spawn` it and message the result back to the actor instead. See [Integration](/docs/advanced/integration).
+{% callout type="note" title="Handler futures require Send" %}
+As of v10, handler and lifecycle futures require `Send + 'static`, without `Sync`. Await third-party I/O directly inside `Reply::pending` or `Reply::try_pending`. Reusable handler closures, actor state, and messages retain their `Sync` requirements. Explicitly typed named handlers must remove `Sync` from their boxed future return signature. See [Integration](/docs/advanced/integration).
 {% /callout %}
 
 ### MessageContext

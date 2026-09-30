@@ -70,7 +70,9 @@ async fn start_streaming_server(
         })
     });
     let handle = counter.start().await;
-    runtime.ipc_expose("counter", handle).expect("IPC name should be unclaimed at startup");
+    runtime
+        .ipc_expose("counter", handle)
+        .expect("IPC name should be unclaimed at startup");
 
     let mut config = IpcConfig::default();
     config.socket.path = Some(socket_path);
@@ -114,7 +116,10 @@ async fn test_request_stream_consumes_all_frames() -> anyhow::Result<()> {
     // The data frames carry the streamed ticks, in order
     for (expected_number, frame) in (0_u32..).zip(frames[..5].iter()) {
         assert!(!frame.is_final);
-        let payload = frame.payload.as_ref().expect("data frame should have payload");
+        let payload = frame
+            .payload
+            .as_ref()
+            .expect("data frame should have payload");
         assert_eq!(payload["number"], serde_json::json!(expected_number));
     }
 

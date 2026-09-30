@@ -137,7 +137,8 @@ mod tests {
 
     #[test]
     fn app_data_path_preserves_a_nested_relative_path() {
-        let path = app_data_config_path(Path::new("/roaming"), &Path::new("myapp").join("ipc.toml"));
+        let path =
+            app_data_config_path(Path::new("/roaming"), &Path::new("myapp").join("ipc.toml"));
 
         assert_eq!(path, Path::new("/roaming/acton/myapp/ipc.toml"));
     }
