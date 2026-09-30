@@ -63,7 +63,7 @@ impl ActonApp {
 
         let mut runtime = ActorRuntime(ActonInner {
             broker: ActorHandle::default(),
-            roots: DashMap::default(),
+            roots: std::sync::Arc::new(DashMap::default()),
             cancellation_token: CancellationToken::new(),
             config,
             #[cfg(feature = "ipc")]
