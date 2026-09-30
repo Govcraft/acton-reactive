@@ -564,7 +564,7 @@ pub async fn run(
 /// Starts an IPC listener with connection admission and operation authorization.
 ///
 /// Admission runs independently per connection and is bounded by the configured
-/// read timeout; disabling that timeout also disables the admission timeout.
+/// admission timeout. Zero disables that deadline without changing idle read timeouts.
 /// # Errors
 /// Returns an error if the socket cannot be created or is already in use.
 pub async fn run_with_policy(
@@ -1193,7 +1193,7 @@ async fn handle_connection(
     if let Some(policy) = &ctx.policy {
         let info = IpcConnectionInfo::new(conn_id, peer);
         let admission = async {
-            match ctx.config.read_timeout() {
+            match ctx.config.admission_timeout() {
                 Some(timeout) => tokio::time::timeout(timeout, policy.admit(info))
                     .await
                     .unwrap_or_else(|_| {
