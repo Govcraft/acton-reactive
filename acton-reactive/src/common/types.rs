@@ -100,18 +100,14 @@ pub type FutureHandlerReadOnlyResult<ManagedEntity> = dyn for<'a, 'b> Fn(
     + 'static;
 
 /// A synchronous mutable handler that processes a message without creating a future.
-pub type SyncHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
-        &'a mut ManagedActor<Started, ManagedEntity>,
-        &'b mut Envelope,
-    ) + Send
+pub type SyncHandler<ManagedEntity> = dyn for<'a, 'b> Fn(&'a mut ManagedActor<Started, ManagedEntity>, &'b mut Envelope)
+    + Send
     + Sync
     + 'static;
 
 /// A synchronous read-only handler that processes a message without creating a future.
-pub type SyncHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(
-        &'a ManagedActor<Started, ManagedEntity>,
-        &'b mut Envelope,
-    ) + Send
+pub type SyncHandlerReadOnly<ManagedEntity> = dyn for<'a, 'b> Fn(&'a ManagedActor<Started, ManagedEntity>, &'b mut Envelope)
+    + Send
     + Sync
     + 'static;
 
@@ -126,12 +122,12 @@ pub type ErrorHandler<ManagedEntity> = dyn for<'a, 'b> Fn(
     + 'static;
 
 /// Crate-internal: Type alias for a pinned, boxed, dynamically dispatched future
-/// with `Output = ()` that is `Send`, `Sync`, and `'static`.
+/// with `Output = ()` that is `Send` and `'static`.
 /// This is the required return type for asynchronous message handlers (`act_on`).
-pub type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+pub type FutureBox = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 /// New: Box for read-only future-based handlers returning ().
-pub type FutureBoxReadOnly = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+pub type FutureBoxReadOnly = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 /// New: Box for Future-based handlers returning Result.
 pub type FutureBoxResult = Pin<
@@ -142,7 +138,6 @@ pub type FutureBoxResult = Pin<
                     (Box<dyn std::error::Error + Send + Sync>, TypeId),
                 >,
             > + Send
-            + Sync
             + 'static,
     >,
 >;
@@ -156,7 +151,6 @@ pub type FutureBoxReadOnlyResult = Pin<
                     (Box<dyn std::error::Error + Send + Sync>, TypeId),
                 >,
             > + Send
-            + Sync
             + 'static,
     >,
 >;
@@ -185,7 +179,7 @@ pub struct ReadOnlyHandlerError {
 /// Resolves to `Some(ReadOnlyHandlerError)` when a fallible read-only handler returns
 /// an error, and `None` when the handler succeeds or is infallible.
 pub type FutureBoxReadOnlyOutcome =
-    Pin<Box<dyn Future<Output = Option<ReadOnlyHandlerError>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Future<Output = Option<ReadOnlyHandlerError>> + Send + 'static>>;
 
 /// Crate-internal: Type alias for the sender part of an actor's MPSC channel.
 pub type ActorSender = Sender<Envelope>;
