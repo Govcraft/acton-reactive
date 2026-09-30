@@ -734,7 +734,10 @@ mod tests {
         };
 
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &slot,
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -784,7 +787,10 @@ mod tests {
 
         let mut panicked = limiter(5, 100, 10_000);
         let after_panic = evaluate(
-            &notification(RestartPolicy::Transient, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Transient,
+                TerminationReason::Panic("x".into()),
+            ),
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut panicked,
@@ -819,7 +825,10 @@ mod tests {
         let mut delays = Vec::new();
         for _ in 0..4 {
             let outcome = evaluate(
-                &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+                &notification(
+                    RestartPolicy::Permanent,
+                    TerminationReason::Panic("x".into()),
+                ),
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
@@ -852,7 +861,10 @@ mod tests {
         // Two crashes in quick succession compound the backoff to 200ms.
         for _ in 0..2 {
             let _ = evaluate(
-                &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+                &notification(
+                    RestartPolicy::Permanent,
+                    TerminationReason::Panic("x".into()),
+                ),
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
@@ -868,7 +880,10 @@ mod tests {
             ..snapshot(0)
         };
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &recovered,
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -911,7 +926,10 @@ mod tests {
         let start = Instant::now();
         let slots = four_healthy_slots();
         let _ = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -924,7 +942,10 @@ mod tests {
             ..snapshot(0)
         };
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &up_for_a_minute,
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -949,7 +970,10 @@ mod tests {
         let slots = four_healthy_slots();
 
         let _ = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -962,7 +986,10 @@ mod tests {
             ..snapshot(0)
         };
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &recently_restarted,
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -986,7 +1013,10 @@ mod tests {
 
         for attempt in 0..2 {
             let outcome = evaluate(
-                &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+                &notification(
+                    RestartPolicy::Permanent,
+                    TerminationReason::Panic("x".into()),
+                ),
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
@@ -1000,7 +1030,10 @@ mod tests {
         }
 
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -1026,7 +1059,10 @@ mod tests {
 
         for attempt in 0..20 {
             let outcome = evaluate(
-                &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+                &notification(
+                    RestartPolicy::Permanent,
+                    TerminationReason::Panic("x".into()),
+                ),
                 &snapshot(0),
                 SupervisionStrategy::OneForOne,
                 &mut limiter,
@@ -1051,7 +1087,10 @@ mod tests {
         let mut limiter = limiter(5, 100, 10_000);
 
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &snapshot(0),
             SupervisionStrategy::OneForOne,
             &mut limiter,
@@ -1067,7 +1106,10 @@ mod tests {
         let mut limiter = limiter(5, 100, 10_000);
 
         let outcome = evaluate(
-            &notification(RestartPolicy::Permanent, TerminationReason::Panic("x".into())),
+            &notification(
+                RestartPolicy::Permanent,
+                TerminationReason::Panic("x".into()),
+            ),
             &snapshot(1),
             SupervisionStrategy::RestForOne,
             &mut limiter,

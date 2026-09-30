@@ -309,7 +309,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nKeystroke processor started");
 
     // Expose actor for IPC access
-    runtime.ipc_expose("keystroke_processor", processor.clone()).expect("IPC name should be unclaimed at startup");
+    runtime
+        .ipc_expose("keystroke_processor", processor.clone())
+        .expect("IPC name should be unclaimed at startup");
     println!("Exposed actors: keystroke_processor");
 
     // Start the IPC listener
@@ -330,9 +332,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  RGB Keyboard Server is ready!");
     println!();
     println!("  Start the clients in separate terminals:");
-    println!("    1. cargo run --example rgb_keyboard_color_client --features ipc -- --component R");
-    println!("    2. cargo run --example rgb_keyboard_color_client --features ipc -- --component G");
-    println!("    3. cargo run --example rgb_keyboard_color_client --features ipc -- --component B");
+    println!(
+        "    1. cargo run --example rgb_keyboard_color_client --features ipc -- --component R"
+    );
+    println!(
+        "    2. cargo run --example rgb_keyboard_color_client --features ipc -- --component G"
+    );
+    println!(
+        "    3. cargo run --example rgb_keyboard_color_client --features ipc -- --component B"
+    );
     println!("    4. cargo run --example rgb_keyboard_output_client --features ipc");
     println!("    5. cargo run --example rgb_keyboard_input_client --features ipc");
     println!("====================================================================");

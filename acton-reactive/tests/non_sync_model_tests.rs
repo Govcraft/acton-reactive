@@ -153,11 +153,12 @@ async fn a_non_sync_supervisor_can_supervise_and_restart_a_non_sync_child() -> a
                 backoff_multiplier: 1.0,
                 ..RestartLimiterConfig::default()
             });
-        let _ = registered.send(
-            actor.supervise_deferred(config, |child: &mut ManagedActor<Idle, AlsoNotSync>| {
+        let _ = registered.send(actor.supervise_deferred(
+            config,
+            |child: &mut ManagedActor<Idle, AlsoNotSync>| {
                 child.mutate_on::<Bump>(|_actor, _ctx| Reply::ready());
-            }),
-        );
+            },
+        ));
         Reply::ready()
     });
 
@@ -184,7 +185,11 @@ async fn a_non_sync_supervisor_can_supervise_and_restart_a_non_sync_child() -> a
     .await
     .expect("a non-Sync child must be restarted like any other")?;
 
-    assert_eq!(second.id(), first.id(), "a restart keeps the child's identity");
+    assert_eq!(
+        second.id(),
+        first.id(),
+        "a restart keeps the child's identity"
+    );
 
     runtime.shutdown_all().await?;
     Ok(())

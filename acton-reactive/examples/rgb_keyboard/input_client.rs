@@ -210,7 +210,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         c => c.to_string(),
                     };
 
-                    write!(stdout, "  Sent: '{display_char}' (#{keystrokes_sent} keystrokes)\r\n")?;
+                    write!(
+                        stdout,
+                        "  Sent: '{display_char}' (#{keystrokes_sent} keystrokes)\r\n"
+                    )?;
                     stdout.flush()?;
                 }
             }

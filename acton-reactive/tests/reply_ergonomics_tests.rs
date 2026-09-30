@@ -81,7 +81,7 @@ async fn test_reply_pending_accepts_future_directly() -> anyhow::Result<()> {
         })
         .after_stop(|actor| {
             assert_eq!(actor.model.receive_count, 3, "expected three Pings");
-            async { }
+            async {}
         });
 
     let handle = actor.start().await;
@@ -120,7 +120,7 @@ async fn test_reply_pending_with_simple_async_fn() -> anyhow::Result<()> {
         })
         .after_stop(|actor| {
             assert_eq!(actor.model.receive_count, 1, "expected one Ping");
-            async { }
+            async {}
         });
 
     let handle = actor.start().await;
@@ -171,8 +171,16 @@ async fn test_reply_pending_old_vs_new_style() -> anyhow::Result<()> {
     new_handle.stop().await?;
 
     // Both should have executed their async work exactly once
-    assert_eq!(counter_old.load(Ordering::SeqCst), 1, "old style should work");
-    assert_eq!(counter_new.load(Ordering::SeqCst), 1, "new style should work");
+    assert_eq!(
+        counter_old.load(Ordering::SeqCst),
+        1,
+        "old style should work"
+    );
+    assert_eq!(
+        counter_new.load(Ordering::SeqCst),
+        1,
+        "new style should work"
+    );
 
     Ok(())
 }

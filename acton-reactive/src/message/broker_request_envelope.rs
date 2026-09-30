@@ -51,7 +51,10 @@ impl From<BrokerRequest> for BrokerRequestEnvelope {
     /// from the original request.
     #[inline]
     fn from(value: BrokerRequest) -> Self {
-        trace!("Converting BrokerRequest to BrokerRequestEnvelope for message type: {}", value.message_type_name);
+        trace!(
+            "Converting BrokerRequest to BrokerRequestEnvelope for message type: {}",
+            value.message_type_name
+        );
         Self {
             message: value.message, // Move the Arc from the request
         }
@@ -80,6 +83,8 @@ impl BrokerRequestEnvelope {
     pub fn new<M: ActonMessage + Send + Sync + 'static>(message: M) -> Self {
         let message_arc = Arc::new(message);
         trace!(message_type = %std::any::type_name::<M>(), "Creating new BrokerRequestEnvelope");
-        Self { message: message_arc }
+        Self {
+            message: message_arc,
+        }
     }
 }

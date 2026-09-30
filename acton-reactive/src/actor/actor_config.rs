@@ -562,20 +562,19 @@ mod supervised_child_identity_tests {
     fn different_names_under_one_parent_stay_distinct() {
         let parent = parent_handle();
 
-        let first = ActorConfig::for_supervised_child("reader", parent.clone(), None)
-            .expect("valid name");
-        let second = ActorConfig::for_supervised_child("writer", parent, None)
-            .expect("valid name");
+        let first =
+            ActorConfig::for_supervised_child("reader", parent.clone(), None).expect("valid name");
+        let second = ActorConfig::for_supervised_child("writer", parent, None).expect("valid name");
 
         assert_ne!(first.id(), second.id());
     }
 
     #[test]
     fn the_same_name_under_different_parents_stays_distinct() {
-        let first = ActorConfig::for_supervised_child("worker", parent_handle(), None)
-            .expect("valid name");
-        let second = ActorConfig::for_supervised_child("worker", parent_handle(), None)
-            .expect("valid name");
+        let first =
+            ActorConfig::for_supervised_child("worker", parent_handle(), None).expect("valid name");
+        let second =
+            ActorConfig::for_supervised_child("worker", parent_handle(), None).expect("valid name");
 
         assert_ne!(
             first.id(),
@@ -589,8 +588,7 @@ mod supervised_child_identity_tests {
         let parent = parent_handle();
         let parent_id = parent.id();
 
-        let config = ActorConfig::for_supervised_child("worker", parent, None)
-            .expect("valid name");
+        let config = ActorConfig::for_supervised_child("worker", parent, None).expect("valid name");
         let child_id = config.id().to_string();
 
         assert!(child_id.starts_with(&parent_id.to_string()), "{child_id}");

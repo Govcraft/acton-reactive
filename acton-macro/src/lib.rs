@@ -85,7 +85,6 @@ fn has_derive(input: &DeriveInput, trait_name: &str) -> bool {
     })
 }
 
-
 /// Configuration options parsed from `#[acton_message(...)]` attributes.
 #[derive(Default)]
 struct MessageConfig {

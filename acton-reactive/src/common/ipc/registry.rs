@@ -29,16 +29,14 @@ use crate::traits::ActonMessage;
 ///
 /// The function takes raw bytes and returns either a boxed `ActonMessage`
 /// trait object or a serialization error string.
-type DeserializerFn = Arc<
-    dyn Fn(&[u8]) -> Result<Box<dyn ActonMessage + Send + Sync>, String> + Send + Sync,
->;
+type DeserializerFn =
+    Arc<dyn Fn(&[u8]) -> Result<Box<dyn ActonMessage + Send + Sync>, String> + Send + Sync>;
 
 /// Type alias for the serializer function stored in the registry.
 ///
 /// The function takes a trait object reference and returns JSON bytes.
-type SerializerFn = Arc<
-    dyn Fn(&dyn ActonMessage) -> Result<serde_json::Value, String> + Send + Sync,
->;
+type SerializerFn =
+    Arc<dyn Fn(&dyn ActonMessage) -> Result<serde_json::Value, String> + Send + Sync>;
 
 /// Registry mapping message type names to deserializers.
 ///

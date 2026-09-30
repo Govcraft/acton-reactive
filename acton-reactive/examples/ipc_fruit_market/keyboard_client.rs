@@ -121,11 +121,7 @@ async fn send_scan_item(
     };
 
     // Fire-and-forget: expects_reply = false (default)
-    let envelope = IpcEnvelope::new(
-        "price_service",
-        "ScanItem",
-        serde_json::to_value(&command)?,
-    );
+    let envelope = IpcEnvelope::new("price_service", "ScanItem", serde_json::to_value(&command)?);
 
     write_envelope(writer, &envelope).await?;
 

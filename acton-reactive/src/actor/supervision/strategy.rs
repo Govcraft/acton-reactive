@@ -194,7 +194,10 @@ impl SupervisionStrategy {
         child_index: usize,
     ) -> SupervisionDecision {
         // First, check if restart is allowed by the policy
-        if !notification.restart_policy.should_restart(&notification.reason) {
+        if !notification
+            .restart_policy
+            .should_restart(&notification.reason)
+        {
             return SupervisionDecision::NoRestart;
         }
 

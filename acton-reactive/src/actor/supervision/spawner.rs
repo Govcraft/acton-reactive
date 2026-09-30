@@ -22,8 +22,8 @@
 //! child therefore holds a [`ChildSpawner`] — the recipe rather than the result.
 
 use std::fmt;
-use std::future::Future;
 use std::fmt::Debug;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 

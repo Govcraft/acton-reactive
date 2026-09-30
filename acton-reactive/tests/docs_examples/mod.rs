@@ -25,16 +25,16 @@
 // Suppress dead_code warnings for documentation examples
 #![allow(dead_code)]
 
-pub mod quick_start_your_first_actor;
-pub mod quick_start_sending_messages;
-pub mod your_first_actor;
-pub mod actors_and_state;
-pub mod messages_and_handlers;
-pub mod handler_types;
 pub mod actor_lifecycle;
-pub mod supervision;
-pub mod pub_sub;
-pub mod replies_and_context;
-pub mod core_concepts_what_are_actors;
+pub mod actors_and_state;
 pub mod core_concepts_messages_and_handlers;
 pub mod core_concepts_the_actor_system;
+pub mod core_concepts_what_are_actors;
+pub mod handler_types;
+pub mod messages_and_handlers;
+pub mod pub_sub;
+pub mod quick_start_sending_messages;
+pub mod quick_start_your_first_actor;
+pub mod replies_and_context;
+pub mod supervision;
+pub mod your_first_actor;

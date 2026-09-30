@@ -91,7 +91,11 @@ async fn test_actor_continues_after_mutable_handler_panic() -> anyhow::Result<()
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Verify actor continued processing after panic
-    assert_eq!(counter.load(Ordering::SeqCst), 2, "Actor should have processed 2 IncrementCounter messages after panic");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        2,
+        "Actor should have processed 2 IncrementCounter messages after panic"
+    );
 
     handle.stop().await?;
     Ok(())
@@ -129,7 +133,11 @@ async fn test_readonly_handlers_continue_after_panic() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Verify actor continued processing after panic
-    assert_eq!(success_counter.load(Ordering::SeqCst), 2, "Actor should have processed 2 ReadOnlySuccessMessage messages after panic");
+    assert_eq!(
+        success_counter.load(Ordering::SeqCst),
+        2,
+        "Actor should have processed 2 ReadOnlySuccessMessage messages after panic"
+    );
 
     handle.stop().await?;
     Ok(())
@@ -156,7 +164,11 @@ async fn test_panic_with_custom_message() -> anyhow::Result<()> {
     let handle = actor.start().await;
 
     // Send panic-triggering message with custom content
-    handle.send(PanicWithMessage { message: "test panic payload".to_string() }).await;
+    handle
+        .send(PanicWithMessage {
+            message: "test panic payload".to_string(),
+        })
+        .await;
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -165,7 +177,11 @@ async fn test_panic_with_custom_message() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    assert_eq!(counter.load(Ordering::SeqCst), 1, "Actor should continue after custom panic message");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "Actor should continue after custom panic message"
+    );
 
     handle.stop().await?;
     Ok(())
@@ -201,7 +217,11 @@ async fn test_multiple_panics_handled() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // All IncrementCounter messages should be processed despite panics
-    assert_eq!(counter.load(Ordering::SeqCst), 3, "Actor should process all increment messages despite panics");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        3,
+        "Actor should process all increment messages despite panics"
+    );
 
     handle.stop().await?;
     Ok(())

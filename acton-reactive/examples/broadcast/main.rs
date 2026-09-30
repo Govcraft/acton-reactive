@@ -417,5 +417,8 @@ async fn main() {
         .await
         .expect("Failed to shutdown system");
 
-    println!("Run complete. Final sum reported by the Printer: {}", report.sum);
+    println!(
+        "Run complete. Final sum reported by the Printer: {}",
+        report.sum
+    );
 }

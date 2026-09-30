@@ -215,10 +215,10 @@ impl Printer {
                     Reply::ready() // No change, no repaint needed from here
                 } else {
                     // If item doesn't exist, insert a Loader entry.
-                    actor.model.items.insert(
-                        item.id().clone(),
-                        DisplayItem::Loader(item.name().clone()),
-                    );
+                    actor
+                        .model
+                        .items
+                        .insert(item.id().clone(), DisplayItem::Loader(item.name().clone()));
                     // Mark the display as not fully loaded.
                     actor.model.loaded = false;
                     // Trigger a repaint asynchronously by sending a message to self.

@@ -14,8 +14,8 @@
  * limitations under that License.
  */
 use std::fmt::{Display, Formatter};
-use std::ops::{AddAssign, Div, Mul};
 use std::ops::Deref;
+use std::ops::{AddAssign, Div, Mul};
 
 // Magic Type ID - likely used for generating unique, content-addressable IDs.
 use mti::prelude::*;
@@ -32,7 +32,6 @@ pub struct CartItem {
     /// A unique identifier for the item type (e.g., based on the name).
     upc: MagicTypeId,
 }
-
 
 impl CartItem {
     /// Creates a new `CartItem` with a name and quantity.
@@ -128,7 +127,6 @@ impl Mul<i32> for &Cost {
     }
 }
 
-
 /// Implements division of a `Cost` reference by an `i32`, returning a new `Cost` instance (e.g., for price adjustments).
 impl Div<i32> for &Cost {
     type Output = Cost;
@@ -155,7 +153,6 @@ impl AddAssign<Price> for i32 {
         *self += rhs.0;
     }
 }
-
 
 /// Helper function to format an integer representing cents into a $X.YY string format.
 fn format_money(cents: i32, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {

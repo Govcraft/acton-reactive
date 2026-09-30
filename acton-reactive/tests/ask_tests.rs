@@ -132,10 +132,7 @@ impl Request for Echo {
 /// the inbox: `tokio::spawn` does not run the task before the spawning code continues,
 /// so ordering between a spawned request and a later one is not guaranteed by the
 /// inbox's FIFO. Waiting for the actor to say it got there is what makes it certain.
-async fn start_counter(
-    runtime: &mut ActorRuntime,
-    stored_request: Arc<Notify>,
-) -> ActorHandle {
+async fn start_counter(runtime: &mut ActorRuntime, stored_request: Arc<Notify>) -> ActorHandle {
     let mut actor = runtime.new_actor::<Counter>();
 
     actor
@@ -397,8 +394,8 @@ async fn ask_times_out_when_the_actor_holds_the_request_and_never_answers() -> a
 /// reported immediately and specifically, rather than stalling until the timer expires
 /// — that is the whole point of layering closure underneath the deadline.
 #[acton_test]
-async fn a_dropped_reply_address_is_reported_without_waiting_for_the_deadline(
-) -> anyhow::Result<()> {
+async fn a_dropped_reply_address_is_reported_without_waiting_for_the_deadline() -> anyhow::Result<()>
+{
     let mut runtime = ActonApp::launch_async().await;
     let handle = start_counter(&mut runtime, unused_signal()).await;
 

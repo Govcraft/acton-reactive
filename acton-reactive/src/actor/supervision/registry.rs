@@ -1246,7 +1246,10 @@ mod tests {
 
     #[test]
     fn generation_displays_with_its_counter() {
-        assert_eq!(RestartGeneration::FIRST.next().next().next().to_string(), "generation 3");
+        assert_eq!(
+            RestartGeneration::FIRST.next().next().next().to_string(),
+            "generation 3"
+        );
     }
 
     #[test]
@@ -1284,13 +1287,18 @@ mod tests {
 
     #[test]
     fn backoff_orders_by_duration() {
-        assert!(BackoffDelay::from(Duration::from_millis(100))
-            < BackoffDelay::from(Duration::from_millis(200)));
+        assert!(
+            BackoffDelay::from(Duration::from_millis(100))
+                < BackoffDelay::from(Duration::from_millis(200))
+        );
     }
 
     #[test]
     fn backoff_displays_in_milliseconds() {
-        assert_eq!(BackoffDelay::from(Duration::from_millis(250)).to_string(), "250ms");
+        assert_eq!(
+            BackoffDelay::from(Duration::from_millis(250)).to_string(),
+            "250ms"
+        );
         assert_eq!(BackoffDelay::NONE.to_string(), "0ms");
     }
 
@@ -1324,9 +1332,7 @@ mod tests {
             _parent: ActorHandle,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>>
-                    + Send
-                    + '_,
+                dyn std::future::Future<Output = Result<ActorHandle, SupervisionError>> + Send + '_,
             >,
         > {
             Box::pin(async move {
@@ -1392,7 +1398,9 @@ mod tests {
         for _ in 0..count {
             let id = ern("child");
             let (slot, _receiver) = new_slot(&id, true);
-            registry.register(slot).expect("distinct Erns never collide");
+            registry
+                .register(slot)
+                .expect("distinct Erns never collide");
             erns.push(id);
         }
 
@@ -1423,7 +1431,10 @@ mod tests {
             SupervisionState::Restarting
         );
         assert_eq!(SlotState::Down.published(), SupervisionState::Down);
-        assert_eq!(SlotState::Escalated.published(), SupervisionState::Escalated);
+        assert_eq!(
+            SlotState::Escalated.published(),
+            SupervisionState::Escalated
+        );
         assert_eq!(SlotState::Retired.published(), SupervisionState::Retired);
     }
 
@@ -1501,7 +1512,9 @@ mod tests {
         let mut registry = SupervisionRegistry::default();
 
         assert_eq!(receiver.borrow().state(), SupervisionState::Starting);
-        registry.register(slot).expect("first registration succeeds");
+        registry
+            .register(slot)
+            .expect("first registration succeeds");
 
         let published = receiver.borrow().clone();
         assert_eq!(published.state(), SupervisionState::Running);
@@ -1515,7 +1528,9 @@ mod tests {
         let mut registry = SupervisionRegistry::default();
 
         let (first, _first_rx) = new_slot(&id, true);
-        registry.register(first).expect("first registration succeeds");
+        registry
+            .register(first)
+            .expect("first registration succeeds");
 
         let (second, _second_rx) = new_slot(&id, true);
         let error = registry
@@ -1566,7 +1581,10 @@ mod tests {
         assert_eq!(child.state(), SlotState::Pending);
         assert!(child.is_pending());
         assert!(child.handle().is_none(), "nothing has been created yet");
-        assert!(child.is_restartable(), "a pending child always has a spawner");
+        assert!(
+            child.is_restartable(),
+            "a pending child always has a spawner"
+        );
         assert_eq!(
             receiver.borrow().state(),
             SupervisionState::Starting,
@@ -1594,9 +1612,14 @@ mod tests {
 
         assert_eq!(error, SupervisionError::DuplicateChild { child: id });
         assert_eq!(registry.len(), 1, "the rejected slot was not recorded");
-        let ticket = registry.begin_start().expect("the accepted child is queued");
+        let ticket = registry
+            .begin_start()
+            .expect("the accepted child is queued");
         assert_eq!(ticket.index, ChildIndex::new(0));
-        assert!(!registry.has_pending_starts(), "and nothing extra was queued");
+        assert!(
+            !registry.has_pending_starts(),
+            "and nothing extra was queued"
+        );
     }
 
     #[test]
@@ -1618,7 +1641,9 @@ mod tests {
         let id = ern("child");
         let (slot, receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
-        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = registry
+            .register_pending(slot)
+            .expect("registration succeeds");
         let ticket = registry.begin_start().expect("one start was queued");
         assert_eq!(ticket.index, index);
         assert_eq!(ticket.ern, id);
@@ -1633,7 +1658,9 @@ mod tests {
             "and looks no different from outside"
         );
 
-        assert!(registry.complete_start(index, &id, handle(&id), Instant::now()).is_recorded());
+        assert!(registry
+            .complete_start(index, &id, handle(&id), Instant::now())
+            .is_recorded());
 
         let child = registry.slot(index).expect("the slot exists");
         assert_eq!(child.state(), SlotState::Running);
@@ -1649,11 +1676,15 @@ mod tests {
         let id = ern("child");
         let (slot, _receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
-        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = registry
+            .register_pending(slot)
+            .expect("registration succeeds");
         registry.begin_start().expect("the start is in flight");
         registry.retire(&id).expect("the child is supervised");
 
-        assert!(!registry.complete_start(index, &id, handle(&id), Instant::now()).is_recorded());
+        assert!(!registry
+            .complete_start(index, &id, handle(&id), Instant::now())
+            .is_recorded());
         assert!(
             !registry
                 .complete_start(ChildIndex::new(9), &id, handle(&id), Instant::now())
@@ -1665,9 +1696,13 @@ mod tests {
         // too, so a stale index cannot hand a slot somebody else's incarnation.
         let other = ern("other");
         let (slot, _receiver) = pending_slot(&other);
-        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = registry
+            .register_pending(slot)
+            .expect("registration succeeds");
         registry.begin_start().expect("the start is in flight");
-        assert!(!registry.complete_start(index, &id, handle(&id), Instant::now()).is_recorded());
+        assert!(!registry
+            .complete_start(index, &id, handle(&id), Instant::now())
+            .is_recorded());
         assert!(registry
             .complete_start(index, &other, handle(&other), Instant::now())
             .is_recorded());
@@ -1678,7 +1713,9 @@ mod tests {
         let id = ern("child");
         let (slot, receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
-        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = registry
+            .register_pending(slot)
+            .expect("registration succeeds");
 
         let failure = SupervisionError::ConfigRejected {
             child: id.clone(),
@@ -1712,14 +1749,19 @@ mod tests {
         for _ in 0..3 {
             let id = ern("child");
             let (slot, receiver) = pending_slot(&id);
-            registry.register_pending(slot).expect("registration succeeds");
+            registry
+                .register_pending(slot)
+                .expect("registration succeeds");
             receivers.push(receiver);
         }
 
         let abandoned = registry.cancel_unfinished_starts(&supervisor);
 
         assert_eq!(abandoned, 3);
-        assert!(!registry.has_pending_starts(), "nothing is left holding a blueprint");
+        assert!(
+            !registry.has_pending_starts(),
+            "nothing is left holding a blueprint"
+        );
         assert!(registry.is_empty());
         for receiver in &receivers {
             let published = receiver.borrow().clone();
@@ -1739,7 +1781,9 @@ mod tests {
         let id = ern("child");
         let (slot, receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
-        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = registry
+            .register_pending(slot)
+            .expect("registration succeeds");
         let ticket = registry.begin_start().expect("one start was queued");
         assert!(registry
             .complete_start(ticket.index, &id, handle(&id), Instant::now())
@@ -1772,7 +1816,9 @@ mod tests {
         let id = ern("child");
         let (slot, receiver) = pending_slot(&id);
         let mut registry = SupervisionRegistry::default();
-        let index = registry.register_pending(slot).expect("registration succeeds");
+        let index = registry
+            .register_pending(slot)
+            .expect("registration succeeds");
         let ticket = registry.begin_start().expect("one start was queued");
         assert!(registry
             .complete_start(ticket.index, &id, handle(&id), Instant::now())
@@ -1840,13 +1886,17 @@ mod tests {
         let (mut registry, erns) = registry_with(2);
         let id = ern("not-yet");
         let (slot, _receiver) = pending_slot(&id);
-        registry.register_pending(slot).expect("registration succeeds");
+        registry
+            .register_pending(slot)
+            .expect("registration succeeds");
 
         let handles = registry.live_handles();
 
         assert_eq!(handles.len(), 2);
         assert!(handles.iter().all(|handle| handle.id() != id));
-        assert!(erns.iter().all(|ern| handles.iter().any(|h| &h.id() == ern)));
+        assert!(erns
+            .iter()
+            .all(|ern| handles.iter().any(|h| &h.id() == ern)));
     }
 
     #[test]
@@ -1906,7 +1956,9 @@ mod tests {
         let mut registry = SupervisionRegistry::default();
 
         let (first, _first_rx) = new_slot(&id, true);
-        registry.register(first).expect("first registration succeeds");
+        registry
+            .register(first)
+            .expect("first registration succeeds");
         registry.retire(&id).expect("the child is supervised");
 
         let (second, _second_rx) = new_slot(&id, true);
@@ -2222,10 +2274,7 @@ mod tests {
         assert!(receiver.has_changed().expect("sender is alive"));
         let _ = receiver.borrow_and_update();
 
-        let woke = registry
-            .slot_of(&id)
-            .expect("supervised")
-            .publish();
+        let woke = registry.slot_of(&id).expect("supervised").publish();
 
         assert!(!woke);
         assert!(
@@ -2337,7 +2386,10 @@ mod tests {
         assert_eq!(child.last_restart(), Some(now));
         let index = registry.index_of(&erns[0]).expect("supervised");
         assert_eq!(
-            registry.snapshot(index).expect("the slot exists").last_restart,
+            registry
+                .snapshot(index)
+                .expect("the slot exists")
+                .last_restart,
             Some(now)
         );
     }

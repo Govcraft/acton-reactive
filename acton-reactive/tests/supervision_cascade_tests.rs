@@ -53,10 +53,7 @@ async fn wait_for_flag(flag: &Arc<AtomicBool>) -> bool {
 }
 
 /// Builds a child that records having been stopped.
-fn spawn_child(
-    runtime: &mut ActorRuntime,
-    stopped: &Arc<AtomicBool>,
-) -> ManagedActor<Idle, Child> {
+fn spawn_child(runtime: &mut ActorRuntime, stopped: &Arc<AtomicBool>) -> ManagedActor<Idle, Child> {
     let mut builder = runtime.new_actor::<Child>();
     let stopped = Arc::clone(stopped);
     builder.after_stop(move |_actor| {
@@ -81,8 +78,8 @@ fn spawn_child(
 /// `shutdown_all()` stops roots itself and would pass even if the cascade were
 /// broken.
 #[acton_test]
-async fn a_child_supervised_through_a_handle_clone_is_stopped_with_its_parent(
-) -> anyhow::Result<()> {
+async fn a_child_supervised_through_a_handle_clone_is_stopped_with_its_parent() -> anyhow::Result<()>
+{
     let mut runtime: ActorRuntime = ActonApp::launch_async().await;
 
     let parent = runtime.new_actor::<Parent>().start().await;

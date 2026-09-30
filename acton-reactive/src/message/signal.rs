@@ -96,7 +96,11 @@ pub struct ChildTerminated {
 impl ChildTerminated {
     /// Creates a new `ChildTerminated` notification.
     #[must_use]
-    pub const fn new(child_id: Ern, reason: TerminationReason, restart_policy: RestartPolicy) -> Self {
+    pub const fn new(
+        child_id: Ern,
+        reason: TerminationReason,
+        restart_policy: RestartPolicy,
+    ) -> Self {
         Self {
             child_id,
             reason,

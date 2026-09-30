@@ -24,8 +24,8 @@
 
 #![cfg(feature = "ipc")]
 
-use acton_reactive::prelude::*;
 use acton_reactive::ipc::IpcNameInUse;
+use acton_reactive::prelude::*;
 
 #[derive(Debug, Default)]
 struct Service;
@@ -112,7 +112,9 @@ async fn the_conflict_error_names_the_holder() {
 
     let first = runtime.new_actor_with_name::<Service>("prices".to_string());
     let first_handle = first.start().await;
-    runtime.ipc_expose("prices", first_handle.clone()).expect("first");
+    runtime
+        .ipc_expose("prices", first_handle.clone())
+        .expect("first");
 
     let second = runtime.new_actor_with_name::<Service>("prices".to_string());
     let second_handle = second.start().await;
@@ -121,7 +123,10 @@ async fn the_conflict_error_names_the_holder() {
         .expect_err("conflict");
 
     let rendered = conflict.to_string();
-    assert!(rendered.contains("prices"), "should name the name: {rendered}");
+    assert!(
+        rendered.contains("prices"),
+        "should name the name: {rendered}"
+    );
     assert!(
         rendered.contains(&first_handle.id().to_string()),
         "should name the holder: {rendered}"
@@ -212,7 +217,9 @@ async fn two_supervised_siblings_do_not_collide() {
             .expect("supervise child");
     }
 
-    let alpha = runtime.ipc_lookup("prices/alpha").expect("alpha registered");
+    let alpha = runtime
+        .ipc_lookup("prices/alpha")
+        .expect("alpha registered");
     let beta = runtime.ipc_lookup("prices/beta").expect("beta registered");
 
     assert_ne!(
@@ -260,8 +267,12 @@ async fn distinct_names_are_both_registered() {
     let b = runtime.new_actor_with_name::<Service>("orders".to_string());
     let b_handle = b.start().await;
 
-    runtime.ipc_expose("prices", a_handle.clone()).expect("prices");
-    runtime.ipc_expose("orders", b_handle.clone()).expect("orders");
+    runtime
+        .ipc_expose("prices", a_handle.clone())
+        .expect("prices");
+    runtime
+        .ipc_expose("orders", b_handle.clone())
+        .expect("orders");
 
     assert_eq!(runtime.ipc_lookup("prices").expect("a").id(), a_handle.id());
     assert_eq!(runtime.ipc_lookup("orders").expect("b").id(), b_handle.id());

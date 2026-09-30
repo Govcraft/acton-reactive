@@ -28,8 +28,9 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, instrument, trace, warn}; // warn seems unused
 
 use crate::actor::{
-    status_channel, ActorConfig, ChildBlueprint, ChildSpawner, Idle, ManagedActor, RestartGeneration,
-    SupervisedChild, SupervisionError, SupervisionState, SupervisionStatus, TypedSpawner,
+    status_channel, ActorConfig, ChildBlueprint, ChildSpawner, Idle, ManagedActor,
+    RestartGeneration, SupervisedChild, SupervisionError, SupervisionState, SupervisionStatus,
+    TypedSpawner,
 };
 use crate::common::clock::{Clock, SystemClock};
 use crate::common::scheduled_send::{
@@ -438,10 +439,7 @@ impl ActorHandle {
     /// once so the two stops cannot drift apart: they must differ only in the
     /// message sent, because that message is the sole thing that decides which
     /// [`TerminationReason`](crate::actor::TerminationReason) the actor records.
-    async fn stop_with_signal<M: ActonMessage + 'static>(
-        &self,
-        signal: M,
-    ) -> anyhow::Result<()> {
+    async fn stop_with_signal<M: ActonMessage + 'static>(&self, signal: M) -> anyhow::Result<()> {
         let tracker = self.tracker();
 
         // Create an envelope to send the signal from self to self.

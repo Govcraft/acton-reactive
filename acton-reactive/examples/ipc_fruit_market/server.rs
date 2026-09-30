@@ -146,7 +146,10 @@ async fn create_price_service(runtime: &mut ActorRuntime) -> ActorHandle {
         let count = actor.model.items_processed;
 
         // Generate unique item ID
-        let item_id = format!("item_{count}_{}", fruit_name.to_lowercase().replace(' ', "_"));
+        let item_id = format!(
+            "item_{count}_{}",
+            fruit_name.to_lowercase().replace(' ', "_")
+        );
 
         println!("  [PriceService] Scanning: {fruit_name} x{quantity} ({item_id})");
 
@@ -243,7 +246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nPriceService actor started");
 
     // Expose actor for IPC access
-    runtime.ipc_expose("price_service", price_service.clone()).expect("IPC name should be unclaimed at startup");
+    runtime
+        .ipc_expose("price_service", price_service.clone())
+        .expect("IPC name should be unclaimed at startup");
     println!("Exposed actors: price_service");
 
     // Start the IPC listener
