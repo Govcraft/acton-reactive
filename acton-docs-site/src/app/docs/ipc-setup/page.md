@@ -155,7 +155,8 @@ burst_size = 50              # Token bucket capacity
 
 [timeouts]
 request_timeout_ms = 30000
-read_timeout_ms = 60000              # 0 = no timeout
+admission_timeout_ms = 60000         # 0 = no policy admission deadline
+read_timeout_ms = 60000              # 0 = no idle timeout
 write_timeout_ms = 30000
 subscription_read_timeout_ms = 0     # 0 = no timeout (default for subscribers)
 

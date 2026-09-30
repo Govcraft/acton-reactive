@@ -5,6 +5,41 @@ All notable changes to `acton-reactive` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.0.0] - 2026-09-29
+
+### Changed
+
+- Handler futures and lifecycle-hook futures require `Send + 'static`, without
+  the former `Sync` requirement. Handlers can await Send-only I/O and boxed
+  futures directly, while `mutate_on` retains its sequential mailbox behavior.
+  Handler closures and actor-state bounds are unchanged. Resolves #25.
+- **Breaking:** explicitly typed handler functions returning
+  `Pin<Box<dyn Future<Output = ()> + Send + Sync>>` must remove `Sync` from their
+  return type to match the new callback signature. The same applies to fallible
+  handler return types. Inline `Reply::pending` calls normally need no changes.
+
+### Added
+
+- Independent IPC `admission_timeout_ms`, defaulting to 60,000 milliseconds.
+  Policy admission uses this deadline; `read_timeout_ms` applies only to
+  established connections without subscriptions. Zero disables only the
+  corresponding timeout. Resolves #27.
+- **Breaking:** `IpcTimeoutsConfig` has a new public `admission` field. Update
+  complete struct literals and exhaustive patterns. Existing TOML files parse
+  with the default admission deadline. If an existing deployment customized
+  `read_timeout_ms` to control admission, set `admission_timeout_ms` explicitly
+  to preserve that admission behavior.
+
+### Fixed
+
+- `ActorRuntime` clones share the root-actor registry. Actors registered through
+  any clone, including `actor.runtime()`, are visible to `actor_count()` and
+  stopped by `shutdown_all()`. Resolves #24.
+
+Wire formats and default established-connection timeouts remain unchanged.
+Publish-only clients that must remain idle indefinitely should configure
+`read_timeout_ms = 0`; they can now retain a finite admission deadline.
+
 ## [9.4.1] - 2026-09-19
 
 ### Fixed

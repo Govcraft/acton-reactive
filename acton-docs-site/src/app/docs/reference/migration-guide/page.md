@@ -7,6 +7,70 @@ Two kinds of migration live here: [upgrading between Acton versions](#upgrading-
 
 ## Upgrading Acton Reactive
 
+### 9.x → 10.0.0
+
+Update your dependency to `acton-reactive = "10"`. This release accepts Send-only
+handler futures, shares the root registry between runtime clones, and separates
+IPC admission deadlines from idle-read deadlines.
+
+#### Handler futures no longer need `Sync`
+
+An inline handler using `Reply::pending(async move { ... })` normally needs no
+changes. It can now await futures returned by `#[async_trait]` methods, boxed
+Send-only futures, and database clients without spawning an untracked task.
+`mutate_on` still waits for its handler future before processing the next message.
+Handler closures, messages, and actor state retain their existing bounds.
+
+If you declared a handler's return type explicitly, remove `Sync` from the boxed
+future to match the new callback signature:
+
+```rust
+// Before
+// type HandlerFuture = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
+
+// After
+use std::{future::Future, pin::Pin};
+type HandlerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+```
+
+Apply the same change to explicitly boxed `Result` futures used by `try_act_on`
+or `try_mutate_on`. A named function's return type must match the callback's
+expected type; the fact that its future also implements `Sync` does not make
+those two function signatures interchangeable.
+
+#### IPC admission has its own timeout
+
+`IpcTimeoutsConfig` has a new public `admission` field, in milliseconds. Add
+`admission: 60_000` to complete struct literals, or use `..Default::default()`.
+Update exhaustive destructuring patterns to include `admission` or `..`.
+
+In TOML, the field is `admission_timeout_ms`. Existing files still parse, with a
+60-second admission deadline. The `read_timeout_ms` setting now controls only
+idle reads on established connections without subscriptions. It no longer
+controls policy admission. To preserve a customized admission deadline from
+9.x, explicitly set the new field to the old read-timeout value.
+
+For a publish-only source that may legitimately remain silent indefinitely:
+
+```toml
+[timeouts]
+admission_timeout_ms = 60000
+read_timeout_ms = 0
+subscription_read_timeout_ms = 0
+```
+
+Each zero disables only its own deadline. The default read timeout remains
+60 seconds and the default subscriber read timeout remains disabled. Wire
+formats are unchanged. See [IPC configuration](/docs/configuration).
+
+#### Runtime clones now share all registered root actors
+
+`runtime.clone()` and `actor.runtime().clone()` refer to the same root registry.
+`actor_count()` includes roots registered through any clone, and `shutdown_all()`
+stops them all. Code that accidentally relied on an actor surviving shutdown
+through a different clone must use a separate runtime for that independent
+lifecycle.
+
 ### 9.3.x → 9.4.0
 
 Existing listener APIs and wire formats remain compatible. To enable authentication and authorization, implement `IpcSecurityPolicy` and start the listener with `start_ipc_listener_with_policy(config, policy)`. The application decides which peer credentials to accept and what admitted identities may do. See [IPC security policies](/docs/advanced/ipc) for trusted handler context, delivery authorization, and revocation.
@@ -468,7 +532,7 @@ struct SetValue { value: i32 }
 2. **Map your messages**: Create `#[acton_message]` structs for each message type
 3. **Identify mutation**: Separate read-only handlers (`act_on`) from state-changing ones (`mutate_on`)
 4. **Skip the future when you can**: Handlers with no `.await` should use `mutate_on_sync` / `act_on_sync`
-5. **Handle async differently**: Use `Reply::pending` for async work — and remember the future must be `Send + Sync`
+5. **Handle async differently**: Use `Reply::pending` for async work — and remember the future must be `Send + 'static`
 6. **Use envelope pattern**: Replace `ask` with reply envelopes
 7. **Write your supervision**: Handle `ChildTerminated` in the parent; nothing restarts automatically
 

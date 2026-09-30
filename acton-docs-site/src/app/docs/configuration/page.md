@@ -364,7 +364,8 @@ burst_size = 50              # Token bucket capacity
 
 [timeouts]
 request_timeout_ms = 30000
-read_timeout_ms = 60000              # 0 = no timeout
+admission_timeout_ms = 60000         # 0 = no policy admission deadline
+read_timeout_ms = 60000              # 0 = no idle timeout
 write_timeout_ms = 30000
 subscription_read_timeout_ms = 0     # 0 = no timeout (default for subscribers)
 
@@ -387,13 +388,14 @@ Each section maps to a nested field of `IpcConfig` (`socket`, `limits`, `rate_li
 | `rate_limit.requests_per_second` | `100` | Sustained request rate |
 | `rate_limit.burst_size` | `50` | Maximum burst above the sustained rate |
 | `timeouts.request_timeout_ms` | `30000` | Per-request timeout |
+| `timeouts.admission_timeout_ms` | `60000` | Security policy admission deadline; `0` disables only admission timeout |
 | `timeouts.read_timeout_ms` | `60000` | Idle read timeout for connections without subscriptions; `0` disables it |
 | `timeouts.write_timeout_ms` | `30000` | Write timeout |
 | `timeouts.subscription_read_timeout_ms` | `0` | Read timeout for connections with active subscriptions; `0` (default) lets subscribers stay connected indefinitely |
 | `shutdown.drain_timeout_ms` | `5000` | Time to wait for in-flight requests during shutdown |
 
 {% callout type="note" title="Zero means no timeout" %}
-For `read_timeout_ms` and `subscription_read_timeout_ms`, a value of `0` disables the timeout entirely. Subscription connections use `subscription_read_timeout_ms`; all other connections use `read_timeout_ms`.
+For `admission_timeout_ms`, `read_timeout_ms`, and `subscription_read_timeout_ms`, a value of `0` disables only that timeout. Admission is bounded independently before any client frames are processed. Subscription connections use `subscription_read_timeout_ms`; all other connections use `read_timeout_ms`.
 {% /callout %}
 
 ### Configuring IPC Programmatically

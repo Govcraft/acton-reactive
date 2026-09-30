@@ -164,29 +164,25 @@ builder.act_on::<Compute>(|actor, envelope| {
 });
 ```
 
-{% callout type="warning" title="Handler futures must be Send + Sync" %}
-The async block you pass to `Reply::pending` must be `Send + **Sync**`. That's stricter than the usual `Send`, and it rules out plenty of third-party futures (many HTTP and database clients). If the compiler says *"future created by async block is not `Sync`"*, use the spawn-and-report-back pattern below.
+{% callout type="note" title="Handler futures require Send" %}
+The async block passed to `Reply::pending` must be `Send + 'static`. Since v10, `Sync` is not required, so HTTP and database futures can be awaited directly.
 {% /callout %}
 
-### Async Handler (Non-`Sync` Future — HTTP, DB, …)
+### Async HTTP Handler
 
-Spawn the work with `tokio::spawn` (which only needs `Send`) and message the result back:
+Return the I/O future and send its result back for a state update:
 
 ```rust
-builder.mutate_on::<FetchData>(|actor, envelope| {
+builder.act_on::<FetchData>(|actor, envelope| {
     let handle = actor.handle().clone();
     let url = envelope.message().url.clone();
-
-    tokio::spawn(async move {
+    Reply::pending(async move {
         let resp = reqwest::get(&url).await.unwrap();
         let body = resp.text().await.unwrap();
         handle.send(FetchResponse { body }).await;
-    });
-
-    Reply::ready()
+    })
 });
 
-// Then handle the result as a normal message
 builder.mutate_on::<FetchResponse>(|actor, envelope| {
     actor.model.last_body = envelope.message().body.clone();
     Reply::ready()

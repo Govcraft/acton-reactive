@@ -45,7 +45,7 @@ impl Default for MyActor {
 
 ---
 
-### "expected `Pin<Box<dyn Future<Output = ()> + Send + Sync>>`, found `()`"
+### "expected `Pin<Box<dyn Future<Output = ()> + Send>>`, found `()`"
 
 **Problem**: `mutate_on` and `act_on` handlers must return a boxed future, not `()`. `Reply` is the helper that builds one.
 
@@ -66,43 +66,15 @@ builder.mutate_on_sync::<Message>(|actor, ctx| {
 
 ---
 
-### "future cannot be shared between threads safely" / "future created by async block is not `Sync`"
+### Handler future signatures changed in v10
 
-**Problem**: This is the most common — and most surprising — handler error.
+Handler futures now require `Send + 'static`; they do not require `Sync`. Third-party futures that are `Send` can be awaited directly inside `Reply::pending` or `Reply::try_pending`.
 
-Handlers return `Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>`. Note the **`Sync`** bound: everything your `Reply::pending` async block holds *across an `.await`* must be `Sync`, not just `Send`. Plenty of perfectly good types (and plenty of third-party futures) are `Send` but not `Sync`.
+If an explicitly typed named handler fails to compile after upgrading, change its return type from `Pin<Box<dyn Future<Output = ()> + Send + Sync>>` to `Pin<Box<dyn Future<Output = ()> + Send>>`. Apply the same change to explicitly typed fallible handler futures. Inline closures generally infer the new type automatically.
 
-```rust
-// Bad: RefCell is Send but NOT Sync — held across an await
-builder.act_on::<Fetch>(|_actor, _ctx| {
-    let cell = std::cell::RefCell::new(0);
-    Reply::pending(async move {
-        do_work().await;
-        let _ = cell.borrow();  // error: future is not `Sync`
-    })
-});
-```
+The handler closure, actor state, and messages still require `Sync`. A `Cell` created inside the returned future is valid; capturing a `Cell` in the reusable handler closure is not.
 
-**Solution 1 — don't hold the non-`Sync` value across the await.** Finish with it before the first `.await`, or swap it for a `Sync` equivalent (`Mutex` instead of `RefCell`, `Arc` instead of `Rc`).
-
-**Solution 2 — move the work off the handler.** This is the right answer when the *future itself* is not `Sync` (common with HTTP and database clients). Spawn the work with `tokio::spawn`, which only requires `Send`, and message the result back to the actor:
-
-```rust
-builder.mutate_on::<Fetch>(|actor, ctx| {
-    let handle = actor.handle().clone();
-    let url = ctx.message().url.clone();
-
-    tokio::spawn(async move {
-        // Any Send future works here — no Sync bound
-        let body = fetch(&url).await;
-        handle.send(FetchDone { body }).await;
-    });
-
-    Reply::ready()
-});
-```
-
-See [Integration](/docs/advanced/integration) for the full pattern.
+See [Integration](/docs/advanced/integration) for direct I/O examples.
 
 ---
 
@@ -139,7 +111,7 @@ If you want a panicking handler to bring the actor down instead — or you've me
 
 ```toml
 [dependencies]
-acton-reactive = { version = "9", default-features = false }
+acton-reactive = { version = "10", default-features = false }
 ```
 
 For *expected* failures, don't rely on panics at all. Use `try_mutate_on` / `try_act_on` with a real error type and register an `on_error` handler:
@@ -348,12 +320,13 @@ Subscription connections already default to `0`, so a pure subscriber should not
 ```toml
 # $XDG_CONFIG_HOME/acton/ipc.toml
 [timeouts]
+admission_timeout_ms = 60000      # retain a bounded policy admission
 read_timeout_ms = 0               # 0 = never time out an idle connection
 subscription_read_timeout_ms = 0  # already the default
 ```
 
 {% callout type="warning" title="0 disables the timeout entirely" %}
-Setting `read_timeout_ms = 0` means idle connections are never reaped. That's the right call for long-lived subscribers, but on a public-facing socket it lets dead connections accumulate. Prefer leaving `read_timeout_ms` alone and relying on the subscription-specific default.
+Setting `read_timeout_ms = 0` means idle connections are never reaped. This supports long-lived publish-only clients, while `admission_timeout_ms` independently bounds policy admission. On a public-facing socket, unlimited idle time lets dead connections accumulate. Prefer leaving `read_timeout_ms` alone and relying on the subscription-specific default.
 {% /callout %}
 
 ---

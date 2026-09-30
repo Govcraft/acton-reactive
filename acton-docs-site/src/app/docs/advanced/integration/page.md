@@ -3,22 +3,11 @@ title: Integration
 description: Working with databases, HTTP, and the async Rust ecosystem.
 ---
 
-Acton Reactive is built on Tokio and integrates naturally with the async Rust ecosystem — with one wrinkle worth understanding before you write your first handler.
+Acton Reactive runs on Tokio. Handler futures require `Send + 'static`, so database and HTTP futures can be awaited directly even when they are not `Sync`.
 
-## The `Sync` Bound on Handler Futures
+## Await I/O in the Handler
 
-`Reply::pending` produces a `Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>`. That **`Sync`** is stricter than the `Send` bound you're used to from `tokio::spawn`, and it's the thing that trips people up when wiring in an HTTP or database client:
-
-```
-error: future cannot be shared between threads safely
-       future created by async block is not `Sync`
-```
-
-Plenty of third-party futures are `Send` but not `Sync`. When you hit this, don't fight it — move the work off the handler.
-
-### The Pattern: Spawn and Report Back
-
-`tokio::spawn` only requires `Send`. Spawn the I/O, then send the result to the actor as an ordinary message:
+Use `act_on` for read-only work that may run concurrently. Use `mutate_on` when each message must finish before the next begins. Both support `Send` futures without a `Sync` requirement.
 
 ```rust
 #[acton_message]
@@ -27,12 +16,10 @@ struct FetchData { url: String }
 #[acton_message]
 struct FetchDone { url: String, body: String }
 
-// 1. Handler kicks off the work and returns immediately
-builder.mutate_on::<FetchData>(|actor, ctx| {
+builder.act_on::<FetchData>(|actor, ctx| {
     let handle = actor.handle().clone();
     let url = ctx.message().url.clone();
-
-    tokio::spawn(async move {
+    Reply::pending(async move {
         match reqwest::get(&url).await {
             Ok(resp) => match resp.text().await {
                 Ok(body) => handle.send(FetchDone { url, body }).await,
@@ -40,12 +27,9 @@ builder.mutate_on::<FetchData>(|actor, ctx| {
             },
             Err(e) => tracing::error!("fetch failed for {url}: {e}"),
         }
-    });
-
-    Reply::ready()
+    })
 });
 
-// 2. The result arrives as a normal message — state changes happen here
 builder.mutate_on::<FetchDone>(|actor, ctx| {
     let msg = ctx.message();
     actor.model.cache.insert(msg.url.clone(), msg.body.clone());
@@ -53,32 +37,17 @@ builder.mutate_on::<FetchDone>(|actor, ctx| {
 });
 ```
 
-This is a better shape anyway: the actor's mailbox keeps moving while the request is in flight, instead of the handler occupying the actor for the duration of a network round-trip.
+The runtime tracks the returned future for concurrency limits and shutdown. Clone owned inputs before the async block because handler futures are `'static`. Actor state, messages, and the reusable callback closure still require `Sync`.
 
-### When `Reply::pending` Is Fine
-
-If everything your async block holds across an `.await` is `Sync`, use it directly — it's simpler:
-
-```rust
-builder.act_on::<GetCount>(|actor, ctx| {
-    let count = actor.model.count;     // copy out before the async block
-    let reply = ctx.reply_envelope();
-
-    Reply::pending(async move {
-        reply.send(CountResponse(count)).await;
-    })
-});
-```
-
-Sending messages, awaiting timers, and awaiting `tokio::task::JoinHandle`s all satisfy the bound.
+When migrating a named callback with an explicit `Pin<Box<dyn Future<Output = ()> + Send + Sync>>` return type, remove `Sync` from that signature. Inline closures normally infer the v10 signature automatically.
 
 ---
 
 ## Database Connections
 
-Store the connection pool in actor state. The pool is cheap to clone (it's an `Arc` internally), so handlers clone it out and use it from a spawned task.
+Store the connection pool in actor state. The pool is cheap to clone (it's an `Arc` internally), so handlers clone it out and await queries in a returned future.
 
-Connecting is async, and you can't assign to `actor.model` from inside a `'static` async block — so use the same spawn-and-report-back pattern: connect off-actor, then send the pool back to be stored.
+Connecting is async, and you can't assign to `actor.model` from inside a `'static` async block — so return a read-only handler future that connects and sends the pool back to be stored.
 
 ```rust
 use sqlx::PgPool;
@@ -100,19 +69,17 @@ struct Query { sql: String }
 #[acton_message]
 struct QueryResult { rows: Vec<Row> }
 
-// 1. Connect off-actor, then hand the pool back
-builder.mutate_on::<Connect>(|actor, ctx| {
+// 1. Connect, then hand the pool back
+builder.act_on::<Connect>(|actor, ctx| {
     let handle = actor.handle().clone();
     let url = ctx.message().database_url.clone();
 
-    tokio::spawn(async move {
+    Reply::pending(async move {
         match PgPool::connect(&url).await {
             Ok(pool) => handle.send(Connected { pool }).await,
             Err(e) => tracing::error!("DB connect failed: {e}"),
         }
-    });
-
-    Reply::ready()
+    })
 });
 
 // 2. Store it — a plain sync handler, no future needed
@@ -122,7 +89,7 @@ builder.mutate_on_sync::<Connected>(|actor, ctx| {
 });
 
 // 3. Query using the stored pool
-builder.mutate_on::<Query>(|actor, ctx| {
+builder.act_on::<Query>(|actor, ctx| {
     let Some(pool) = actor.model.pool.clone() else {
         tracing::warn!("Query before pool was ready");
         return Reply::ready();
@@ -130,19 +97,17 @@ builder.mutate_on::<Query>(|actor, ctx| {
     let sql = ctx.message().sql.clone();
     let reply = ctx.reply_envelope();
 
-    tokio::spawn(async move {
+    Reply::pending(async move {
         match sqlx::query(&sql).fetch_all(&pool).await {
             Ok(rows) => reply.send(QueryResult { rows }).await,
             Err(e) => tracing::error!("query failed: {e}"),
         }
-    });
-
-    Reply::ready()
+    })
 });
 ```
 
-{% callout type="note" title="Why spawn instead of Reply::pending?" %}
-Two reasons. Handler futures must be `Sync`, and `sqlx`'s query futures generally aren't. And a query awaited inside the handler would block this actor's mailbox for the duration of the round-trip — spawning keeps it responsive.
+{% callout type="note" title="Choose concurrency explicitly" %}
+Read-only `act_on` queries run concurrently within the actor's limit. A `mutate_on` future is awaited before processing the next message, which preserves ordering when a write or transaction must complete first.
 {% /callout %}
 
 {% callout type="warning" title="`#[acton_message]` requires Clone + Debug" %}
@@ -324,8 +289,8 @@ async fn main() {
 
 ## Best Practices
 
-1. **Keep handlers fast** — Move slow work to spawned tasks and report back with a message
-2. **Expect the `Sync` bound** — If a third-party future won't fit in `Reply::pending`, that's your cue to spawn it
+1. **Choose ordering**: Use `mutate_on` for sequential work and `act_on` for concurrent reads
+2. **Return I/O futures**: Await `Send` futures directly in `Reply::pending` or `Reply::try_pending`
 3. **Share pools** — Use connection pools, not per-actor connections
 4. **Handle timeouts** — External calls can fail or hang
 5. **Propagate shutdowns** — Shut actors down before the resources they depend on
